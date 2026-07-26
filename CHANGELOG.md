@@ -6,6 +6,11 @@ process log for the PRD §9 (P1) modernization pass.
 ## [Unreleased]
 
 ### Fixed (from upstream/fork bug reports)
+- **404 when executing a manual attack** (upstream #130 / #81, the most-upvoted open bug):
+  after a manual attack, `web/index.html` fetched `/recent_logs`, which has no server route
+  (the real endpoint is `/get_logs`) — the 404 users saw. Fixed the endpoint; removed the dead
+  `/manual.html` route (the manual-attack UI already lives in `index.html`). *(Fix is against
+  the verified server contract; not click-tested — needs the running WebUI to confirm.)*
 - **Web server port hopping on restart** (upstream #16): `webapp.py` now uses a
   `ReusableTCPServer` with `allow_reuse_address = True` (SO_REUSEADDR), so a restart while the
   old socket is in TIME_WAIT rebinds :8000 instead of hopping to :8001+.

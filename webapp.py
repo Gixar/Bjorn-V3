@@ -74,8 +74,6 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
             self.serve_file_gzipped(os.path.join(self.shared_data.webdir, 'loot.html'), 'text/html')
         elif self.path == '/credentials.html':
             self.serve_file_gzipped(os.path.join(self.shared_data.webdir, 'credentials.html'), 'text/html')
-        elif self.path == '/manual.html':
-            self.serve_file_gzipped(os.path.join(self.shared_data.webdir, 'manual.html'), 'text/html')
         elif self.path == '/load_config':
             self.web_utils.serve_current_config(self)
         elif self.path == '/restore_default_config':

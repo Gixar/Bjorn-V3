@@ -3,7 +3,7 @@
 All notable changes to this project are documented here. This file also serves as the
 process log for the PRD §9 (P1) modernization pass.
 
-## [Unreleased]
+## [2.1.0-alpha] — 2026-07-26
 
 ### Fixed (from upstream/fork bug reports)
 - **404 when executing a manual attack** (upstream #130 / #81, the most-upvoted open bug):

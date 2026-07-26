@@ -18,14 +18,20 @@ Bjorn is a « Tamagotchi like » sophisticated, autonomous network scanning, 
 
 ## 🆕 What's New in v2 (this fork)
 
-This is a modernized fork of [infinition/Bjorn](https://github.com/infinition/Bjorn), tagged **`v2.0.0-alpha`**. It keeps the full offensive tool unchanged and adds a "runs today + safe to change" baseline. Full detail is in [`CHANGELOG.md`](CHANGELOG.md); the roadmap is in [`docs/PRD.md`](docs/PRD.md).
+This is a modernized fork of [infinition/Bjorn](https://github.com/infinition/Bjorn), currently **`v2.1.0-alpha`**. It keeps the full offensive tool unchanged and adds a "runs today + safe to change" baseline. Full detail is in [`CHANGELOG.md`](CHANGELOG.md); the roadmap is in [`docs/PRD.md`](docs/PRD.md) and community ideas/bugs in [`docs/BACKLOG.md`](docs/BACKLOG.md).
 
+**Baseline (2.0.0-alpha):**
 - **Runs on a non-Pi dev box** — set `"epd_type": "mock"` in `config/shared_config.json` to boot without the e-Paper HAT (testing only, not a portability target).
 - **GPIO stack unstuck** — dropped the dead `RPi.GPIO` pin; the e-Paper driver already uses `gpiozero` + `lgpio` (Raspberry Pi OS Bookworm+).
 - **Fail-fast config** — an invalid `config/shared_config.json` now errors at startup with a clear message; `debug_mode` defaults to `false`.
 - **Tests + CI** — `tests/` (retry logic, config validation, mock display, a mocked SSH connector) run under `pytest` or directly as `python tests/test_*.py`; GitHub Actions runs them on every push.
 - **Run reports + offline improvement loop** — each run writes a redacted `data/output/run_reports/<id>.json` (counts and error text only, never credentials/loot). `scripts/export_reports.sh` + `scripts/analyze_reports.py` feed an offline, human-reviewed improvement process — see [`docs/IMPROVEMENT_PROCESS.md`](docs/IMPROVEMENT_PROCESS.md).
 - **Hardened installer** — `sudo ./install_bjorn.sh --dry-run` checks prerequisites (OS, HAT, `nmap`/`nmcli`) and lists the steps without changing anything.
+
+**Community bug fixes (2.1.0-alpha):**
+- **Manual-attack 404** (upstream #130/#81, most-upvoted open bug) — the web UI fetched a nonexistent `/recent_logs` after an attack; fixed to `/get_logs`.
+- **Web server port hopping** (#16) — the server now rebinds `:8000` on restart (SO_REUSEADDR) instead of drifting to `:8001`.
+- **Installer resilience** (#147) — a package removed on newer Debian (e.g. `libatlas-base-dev` on trixie) no longer aborts the whole install; the e-Paper option prompt count was fixed (#152).
 
 > **Pi-gated (not yet verified on hardware):** dependency version refresh, real e-Paper render, and a full installer run. See the CHANGELOG for the split between what's verified and what awaits the Pi.
 

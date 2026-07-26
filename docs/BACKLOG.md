@@ -37,6 +37,19 @@ Already fixed this cycle (see `CHANGELOG.md`): #16 port hopping, #147 installer 
 ## AI / learning (overlaps §4a + P-AI — keep lazy)
 - **Anonymized mission-data export** (the `infinition/Bjorn-cortex` framing): our run-reports already do the redacted-export half. Adopting Cortex's `.csv.gz` shape would make us swarm-compatible later **without** committing to the heavy VPS/TensorFlow stack. YAGNI until there's a Cortex to feed — revisit only if we join a swarm.
 
+## Performance (deferred — full analysis in PRD §10)
+
+Done in v2.2.0-alpha: **L1** (nmap port scan), **L2** (MAC from nmap), **P6** (removed scan
+sleeps/race), **L4** (nmcli Wi-Fi scan). Still deferred (mostly safe code changes, held back to
+keep each pass to one testable area):
+
+- **P1** — brute-force connectors (SSH/Telnet/SQL/SMB) hardcode **40 threads**; make config-driven and core-aware (`os.cpu_count()`), default ~8.
+- **P2** — `import pandas` at module top in ~10 files; on ARMv6 that's ~2–5 s + 50–80 MB each. Replace with stdlib `csv` in the connectors and `display.py` (they only read + count/dedupe); lazy-import elsewhere. Biggest memory win on a 512 MB Zero.
+- **P3** — `shared.py::write_data` rewrites the whole `netkb.csv` after every action; batch or write once per cycle.
+- **P4** — `orchestrator.py::run()` runs `process_alive_ips()` and then the same nested action loop again inline; remove the duplicate.
+- **P5** — `display.py` re-reads 3 CSVs via pandas on every refresh; cache counts, recompute on scan events.
+- **L3** — vuln scan is `nmap -T2 -sV --script vulners.nse` (internet-dependent, heaviest op); make timing + `-sV`/`vulners.nse` config-driven/optional.
+
 ## Reference forks
 - `HackCocaine/BjornCocaine` — screen-agnostic WebUI-first, LOGS button, multi-Pi.
 - `LOCOSP/BjornWpaSecHarvester` — wpa-sec/Pwnagotchi import.

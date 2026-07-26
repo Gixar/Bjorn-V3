@@ -6,7 +6,6 @@ import os
 import threading
 import csv
 import pandas as pd
-import socket
 import netifaces
 import time
 import glob
@@ -45,7 +44,6 @@ class NetworkScanner:
         self.console = Console()
         self.lock = threading.Lock()
         self.currentdir = shared_data.currentdir
-        self.semaphore = threading.Semaphore(200)  # Limit the number of active threads to 20
         self.nm = nmap.PortScanner()  # Initialize nmap.PortScanner()
         self.running = False
 
@@ -269,11 +267,11 @@ class NetworkScanner:
         """
         try:
             mac = None
-            retries = 5
+            retries = 2  # fallback path only now (nmap supplies the MAC for LAN hosts — L2); keep the worst case short
             while not mac and retries > 0:
                 mac = gma(ip=ip)
                 if not mac:
-                    time.sleep(2)  # Attendre 2 secondes avant de réessayer
+                    time.sleep(1)
                     retries -= 1
             if not mac:
                 mac = f"{ip}_{hostname}" if hostname else f"{ip}_NoHostname"
@@ -282,54 +280,8 @@ class NetworkScanner:
             self.logger.error(f"Error in get_mac_address: {e}")
             return None
 
-    class PortScanner:
-        """
-        Helper class to perform port scanning on a target IP.
-        """
-        def __init__(self, outer_instance, target, open_ports, portstart, portend, extra_ports):
-            self.outer_instance = outer_instance
-            self.logger = logger
-            self.target = target
-            self.open_ports = open_ports
-            self.portstart = portstart
-            self.portend = portend
-            self.extra_ports = extra_ports
-
-        def scan(self, port):
-            """
-            Scans a specific port on the target IP.
-            """
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(2)
-            try:
-                con = s.connect((self.target, port))
-                self.open_ports[self.target].append(port)
-                con.close()
-            except:
-                pass
-            finally:
-                s.close()  # Ensure the socket is closed
-
-        def start(self):
-            """
-            Starts the port scanning process for the specified range and extra ports.
-            """
-            try:
-                for port in range(self.portstart, self.portend):
-                    t = threading.Thread(target=self.scan_with_semaphore, args=(port,))
-                    t.start()
-                for port in self.extra_ports:
-                    t = threading.Thread(target=self.scan_with_semaphore, args=(port,))
-                    t.start()
-            except Exception as e:
-                self.logger.info(f"Maximum threads defined in the semaphore reached: {e}")
-
-        def scan_with_semaphore(self, port):
-            """
-            Scans a port using a semaphore to limit concurrent threads.
-            """
-            with self.outer_instance.semaphore:
-                self.scan(port)
+    # (Removed the socket-based PortScanner: a thread-per-port scanner throttled by a
+    # 200-thread semaphore. Replaced by a single nmap port scan in ScanPorts.start() — L1.)
 
     class ScanPorts:
         """
@@ -367,24 +319,30 @@ class NetworkScanner:
                 except Exception as e:
                     self.outer_instance.logger.error(f"Error in scan_network_and_write_to_csv (initial write): {e}")
 
-            # Use nmap to scan for live hosts
+            # Use nmap to scan for live hosts. On a LAN, `-sn` does an ARP sweep and already
+            # resolves each host's MAC, so we read it straight from the result (L2) — no per-host
+            # ARP retry loop. Iterate synchronously: with the slow MAC lookup gone there's nothing
+            # to parallelise, which also removes the old thread-spawn + fixed-sleep race (P6).
             self.outer_instance.nm.scan(hosts=str(self.network), arguments='-sn')
             for host in self.outer_instance.nm.all_hosts():
-                t = threading.Thread(target=self.scan_host, args=(host,))
-                t.start()
+                self.scan_host(host)
 
-            time.sleep(5)
             self.outer_instance.sort_and_write_csv(self.csv_scan_file)
 
         def scan_host(self, ip):
             """
-            Scans a specific host to check if it is alive and retrieves its hostname and MAC address.
+            Records a live host's hostname and MAC address (MAC taken from the nmap result).
             """
             if self.outer_instance.blacklistcheck and ip in self.outer_instance.ip_scan_blacklist:
                 return
             try:
-                hostname = self.outer_instance.nm[ip].hostname() if self.outer_instance.nm[ip].hostname() else ''
-                mac = self.outer_instance.get_mac_address(ip, hostname)
+                nm = self.outer_instance.nm
+                hostname = nm[ip].hostname() if nm[ip].hostname() else ''
+                # L2: MAC from the nmap -sn result; fall back to the slower ARP lookup only when
+                # nmap didn't provide one (e.g. this device's own IP or a non-L2 host).
+                mac = nm[ip]['addresses'].get('mac', '') if 'addresses' in nm[ip] else ''
+                if not mac:
+                    mac = self.outer_instance.get_mac_address(ip, hostname)
                 if not self.outer_instance.blacklistcheck or mac not in self.outer_instance.mac_scan_blacklist:
                     with self.outer_instance.lock:
                         with open(self.csv_scan_file, 'a', newline='') as file:
@@ -394,7 +352,6 @@ class NetworkScanner:
             except Exception as e:
                 self.outer_instance.logger.error(f"Error getting MAC address or writing to file for IP {ip}: {e}")
             self.progress += 1
-            time.sleep(0.1)  # Adding a small delay to avoid overwhelming the network
 
         def get_progress(self):
             """
@@ -407,15 +364,30 @@ class NetworkScanner:
             Starts the network and port scanning process.
             """
             self.scan_network_and_write_to_csv()
-            time.sleep(7)
             self.ip_data = self.outer_instance.GetIpFromCsv(self.outer_instance, self.csv_scan_file)
             self.open_ports = {ip: [] for ip in self.ip_data.ip_list}
-            with Progress() as progress:
-                task = progress.add_task("[cyan]Scanning IPs...", total=len(self.ip_data.ip_list))
-                for ip in self.ip_data.ip_list:
-                    progress.update(task, advance=1)
-                    port_scanner = self.outer_instance.PortScanner(self.outer_instance, ip, self.open_ports, self.portstart, self.portend, self.extra_ports)
-                    port_scanner.start()
+
+            # L1: a single nmap TCP-connect scan over all alive hosts, instead of a Python socket
+            # thread per (host, port). One C process, far lighter on a Pi Zero. -sT needs no root;
+            # timing follows the configured nmap_scan_aggressivity.
+            if self.ip_data.ip_list:
+                ports_to_scan = sorted(set(list(range(self.portstart, self.portend)) + list(self.extra_ports)))
+                port_arg = ','.join(str(p) for p in ports_to_scan)
+                nm = self.outer_instance.nm
+                try:
+                    nm.scan(
+                        hosts=' '.join(self.ip_data.ip_list),
+                        ports=port_arg,
+                        arguments='-sT ' + self.outer_instance.shared_data.nmap_scan_aggressivity,
+                    )
+                    for ip in self.ip_data.ip_list:
+                        if ip in nm.all_hosts():
+                            for proto in nm[ip].all_protocols():
+                                for port, info in nm[ip][proto].items():
+                                    if info.get('state') == 'open':
+                                        self.open_ports[ip].append(int(port))
+                except Exception as e:
+                    self.logger.error(f"Error during nmap port scan: {e}")
 
             self.all_ports = sorted(list(set(port for ports in self.open_ports.values() for port in ports)))
             alive_ips = set(self.ip_data.ip_list)

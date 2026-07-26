@@ -3,6 +3,24 @@
 All notable changes to this project are documented here. This file also serves as the
 process log for the PRD §9 (P1) modernization pass.
 
+## [2.2.0-alpha] — 2026-07-26
+
+### Changed (performance — target: Raspberry Pi Zero; see PRD §10)
+- **Scan engine now uses nmap for port scanning** (L1): replaced the pure-Python socket
+  scanner (a thread per host×port, throttled by a 200-thread semaphore) with a single
+  `nmap -sT` process across all alive hosts. Deleted the dead `PortScanner` class + `socket`
+  import.
+- **Host MAC comes from the `nmap -sn` result** (L2): dropped the per-host 5×2 s ARP retry
+  loop; `get-mac` is now a fallback only (and capped at ~2 s).
+- **Removed the fixed `time.sleep(5/7/0.1)` scan delays** (P6): host discovery is now
+  synchronous, which also fixes a read-before-threads-finish race.
+- **Wi-Fi scan uses `nmcli` instead of the deprecated `iwlist wlan0 scan`** (L4).
+
+> ⚠️ **Unverified off-device.** These change the core scan path and the Wi-Fi scan, and could
+> only be `py_compile`-checked here (no nmap/network on the dev box). They need a real Pi + LAN
+> to benchmark and confirm no regression before relying on them. Remaining perf items (P1–P5,
+> L3) are tracked in `docs/BACKLOG.md`.
+
 ## [2.1.0-alpha] — 2026-07-26
 
 ### Fixed (from upstream/fork bug reports)

@@ -414,11 +414,13 @@ class WebUtils:
 
     def scan_wifi(self, handler):
         try:
-            result = subprocess.Popen(['sudo', 'iwlist', 'wlan0', 'scan'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            # nmcli instead of the deprecated `iwlist wlan0 scan` (nmcli is already a dependency,
+            # used by connect_wifi). `-t -f SSID dev wifi` lists one SSID per line (L4).
+            result = subprocess.Popen(['sudo', 'nmcli', '-t', '-f', 'SSID', 'dev', 'wifi'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             stdout, stderr = result.communicate()
             if result.returncode != 0:
                 raise Exception(stderr)
-            networks = self.parse_scan_result(stdout)
+            networks = list(dict.fromkeys(line.strip() for line in stdout.splitlines() if line.strip()))
             self.logger.info(f"Found {len(networks)} networks")
             current_ssid = subprocess.Popen(['iwgetid', '-r'], stdout=subprocess.PIPE, text=True)
             ssid_out, ssid_err = current_ssid.communicate()
@@ -436,15 +438,6 @@ class WebUtils:
             handler.end_headers()
             self.logger.error(f"Error scanning Wi-Fi networks: {e}")
             handler.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
-
-    def parse_scan_result(self, scan_output):
-        networks = []
-        for line in scan_output.split('\n'):
-            if 'ESSID' in line:
-                ssid = line.split(':')[1].strip('"')
-                if ssid not in networks:
-                    networks.append(ssid)
-        return networks
 
     def connect_wifi(self, handler):
         try:

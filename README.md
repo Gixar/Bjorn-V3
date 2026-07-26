@@ -20,6 +20,8 @@ Bjorn is a « Tamagotchi like » sophisticated, autonomous network scanning, 
 
 This is a modernized fork of [infinition/Bjorn](https://github.com/infinition/Bjorn), currently **`v2.1.0-alpha`**. It keeps the full offensive tool unchanged and adds a "runs today + safe to change" baseline. Full detail is in [`CHANGELOG.md`](CHANGELOG.md); the roadmap is in [`docs/PRD.md`](docs/PRD.md) and community ideas/bugs in [`docs/BACKLOG.md`](docs/BACKLOG.md).
 
+> **Note:** `v2.1.0-alpha` is the current *verified* tag. `v2.2.0-alpha` adds a Pi-focused scan-engine rewrite (nmap-based port scan + MAC lookup, `nmcli` Wi-Fi scan) that is **not yet benchmarked on hardware** — see the performance section below and PRD §10.
+
 **Baseline (2.0.0-alpha):**
 - **Runs on a non-Pi dev box** — set `"epd_type": "mock"` in `config/shared_config.json` to boot without the e-Paper HAT (testing only, not a portability target).
 - **GPIO stack unstuck** — dropped the dead `RPi.GPIO` pin; the e-Paper driver already uses `gpiozero` + `lgpio` (Raspberry Pi OS Bookworm+).
@@ -33,7 +35,11 @@ This is a modernized fork of [infinition/Bjorn](https://github.com/infinition/Bj
 - **Web server port hopping** (#16) — the server now rebinds `:8000` on restart (SO_REUSEADDR) instead of drifting to `:8001`.
 - **Installer resilience** (#147) — a package removed on newer Debian (e.g. `libatlas-base-dev` on trixie) no longer aborts the whole install; the e-Paper option prompt count was fixed (#152).
 
-> **Pi-gated (not yet verified on hardware):** dependency version refresh, real e-Paper render, and a full installer run. See the CHANGELOG for the split between what's verified and what awaits the Pi.
+**Performance — Pi Zero focus (2.2.0-alpha, not yet hardware-benchmarked):**
+- **nmap-based scan engine** — port scanning now runs as one `nmap -sT` process instead of a Python socket thread per host×port (was throttled by a 200-thread semaphore); each host's MAC is read from the `nmap -sn` result instead of a per-host 5×2 s ARP retry loop; fixed scan `sleep()`s removed. See [`docs/PRD.md`](docs/PRD.md) §10.
+- **`nmcli` Wi-Fi scan** — replaces the deprecated `iwlist wlan0 scan`.
+
+> **Pi-gated (not yet verified on hardware):** dependency version refresh, real e-Paper render, a full installer run, **and the 2.2.0-alpha scan-engine rewrite** (needs a real Pi + LAN to benchmark). See the CHANGELOG for the split between what's verified and what awaits the Pi.
 
 ## 📚 Table of Contents
 

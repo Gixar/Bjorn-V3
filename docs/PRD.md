@@ -264,3 +264,38 @@ lines — the PRD's phasing and priority order stays the reference when that tri
 `utils.py`/`shared.py` god-modules: not touched here. Splitting them is a refactor with
 no user-visible payoff until something in P1 actually needs to change inside them — do it
 opportunistically per-step above, not as its own step.
+
+---
+
+## 10. Performance (target hardware: Pi Zero — ARMv6/v7, 512 MB, 1–4 cores)
+
+Analysis of the hot paths against the constrained target. On a single-core ARMv6 Pi Zero W,
+the two things that hurt most are **thread thrash** (spawning tens–hundreds of Python threads
+for I/O-bound work) and **`pandas` imports** (~2–5 s and 50–80 MB each, in ~10 modules).
+Real speedups need **on-Pi benchmarking** — none of this is measurable on a dev box.
+
+### 10a. Modifying the Linux tools it shells out to
+
+| # | Tool / call | Today | Change | Status |
+|---|---|---|---|---|
+| **L1** | **nmap** for ports | Not used — pure-Python `socket.connect` thread-per-port, `Semaphore(200)` (`scanning.py`) | One `nmap -sT -p<ports> <hosts>` process instead of hundreds of threads | ✅ Done (v2.2.0-alpha) |
+| **L2** | **get-mac** (`gma`) | 5×2 s retry ARP lookup per host (`scanning.py::get_mac_address`) | Read MAC from the `nmap -sn` result (`nm[host]['addresses']['mac']`); ARP only as fallback | ✅ Done (v2.2.0-alpha) |
+| **L3** | **nmap** timing/scripts | `-T2` + `-sV --script vulners.nse` (needs internet, heaviest op) | Config-driven timing; make `vulners.nse`/`-sV` optional | Backlog (`docs/BACKLOG.md`) |
+| **L4** | **iwlist wlan0 scan** | Deprecated tool (`utils.py::scan_wifi`) | `nmcli -t -f SSID dev wifi` (already a dependency) | ✅ Done (v2.2.0-alpha) |
+
+### 10b. Python / architecture
+
+| # | Where | Problem | Fix | Status |
+|---|---|---|---|---|
+| **P1** | connectors (SSH/Telnet/SQL/SMB) | Hardcoded **40 threads** each | Config-driven, core-aware | Backlog |
+| **P2** | ~10 modules | `import pandas` at module top | stdlib `csv` in connectors/`display.py`; lazy-import elsewhere | Backlog |
+| **P3** | `shared.py::write_data` | Rewrites the whole `netkb.csv` after **every** action | Batch / write once per cycle | Backlog |
+| **P4** | `orchestrator.py::run()` | `process_alive_ips()` then the same nested action loop again | Remove the duplicate | Backlog |
+| **P5** | `display.py` | Re-reads 3 CSVs (via pandas) on every refresh | Cache counts; recompute on scan events | Backlog |
+| **P6** | `scanning.py` | `time.sleep(5/7/0.1)` instead of `join()` — also a read-before-threads-finish race | Synchronous flow (moot once L1/L2 remove the threads) | ✅ Done (v2.2.0-alpha) |
+
+**This pass implements L1, L2, P6, L4** (the scan-engine rewrite + Wi-Fi scan). It replaces the
+Python socket port-scanner and the per-host ARP retry loop with nmap, and removes the fixed
+sleeps. **Unverified off-device** — needs a real Pi + network to benchmark and confirm no
+regression. P1–P5 and L3 stay in `docs/BACKLOG.md` (mostly safe code changes; deferred to keep
+this pass focused on one testable area).

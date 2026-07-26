@@ -111,17 +111,19 @@ The fastest way to install Bjorn is using the automatic installation script :
 
 ```bash
 # Download and run the installer
-wget https://raw.githubusercontent.com/infinition/Bjorn/refs/heads/main/install_bjorn.sh
+wget https://raw.githubusercontent.com/Gixar/Bjorn-v2/refs/heads/main/install_bjorn.sh
 sudo chmod +x install_bjorn.sh && sudo ./install_bjorn.sh
 # Choose the choice 1 for automatic installation. It may take a while as a lot of packages and modules will be installed. You must reboot at the end.
 ```
+
+> **Note:** while this fork's repository is **private**, the `wget` above (and the installer's `git clone`) need an access token or the repo made public. Once the repo is public these commands work as-is.
 
 For **detailed information** about **installation** process go to [Install Guide](INSTALL.md)
 
 ## ⚡ Quick Start
 
 **Need help ? You struggle to find Bjorn's IP after the installation ?**
-Use my Bjorn Detector & SSH Launcher :
+Use the original author's Bjorn Detector & SSH Launcher (a separate tool that works with any Bjorn install) :
 
 [https://github.com/infinition/bjorn-detector](https://github.com/infinition/bjorn-detector)
 
@@ -190,12 +192,12 @@ For **detailed information** about **contributing** process go to [Contributing 
   - Document reproduction steps.
   - Provide logs and context.
 
-- **Author**: __infinition__
-- **GitHub**: [infinition/Bjorn](https://github.com/infinition/Bjorn)
+- **Original author**: __infinition__ — [infinition/Bjorn](https://github.com/infinition/Bjorn)
+- **This fork**: [Gixar/Bjorn-v2](https://github.com/Gixar/Bjorn-v2)
 
 ## 🌠 Stargazers
 
-[![Star History Chart](https://api.star-history.com/svg?repos=infinition/bjorn&type=Date)](https://star-history.com/#infinition/bjorn&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=Gixar/Bjorn-v2&type=Date)](https://star-history.com/#Gixar/Bjorn-v2&Date)
 
 ---
 

@@ -50,7 +50,7 @@ The fastest way to install Bjorn is using the automatic installation script :
 
 ```bash
 # Download and run the installer
-wget https://raw.githubusercontent.com/infinition/Bjorn/refs/heads/main/install_bjorn.sh
+wget https://raw.githubusercontent.com/Gixar/Bjorn-v2/refs/heads/main/install_bjorn.sh
 sudo chmod +x install_bjorn.sh
 sudo ./install_bjorn.sh
 # Choose the choice 1 for automatic installation. It may take a while as a lot of packages and modules will be installed. You must reboot at the end.
@@ -110,9 +110,9 @@ sudo nmap --script-updatedb
 #### Step 3: Bjorn Installation
 
 ```bash
-# Clone the Bjorn repository
+# Clone the Bjorn repository (this fork; clone into a folder named "Bjorn")
 cd /home/bjorn
-git clone https://github.com/infinition/Bjorn.git
+git clone https://github.com/Gixar/Bjorn-v2.git Bjorn
 cd Bjorn
 
 # Install Python dependencies within the virtual environment

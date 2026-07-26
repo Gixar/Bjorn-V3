@@ -2,7 +2,7 @@
 
 # BJORN Installation Script
 # This script handles the complete installation of BJORN
-# Author: infinition
+# Author: infinition (original) — fork: Gixar/Bjorn-v2
 # Version: 1.0 - 071124 - 0954
 
 # Colors for output
@@ -323,9 +323,11 @@ setup_bjorn() {
         log "INFO" "Using existing BJORN directory"
         echo -e "${GREEN}Using existing BJORN directory${NC}"
     else
-        # No existing directory, proceed with clone
+        # No existing directory, proceed with clone (this fork; folder must be "Bjorn"
+        # so the `cd Bjorn` below works). Private repo -> needs a token or a public repo;
+        # alternatively place the code at /home/bjorn/Bjorn first and this clone is skipped.
         log "INFO" "Cloning BJORN repository"
-        git clone https://github.com/infinition/Bjorn.git
+        git clone https://github.com/Gixar/Bjorn-v2.git Bjorn
         check_success "Cloned BJORN repository"
     fi
 

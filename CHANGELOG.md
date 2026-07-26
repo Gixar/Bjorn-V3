@@ -3,6 +3,15 @@
 All notable changes to this project are documented here. This file also serves as the
 process log for the PRD §9 (P1) modernization pass.
 
+## [Unreleased]
+
+### Docs
+- Repointed all install/self-references from upstream `infinition/Bjorn` to this fork
+  (`Gixar/Bjorn-v2`): the README `wget` URL, the installer's `git clone`, `INSTALL.md`, the
+  Contact/Star-History sections, and the issue-template links. Kept MIT attribution (LICENSE,
+  original author) and the upstream Bjorn Detector reference. Noted the private-repo caveat for
+  `wget`/`git clone`.
+
 ## [2.2.0-alpha] — 2026-07-26
 
 ### Changed (performance — target: Raspberry Pi Zero; see PRD §10)

@@ -14,8 +14,11 @@ Already fixed this cycle (see `CHANGELOG.md`): #16 port hopping, #147 installer 
 |---|---|---|
 | #176 | Can't enter comma-separated ports in GUI Settings | Config form is rendered dynamically in `web/scripts/config.js`; the portlist field likely uses `type="number"` or splits wrong. Fix the input type + parse `split(',')`. Needs the running UI to confirm the exact cause. |
 | #190 / #160 | Wi-Fi APs not shown / no SSID switch in WebUI | `/scan_wifi` endpoint exists (`webapp.py` → `web_utils.scan_wifi`); the gap is likely the front-end render + a POST to `/connect_wifi`. Pair the scan result into a dropdown in `network.html`/its JS. |
-| #130 | 404 when executing a manual attack | Route `/execute_manual_attack` exists in `webapp.py`; the 404 is probably `manual.html` missing or a JS path mismatch. Repro in the WebUI first. |
+| #130 / #81 | 404 / error executing a manual attack (most-upvoted open bug) | **Confirmed root cause:** `web/manual.html` does not exist, yet `webapp.py` routes `GET /manual.html` and `POST /execute_manual_attack`. Loading the manual-attack page 404s. Fix = author `web/manual.html` (action picker + target field POSTing to `/execute_manual_attack`) — needs the WebUI to design the form contract. |
 | #155 | Web server not showing | Overlaps #16 (port hopping) — re-test after the SO_REUSEADDR fix; if still failing, check the systemd unit + firewall. |
+| #122 | Installed but no Display *or* WebUI (most-commented) | Multi-cause: partly #16 (port), partly EPD init failing on the panel. Re-test after the port fix; if the display is still dead, check `epd_type` + wiring. Pi-only. |
+| #113 | Waveshare **V4 unreadable** display | Affects the **default** `epd_type: "epd2in13_V4"` — reported as unreadable/garbled since May 2025. Likely a refresh-mode / LUT or rotation issue in the vendor driver. Needs the actual V4 panel to diagnose. |
+| #68 | `usb0` IP not assigned | USB-gadget networking — `install_bjorn.sh::configure_usb_gadget` + the systemd-networkd config. Pi-only. |
 
 ## New capabilities (extend the offensive/recon surface — feeds P3-1 module contract)
 - **wpa-sec / Pwnagotchi network import** (from `LOCOSP/BjornWpaSecHarvester`): pull cracked Wi-Fi creds from wpa-sec.stanev.org, dedupe, inject via `nmcli`. Pre-populates known creds instead of blind brute-force. New standalone action; needs network + `nmcli`.

@@ -250,8 +250,14 @@ install_dependencies() {
     # Install packages
     for package in "${packages[@]}"; do
         log "INFO" "Installing $package..."
-        apt-get install -y "$package"
-        check_success "Installed $package"
+        if apt-get install -y "$package"; then
+            log "SUCCESS" "Installed $package"
+        else
+            # A package may be renamed/removed on newer Debian (e.g. libatlas-base-dev was
+            # dropped in trixie — upstream #147). Warn and continue rather than aborting the
+            # whole install for one optional dependency.
+            log "WARNING" "Could not install $package (skipping — may be unavailable on this OS)"
+        fi
     done
     
     # Update nmap scripts
@@ -556,7 +562,7 @@ main() {
     echo "5. epd2in7"
     
     while true; do
-        read -p "Enter your choice (1-4): " epd_choice
+        read -p "Enter your choice (1-5): " epd_choice
         case $epd_choice in
             1) EPD_VERSION="epd2in13"; break;;
             2) EPD_VERSION="epd2in13_V2"; break;;

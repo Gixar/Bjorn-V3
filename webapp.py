@@ -150,6 +150,13 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
 
+class ReusableTCPServer(socketserver.TCPServer):
+    # Allow immediate reuse of the port after a restart (SO_REUSEADDR). socketserver.TCPServer
+    # defaults allow_reuse_address = False, so restarting while the old socket is still in
+    # TIME_WAIT fails with errno 98 and the server "hops" to 8001+ (upstream issue #16).
+    allow_reuse_address = True
+
+
 class WebThread(threading.Thread):
     """
     Thread to run the web server serving the EPD display interface.
@@ -167,7 +174,7 @@ class WebThread(threading.Thread):
         """
         while not self.shared_data.webapp_should_exit:
             try:
-                with socketserver.TCPServer(("", self.port), self.handler_class) as httpd:
+                with ReusableTCPServer(("", self.port), self.handler_class) as httpd:
                     self.httpd = httpd
                     logger.info(f"Serving at port {self.port}")
                     while not self.shared_data.webapp_should_exit:

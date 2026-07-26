@@ -3,6 +3,23 @@
 All notable changes to this project are documented here. This file also serves as the
 process log for the PRD §9 (P1) modernization pass.
 
+## [Unreleased]
+
+### Fixed (from upstream/fork bug reports)
+- **Web server port hopping on restart** (upstream #16): `webapp.py` now uses a
+  `ReusableTCPServer` with `allow_reuse_address = True` (SO_REUSEADDR), so a restart while the
+  old socket is in TIME_WAIT rebinds :8000 instead of hopping to :8001+.
+- **Installer aborted when one apt package was unavailable** (upstream #147, `libatlas-base-dev`
+  removed in Debian trixie): `install_bjorn.sh` now warns and continues per-package instead of
+  hard-failing the whole install.
+- **Installer e-Paper prompt** (upstream #152): listed 5 display options but prompted "(1-4)";
+  fixed to "(1-5)".
+
+### Added
+- `docs/BACKLOG.md`: tracked ideas mined from community forks and upstream issues (wpa-sec import,
+  scan-all-interfaces, BadUSB, tri-color e-Paper, WebUI log viewer, Wi-Fi selection, etc.), each
+  with a concrete implementation pointer. Most need the Pi/WebUI/hardware to build and verify.
+
 ## [2.0.0-alpha] — 2026-07-26
 
 Modernization baseline. Executes the implementable subset of `docs/PRD.md` §9 (P1).

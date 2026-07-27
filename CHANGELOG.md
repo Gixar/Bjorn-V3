@@ -3,6 +3,15 @@
 All notable changes to this project are documented here. This file also serves as the
 process log for the PRD §9 (P1) modernization pass.
 
+## [Unreleased]
+
+### Added
+- **`scripts/bjorn_doctor.sh`** — one read-only command that aggregates the whole health
+  picture into a single report: version/OS/arch, SPI + `epd_type`, `bjorn.service` status,
+  recent errors from **every** log location (`data/logs/*.log`, the systemd journal, and the
+  newest `/var/log/bjorn_install/` log), and a map of where every log/loot/output file lives.
+  Runs even when Bjorn won't start. Documented as the "start here" step in `TROUBLESHOOTING.md`.
+
 ## [2.3.0-alpha] — 2026-07-27
 
 ### Added

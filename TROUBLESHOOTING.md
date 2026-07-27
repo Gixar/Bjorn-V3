@@ -20,6 +20,32 @@
 - **Monitoring**: Check open files with `lsof -p $(pgrep -f Bjorn.py) | wc -l`
 - At the moment the logs show periodically this information as (FD : XXX)
 
+## 🩺 Start here: `bjorn_doctor.sh` (central diagnostics)
+
+One read-only command gathers everything into a single report — version, hardware (SPI),
+service status, recent errors from **all** log locations, and a map of where every log and
+output file lives. It works even when Bjorn won't start.
+
+```bash
+sudo /home/bjorn/Bjorn/scripts/bjorn_doctor.sh
+# save it to share/attach:
+sudo /home/bjorn/Bjorn/scripts/bjorn_doctor.sh > /tmp/bjorn_report.txt
+```
+
+Where Bjorn leaves things (the doctor prints this too):
+
+| What | Location |
+|------|----------|
+| App logs (per module) | `data/logs/*.log` |
+| Run reports (redacted) | `data/output/run_reports/*.json` |
+| Loot / credentials / scan results | `data/output/{crackedpwd,data_stolen,scan_results,vulnerabilities,zombies}/` |
+| netKB / live status | `data/netkb.csv`, `data/livestatus.csv` |
+| Config | `config/shared_config.json` |
+| Installer logs | `/var/log/bjorn_install/*.log` |
+| Service journal | `journalctl -u bjorn.service` |
+
+For a blank e-Paper specifically: `sudo python3 /home/bjorn/Bjorn/scripts/epd_test.py --all`.
+
 ## 🛠️ Troubleshooting Steps
 
 ### Service Issues

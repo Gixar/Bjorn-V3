@@ -299,3 +299,35 @@ Python socket port-scanner and the per-host ARP retry loop with nmap, and remove
 sleeps. **Unverified off-device** — needs a real Pi + network to benchmark and confirm no
 regression. P1–P5 and L3 stay in `docs/BACKLOG.md` (mostly safe code changes; deferred to keep
 this pass focused on one testable area).
+
+---
+
+## 11. Ideas from adjacent projects (Pwnagotchi)
+
+Pwnagotchi is the closest analog (Pi Zero + e-Paper + network-security). Its **WiFi-attack
+specifics don't transfer** (Bjorn is a stationary LAN brute-force/exfil tool, not a mobile
+handshake-capturer), but its mature **Pi-appliance infrastructure** does. Filtered to what's
+genuinely new here (cross-checked against §4–§10 and `docs/BACKLOG.md`):
+
+| # | Idea (Pwnagotchi origin) | Fit for Bjorn | Status |
+|---|---|---|---|
+| **PG-1** | **Display driver breadth + `auto` selection.** Many Waveshare variants via one config value; V4 is compatible with V3. | Directly relevant — extends `epd_type` + `scripts/epd_test.py`. | ✅ Done (v2.3.0-alpha) — `epd_type: "auto"` |
+| **PG-2** | **Graceful shutdown on power loss** (SD-card protection). | High value for an appliance that gets unplugged; Bjorn has none. | Backlog |
+| **PG-3** | **Battery / UPS awareness** (PiSugar / universal UPS: %, runtime, auto-shutdown at low charge). | Only if run portable with a battery HAT. | Backlog (conditional) |
+| **PG-4** | **Watchdog / auto-restart on a wedged main loop.** | Resilience for an unattended device (installer already has an fd-watchdog, not a loop one). | Backlog |
+| **PG-5** | **Plugin system** (lifecycle + UI + web hooks) — broader than attack modules. | Widens the P3-1 "module contract" from attack-only to features generally. | Folded into P3-1 scope |
+| **PG-6** | **GPS tagging of findings.** | Stretch — Bjorn is LAN-stationary; cheap only if a GPS is present. | Backlog (low priority) |
+
+> ⚠️ **PG-1 honesty note.** `auto` selects the first driver that *initializes*, which cannot
+> distinguish V3 from V4 (both init on the same panel with no render feedback). Its value is
+> graceful degradation + first-boot convenience, **not** fixing a "driver inits but renders
+> blank" case — for that, `scripts/epd_test.py --all` (visual probe) is the tiebreaker, then pin
+> the working value.
+
+**Already covered / validated (no action):** remote notifications (Discord/Telegram/ntfy) →
+P3-3; multi-unit cooperation & anonymized swarm export → `BACKLOG.md` (Bjorn-cortex); wpa-sec
+import → `BACKLOG.md`. Pwnagotchi's most-active fork (jayofelony) *removed* its on-device AI for
+battery/uptime — which **validates deferring Bjorn's live P-AI layer** (§4) to the offline
+process (§4a).
+
+This pass implements **PG-1** only (`epd_type: "auto"`).

@@ -39,7 +39,10 @@ This is a modernized fork of [infinition/Bjorn](https://github.com/infinition/Bj
 - **nmap-based scan engine** — port scanning now runs as one `nmap -sT` process instead of a Python socket thread per host×port (was throttled by a 200-thread semaphore); each host's MAC is read from the `nmap -sn` result instead of a per-host 5×2 s ARP retry loop; fixed scan `sleep()`s removed. See [`docs/PRD.md`](docs/PRD.md) §10.
 - **`nmcli` Wi-Fi scan** — replaces the deprecated `iwlist wlan0 scan`.
 
-> **Pi-gated (not yet verified on hardware):** dependency version refresh, real e-Paper render, a full installer run, **and the 2.2.0-alpha scan-engine rewrite** (needs a real Pi + LAN to benchmark). See the CHANGELOG for the split between what's verified and what awaits the Pi.
+**Display robustness (2.3.0-alpha):**
+- **`epd_type: "auto"`** — Bjorn tries the known Waveshare drivers in order and boots on the first that initializes, so a wrong/absent driver no longer stops it. (Idea from Pwnagotchi's multi-display support — see PRD §11.) It selects by driver *init*, so it can't tell a V3 panel from a V4; if the screen still shows nothing, run `sudo python3 scripts/epd_test.py --all` to see which driver actually renders, then set that exact `epd_type`.
+
+> **Pi-gated (not yet verified on hardware):** dependency version refresh, real e-Paper render, a full installer run, **the 2.2.0-alpha scan-engine rewrite**, and the **2.3.0-alpha `auto` display detection** (all need a real Pi + LAN). See the CHANGELOG for the split between what's verified and what awaits the Pi.
 
 ## 📚 Table of Contents
 

@@ -249,31 +249,22 @@ class SharedData:
         try:
             logger.info("Initializing EPD display...")
             time.sleep(1)
-            self.epd_helper = EPDHelper(self.config["epd_type"])
-            self.epd_helper = EPDHelper(self.epd_type)
-            if self.config["epd_type"] == "mock":
-                logger.info("EPD type: mock (non-Pi dev backend, no hardware)")
-                self.screen_reversed = False
-                self.web_screen_reversed = False
-            elif self.config["epd_type"] == "epd2in7":
-                logger.info("EPD type: epd2in7 screen reversed")
-                self.screen_reversed = False
-                self.web_screen_reversed = False
-            elif self.config["epd_type"] == "epd2in13_V2":
-                logger.info("EPD type: epd2in13_V2 screen reversed")
-                self.screen_reversed = False
-                self.web_screen_reversed = False
-            elif self.config["epd_type"] == "epd2in13_V3":
-                logger.info("EPD type: epd2in13_V3 screen reversed")
-                self.screen_reversed = True
-                self.web_screen_reversed = True
-            elif self.config["epd_type"] == "epd2in13_V4":
-                logger.info("EPD type: epd2in13_V4 screen reversed")
-                self.screen_reversed = True
-                self.web_screen_reversed = True
-            self.epd_helper.init_full_update()
+            configured = self.config["epd_type"]
+            if configured == "auto":
+                self.epd_helper, epd_type = self._auto_detect_epd()
+            else:
+                epd_type = configured
+                self.epd_helper = EPDHelper(epd_type)
+                self.epd_helper.init_full_update()
+            # Record the resolved type so the rest of the app (display, web) reads a concrete value.
+            self.epd_type = epd_type
+            self.config["epd_type"] = epd_type
+            # V3/V4 render rotated; V2/2in7/mock do not.
+            self.screen_reversed = epd_type in ("epd2in13_V3", "epd2in13_V4")
+            self.web_screen_reversed = self.screen_reversed
+            logger.info(f"EPD type: {epd_type} (screen_reversed={self.screen_reversed})")
             self.width, self.height = self.epd_helper.epd.width, self.epd_helper.epd.height
-            logger.info(f"EPD {self.config['epd_type']} initialized with size: {self.width}x{self.height}")
+            logger.info(f"EPD {epd_type} initialized with size: {self.width}x{self.height}")
         except Exception as e:
             logger.error(f"Error initializing EPD display (epd_type={self.config.get('epd_type')!r}): {e}")
             logger.error(
@@ -284,7 +275,45 @@ class SharedData:
             )
             logger.error(traceback.format_exc())
             raise
-        
+
+    # Real-panel drivers tried, in order, when epd_type == "auto" ("mock" is never auto-picked).
+    EPD_AUTODETECT_CANDIDATES = ["epd2in13_V4", "epd2in13_V3", "epd2in13_V2", "epd2in13", "epd2in7"]
+
+    def _auto_detect_epd(self):
+        """Try each candidate driver until one initializes; return (helper, epd_type).
+
+        ponytail: init-based, not render-based. An e-Paper gives no signal that pixels actually
+        appeared, so this confirms only that a driver *initialized without error* — it does NOT
+        distinguish V3 from V4 (both init on the same panel). Value here is graceful degradation
+        (Bjorn still boots if the configured driver errors or the HAT is absent) and first-boot
+        convenience. If the auto-picked driver inits but the screen stays blank, run
+        `sudo python3 scripts/epd_test.py --all` to find the one that visibly renders, then set
+        that exact value as `epd_type` in config/shared_config.json.
+        """
+        last_error = None
+        for candidate in self.EPD_AUTODETECT_CANDIDATES:
+            helper = None
+            try:
+                logger.info(f"[epd auto] trying driver '{candidate}'...")
+                helper = EPDHelper(candidate)
+                helper.init_full_update()
+                logger.info(f"[epd auto] selected '{candidate}' (first driver that initialized).")
+                return helper, candidate
+            except Exception as e:
+                last_error = e
+                logger.warning(f"[epd auto] '{candidate}' did not initialize: {e}")
+                # Best-effort pin release so the next candidate can claim GPIO/SPI. Only reached
+                # when a candidate fails; the common case (first driver works) never releases.
+                if helper is not None:
+                    try:
+                        helper.epd.sleep()
+                    except Exception:
+                        pass
+        raise RuntimeError(
+            f"EPD auto-detect: no candidate driver initialized ({self.EPD_AUTODETECT_CANDIDATES}). "
+            f"Last error: {last_error}"
+        )
+
     def initialize_variables(self):
         """Initialize the variables."""
         self.should_exit = False

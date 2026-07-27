@@ -3,9 +3,10 @@
 # and separate from shared.py so it can be unit-tested without constructing SharedData
 # (which pulls in PIL and the e-Paper stack).
 
-# epd_type values with a driver module in resources/waveshare_epd/ (+ the mock backend).
+# epd_type values with a driver module in resources/waveshare_epd/ (+ the mock backend and
+# "auto", which probes the real-panel drivers at startup — see SharedData._auto_detect_epd).
 KNOWN_EPD_TYPES = {
-    "epd2in13", "epd2in13_V2", "epd2in13_V3", "epd2in13_V4", "epd2in7", "mock",
+    "epd2in13", "epd2in13_V2", "epd2in13_V3", "epd2in13_V4", "epd2in7", "mock", "auto",
 }
 
 _BOOL_KEYS = ("manual_mode", "websrv", "debug_mode", "scan_vuln_running")

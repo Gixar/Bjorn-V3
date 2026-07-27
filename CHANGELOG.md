@@ -3,9 +3,18 @@
 All notable changes to this project are documented here. This file also serves as the
 process log for the PRD §9 (P1) modernization pass.
 
-## [Unreleased]
+## [2.3.0-alpha] — 2026-07-27
 
 ### Added
+- **`epd_type: "auto"`** display driver selection (idea PG-1, from Pwnagotchi's multi-display
+  support; PRD §11). At startup Bjorn tries the real-panel drivers in order and uses the first
+  that initializes, logging each attempt — so it boots even if the configured driver errors or
+  the HAT is absent. **Honest limit:** this keys off driver *init*, which can't tell V3 from V4
+  (both init on the same panel with no render feedback); for a "inits but renders blank" panel,
+  use `scripts/epd_test.py --all` (visual probe) to find the right one, then pin it.
+- **PRD §11** — evaluated the Pwnagotchi ecosystem for transferable ideas; recorded graceful
+  shutdown (PG-2), UPS awareness (PG-3), loop watchdog (PG-4), plugin system (PG-5), GPS tagging
+  (PG-6) in `docs/BACKLOG.md`.
 - **`scripts/epd_test.py`** — a standalone e-Paper diagnostic (run on the Pi). Checks SPI, then
   loads → inits → draws a visible test pattern → clears for a given `epd_type` (or `--all` to
   probe every driver in a fresh process each). Prints exactly which step fails, with traceback —

@@ -27,6 +27,12 @@ def test_mock_epd_type_is_valid():
     assert validate_config(cfg) is None
 
 
+def test_auto_epd_type_is_valid():
+    cfg = _good_config()
+    cfg["epd_type"] = "auto"
+    assert validate_config(cfg) is None
+
+
 def test_missing_key_raises():
     cfg = _good_config()
     del cfg["scan_interval"]

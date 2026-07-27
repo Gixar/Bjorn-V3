@@ -5,6 +5,17 @@ process log for the PRD §9 (P1) modernization pass.
 
 ## [Unreleased]
 
+### Changed
+- **Installer installs from the local repo instead of cloning from GitHub.** `install_bjorn.sh`
+  now copies the repo it was run from (the folder the script lives in) into `/home/bjorn/Bjorn`
+  — no network, works with a private repo. It only falls back to `git clone` when run standalone
+  and `/home/bjorn/Bjorn` doesn't already exist. Fixes the private-repo clone failure (GitHub no
+  longer supports git password auth). README/INSTALL updated to the "download repo → run installer
+  inside it" flow.
+- Installer prerequisite check no longer warns about `nmap` — it's installed in the dependency
+  step, so pre-checking it always false-flagged on a fresh image (`nmcli`/`python3` are still
+  checked, as they must pre-exist).
+
 ### Removed
 - Dropped the public security-disclosure channel — deleted `SECURITY.md` and the issue-template
   "Security Reports" link. This fork is a private, personal-use repo; the inherited policy

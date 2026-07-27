@@ -110,13 +110,18 @@ I juste hope the V1 & V3 will work the same.
 The fastest way to install Bjorn is using the automatic installation script :
 
 ```bash
-# Download and run the installer
-wget https://raw.githubusercontent.com/Gixar/Bjorn-v2/refs/heads/main/install_bjorn.sh
+# 1. Get the code onto the Pi: download the repo ZIP from GitHub and unzip it
+#    (or `git clone` if you have access). For a private repo this one-time
+#    download is the ONLY GitHub step.
+# 2. Run the installer from INSIDE the extracted repo folder — it installs that
+#    local copy and does NOT clone from GitHub:
+cd Bjorn-v2
 sudo chmod +x install_bjorn.sh && sudo ./install_bjorn.sh
-# Choose the choice 1 for automatic installation. It may take a while as a lot of packages and modules will be installed. You must reboot at the end.
+# Choose 1 for automatic installation. It may take a while (many packages/modules install).
+# You must reboot at the end.
 ```
 
-> **Note:** while this fork's repository is **private**, the `wget` above (and the installer's `git clone`) need an access token or the repo made public. Once the repo is public these commands work as-is.
+> **Note:** run the installer **from inside the downloaded repo** — it installs the local copy with no GitHub access. It only falls back to `git clone` if run standalone (e.g. a bare `wget` of just the script) and `/home/bjorn/Bjorn` doesn't already exist, which for a private repo would need a token.
 
 For **detailed information** about **installation** process go to [Install Guide](INSTALL.md)
 

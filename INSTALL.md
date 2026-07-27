@@ -46,11 +46,12 @@ I juste hope the V1 & V3 will work the same.
  
 ### ⚡ Quick Install
 
-The fastest way to install Bjorn is using the automatic installation script :
+The fastest way to install Bjorn is to get the repo onto the Pi and run the installer **from inside it** — it installs the local copy and does **not** clone from GitHub :
 
 ```bash
-# Download and run the installer
-wget https://raw.githubusercontent.com/Gixar/Bjorn-v2/refs/heads/main/install_bjorn.sh
+# Download the repo ZIP from GitHub and unzip it (or `git clone` if you have access),
+# then run the installer from inside the extracted folder:
+cd Bjorn-v2
 sudo chmod +x install_bjorn.sh
 sudo ./install_bjorn.sh
 # Choose the choice 1 for automatic installation. It may take a while as a lot of packages and modules will be installed. You must reboot at the end.

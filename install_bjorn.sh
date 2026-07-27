@@ -23,6 +23,9 @@ BJORN_USER="bjorn"
 BJORN_PATH="/home/${BJORN_USER}/Bjorn"
 CURRENT_STEP=0
 TOTAL_STEPS=8
+# Directory this script lives in (= the repo root — install_bjorn.sh sits at the top of the
+# repo). Lets the installer install from a local copy instead of cloning from GitHub.
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
 if [[ "$1" == "--help" ]]; then
     echo "Usage: sudo ./install_bjorn.sh [--dry-run|--help]"
@@ -185,8 +188,10 @@ check_system_compatibility() {
         log "SUCCESS" "Raspberry Pi Zero detected"
     fi
 
-    # Check required external tools (Bjorn shells out to these at runtime)
-    for tool in nmap nmcli python3; do
+    # Check required external tools that must already be present (base Raspberry Pi OS).
+    # nmap is intentionally NOT here — the installer provides it in the dependency step, so
+    # checking it before that step always false-warns on a fresh image.
+    for tool in nmcli python3; do
         if ! command -v "$tool" >/dev/null 2>&1; then
             log "WARNING" "Required tool not found on PATH: $tool"
             should_ask_confirmation=true
@@ -322,11 +327,15 @@ setup_bjorn() {
     if [ -d "Bjorn" ]; then
         log "INFO" "Using existing BJORN directory"
         echo -e "${GREEN}Using existing BJORN directory${NC}"
+    elif [ -f "$SCRIPT_DIR/requirements.txt" ] && [ -d "$SCRIPT_DIR/actions" ]; then
+        # Preferred path: install from the local repo this script was run from — no network,
+        # no GitHub, works with a private repo. (install_bjorn.sh lives at the repo root.)
+        log "INFO" "Installing BJORN from local source: $SCRIPT_DIR"
+        cp -r "$SCRIPT_DIR" /home/$BJORN_USER/Bjorn
+        check_success "Copied BJORN from local source"
     else
-        # No existing directory, proceed with clone (this fork; folder must be "Bjorn"
-        # so the `cd Bjorn` below works). Private repo -> needs a token or a public repo;
-        # alternatively place the code at /home/bjorn/Bjorn first and this clone is skipped.
-        log "INFO" "Cloning BJORN repository"
+        # Fallback: clone from GitHub (needs a public repo, or a token for a private one).
+        log "INFO" "No local copy found next to the script; cloning BJORN repository"
         git clone https://github.com/Gixar/Bjorn-v2.git Bjorn
         check_success "Cloned BJORN repository"
     fi

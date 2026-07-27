@@ -5,6 +5,12 @@ process log for the PRD §9 (P1) modernization pass.
 
 ## [Unreleased]
 
+### Removed
+- Dropped the public security-disclosure channel — deleted `SECURITY.md` and the issue-template
+  "Security Reports" link. This fork is a private, personal-use repo; the inherited policy
+  pointed vulnerability reports at the upstream author's email, so it was misleading rather than
+  useful.
+
 ### Docs
 - Repointed all install/self-references from upstream `infinition/Bjorn` to this fork
   (`Gixar/Bjorn-v2`): the README `wget` URL, the installer's `git clone`, `INSTALL.md`, the

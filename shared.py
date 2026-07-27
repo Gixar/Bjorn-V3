@@ -21,6 +21,7 @@ import time
 import csv
 import logging
 import subprocess
+import traceback
 from PIL import Image, ImageFont
 from logger import Logger
 from epd_helper import EPDHelper
@@ -274,7 +275,14 @@ class SharedData:
             self.width, self.height = self.epd_helper.epd.width, self.epd_helper.epd.height
             logger.info(f"EPD {self.config['epd_type']} initialized with size: {self.width}x{self.height}")
         except Exception as e:
-            logger.error(f"Error initializing EPD display: {e}")
+            logger.error(f"Error initializing EPD display (epd_type={self.config.get('epd_type')!r}): {e}")
+            logger.error(
+                "Blank/absent panel checklist: (1) SPI enabled? `ls /dev/spidev*` should list a device "
+                "— if not, enable it (sudo raspi-config -> Interface Options -> SPI, or add "
+                "`dtparam=spi=on` to /boot/firmware/config.txt and reboot). (2) Does 'epd_type' match "
+                "your HAT? (3) Run `sudo python3 scripts/epd_test.py --all` to probe each driver."
+            )
+            logger.error(traceback.format_exc())
             raise
         
     def initialize_variables(self):

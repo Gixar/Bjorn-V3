@@ -5,7 +5,19 @@ process log for the PRD §9 (P1) modernization pass.
 
 ## [Unreleased]
 
+### Added
+- **`scripts/epd_test.py`** — a standalone e-Paper diagnostic (run on the Pi). Checks SPI, then
+  loads → inits → draws a visible test pattern → clears for a given `epd_type` (or `--all` to
+  probe every driver in a fresh process each). Prints exactly which step fails, with traceback —
+  the fastest way to find the driver that matches your HAT when the panel stays blank.
+
 ### Changed
+- **e-Paper failures are now logged.** `epd_helper.py` logs through Bjorn's `Logger` (rich +
+  data/logs/) with step-by-step init messages and full tracebacks (falls back to stdlib logging
+  off-device so it stays importable in tests). `shared.py::initialize_epd_display` now logs an
+  actionable blank-panel checklist (SPI enabled? epd_type correct? run epd_test.py) plus the
+  traceback. Previously EPD errors went to a bare, unconfigured logger and were effectively
+  swallowed.
 - **Installer installs from the local repo instead of cloning from GitHub.** `install_bjorn.sh`
   now copies the repo it was run from (the folder the script lives in) into `/home/bjorn/Bjorn`
   — no network, works with a private repo. It only falls back to `git clone` when run standalone

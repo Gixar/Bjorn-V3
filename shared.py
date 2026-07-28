@@ -132,6 +132,7 @@ class SharedData:
             
             "startup_delay": 10,
             "web_delay": 2,
+            "stats_ws_interval": 2,  # seconds between /ws/stats pushes to the stats dashboard
             "screen_delay": 1,
             "comment_delaymin": 15,
             "comment_delaymax": 30,

@@ -1,24 +1,49 @@
 #utils.py
+#
+# MIGRATION NOTE (webapp v3 / FastAPI):
+# Every WebUtils method used to take a raw http.server `handler` and write status/headers/body
+# to it directly (handler.send_response / handler.send_header / handler.wfile.write). FastAPI
+# route functions instead return a Response object (or a plain dict, which FastAPI auto-wraps
+# as JSON), so every method below has been converted to `return JSONResponse(...)` /
+# `return HTMLResponse(...)` / etc. instead of writing to a handler. The internal logic
+# (what each endpoint actually does) is unchanged from the previous version, so this should
+# behave identically from the browser's point of view, with two exceptions noted inline:
+#   1. serve_favicon(): fixed a real path bug (see comment at that method).
+#   2. restore(): now takes a FastAPI UploadFile instead of manually parsing
+#      multipart/form-data with `cgi.FieldStorage` (the `cgi` module is deprecated/removed
+#      upstream in Python 3.13, so this also removes a future breakage).
+# New in this version: get_stats_snapshot() for the live stats dashboard (/api/stats, /ws/stats).
 
 import json
 import subprocess
 import os
-import json
 import csv
 import zipfile
 import uuid
-import cgi
-import io
 import importlib
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from logger import Logger
-from urllib.parse import unquote
+from starlette.responses import JSONResponse, HTMLResponse, PlainTextResponse, Response, FileResponse
 from actions.nmap_vuln_scanner import NmapVulnScanner
 
 
-
 logger = Logger(name="utils.py", level=logging.DEBUG)
+
+
+def _err(message, status_code=500):
+    """Shorthand for the {"status": "error", "message": ...} JSON body every old handler used."""
+    return JSONResponse({"status": "error", "message": str(message)}, status_code=status_code)
+
+
+def _ok(payload=None, message=None, status_code=200):
+    """Shorthand for the {"status": "success", ...} JSON body every old handler used."""
+    body = {"status": "success"}
+    if message is not None:
+        body["message"] = message
+    if payload:
+        body.update(payload)
+    return JSONResponse(body, status_code=status_code)
 
 
 class WebUtils:
@@ -71,7 +96,37 @@ class WebUtils:
         except AttributeError as e:
             self.logger.error(f"Module {module_name} is missing required attributes: {e}")
 
-    def serve_netkb_data_json(self, handler):
+    # ------------------------------------------------------------------
+    # Stats snapshot (new) — feeds GET /api/stats and the WS /ws/stats push
+    # ------------------------------------------------------------------
+    def get_stats_snapshot(self):
+        """Build a plain dict of the live "gamified" stats plus a bit of status context.
+
+        These numbers (coinnbr, levelnbr, networkkbnbr, ...) already exist on shared_data —
+        they're what update_stats() in shared.py computes and what display.py draws onto the
+        e-Paper image — but previously nothing exposed them over the web. This is the single
+        source of truth for both the REST endpoint and the WebSocket push, so the two can never
+        drift out of sync.
+        """
+        sd = self.shared_data
+        return {
+            "coins": getattr(sd, "coinnbr", 0),
+            "level": getattr(sd, "levelnbr", 0),
+            "known_hosts": getattr(sd, "networkkbnbr", 0),
+            "credentials_cracked": getattr(sd, "crednbr", 0),
+            "data_stolen": getattr(sd, "datanbr", 0),
+            "zombies": getattr(sd, "zombiesnbr", 0),
+            "attacks": getattr(sd, "attacksnbr", 0),
+            "vulnerabilities": getattr(sd, "vulnnbr", 0),
+            "targets": getattr(sd, "targetnbr", 0),
+            "open_ports": getattr(sd, "portnbr", 0),
+            "orchestrator_status": getattr(sd, "bjornorch_status", "UNKNOWN"),
+            "manual_mode": getattr(sd, "manual_mode", False),
+            "wifi_connected": getattr(sd, "wifi_connected", False),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+
+    def serve_netkb_data_json(self):
         try:
             netkb_file = self.shared_data.netkbfile
             with open(netkb_file, 'r', encoding='utf-8') as file:
@@ -84,22 +139,12 @@ class WebUtils:
                 'ports': {row['IPs']: row['Ports'].split(';') for row in data},
                 'actions': actions
             }
-
-            handler.send_response(200)
-            handler.send_header("Content-type", "application/json")
-            handler.end_headers()
-            handler.wfile.write(json.dumps(response_data).encode('utf-8'))
+            return JSONResponse(response_data)
         except Exception as e:
-            handler.send_response(500)
-            handler.send_header("Content-type", "application/json")
-            handler.end_headers()
-            handler.wfile.write(json.dumps({"status": "error", "message": str(e)}).encode('utf-8'))
+            return _err(e)
 
-    def execute_manual_attack(self, handler):
+    def execute_manual_attack(self, params):
         try:
-            content_length = int(handler.headers['Content-Length'])
-            post_data = handler.rfile.read(content_length).decode('utf-8')
-            params = json.loads(post_data)
             ip = params['ip']
             port = params['port']
             action_class = params['action']
@@ -133,19 +178,12 @@ class WebUtils:
                 self.logger.error(f"Action {action_key} failed on {ip}:{port}")
             self.shared_data.write_data(current_data)
 
-            handler.send_response(200)
-            handler.send_header("Content-type", "application/json")
-            handler.end_headers()
-            handler.wfile.write(json.dumps({"status": "success", "message": "Manual attack executed"}).encode('utf-8'))
+            return _ok(message="Manual attack executed")
         except Exception as e:
             self.logger.error(f"Error executing manual attack: {e}")
-            handler.send_response(500)
-            handler.send_header("Content-type", "application/json")
-            handler.end_headers()
-            handler.wfile.write(json.dumps({"status": "error", "message": str(e)}).encode('utf-8'))
+            return _err(e)
 
-
-    def serve_logs(self, handler):
+    def serve_logs(self):
         try:
             log_file_path = self.shared_data.webconsolelog
             if not os.path.exists(log_file_path):
@@ -161,50 +199,31 @@ class WebUtils:
                     log_file.writelines(log_lines)
 
             log_data = ''.join(log_lines)
-
-            handler.send_response(200)
-            handler.send_header("Content-type", "text/plain")
-            handler.end_headers()
-            handler.wfile.write(log_data.encode('utf-8'))
+            return PlainTextResponse(log_data)
         except BrokenPipeError:
             # Ignore broken pipe errors
-            pass
+            return PlainTextResponse("")
         except Exception as e:
-            handler.send_response(500)
-            handler.send_header("Content-type", "application/json")
-            handler.end_headers()
-            handler.wfile.write(json.dumps({"status": "error", "message": str(e)}).encode('utf-8'))
+            return _err(e)
 
-    def start_orchestrator(self, handler):
+    def start_orchestrator(self):
         try:
             bjorn_instance = self.shared_data.bjorn_instance
             bjorn_instance.start_orchestrator()
-            handler.send_response(200)
-            handler.send_header("Content-type", "application/json")
-            handler.end_headers()
-            handler.wfile.write(json.dumps({"status": "success", "message": "Orchestrator starting..."}).encode('utf-8'))
+            return _ok(message="Orchestrator starting...")
         except Exception as e:
-            handler.send_response(500)
-            handler.send_header("Content-type", "application/json")
-            handler.end_headers()
-            handler.wfile.write(json.dumps({"status": "error", "message": str(e)}).encode('utf-8'))
+            return _err(e)
 
-    def stop_orchestrator(self, handler):
+    def stop_orchestrator(self):
         try:
             bjorn_instance = self.shared_data.bjorn_instance
             bjorn_instance.stop_orchestrator()
             self.shared_data.orchestrator_should_exit = True
-            handler.send_response(200)
-            handler.send_header("Content-type", "application/json")
-            handler.end_headers()
-            handler.wfile.write(json.dumps({"status": "success", "message": "Orchestrator stopping..."}).encode('utf-8'))
+            return _ok(message="Orchestrator stopping...")
         except Exception as e:
-            handler.send_response(500)
-            handler.send_header("Content-type", "application/json")
-            handler.end_headers()
-            handler.wfile.write(json.dumps({"status": "error", "message": str(e)}).encode('utf-8'))
+            return _err(e)
 
-    def backup(self, handler):
+    def backup(self):
         try:
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             backup_filename = f"backup_{timestamp}.zip"
@@ -217,73 +236,50 @@ class WebUtils:
                             file_path = os.path.join(root, file)
                             backup_zip.write(file_path, os.path.relpath(file_path, self.shared_data.currentdir))
 
-            handler.send_response(200)
-            handler.send_header("Content-type", "application/json")
-            handler.end_headers()
-            handler.wfile.write(json.dumps({"status": "success", "url": f"/download_backup?filename={backup_filename}", "filename": backup_filename}).encode('utf-8'))
+            return _ok({"url": f"/download_backup?filename={backup_filename}", "filename": backup_filename})
         except Exception as e:
-            handler.send_response(500)
-            handler.send_header("Content-type", "application/json")
-            handler.end_headers()
-            handler.wfile.write(json.dumps({"status": "error", "message": str(e)}).encode('utf-8'))
+            return _err(e)
 
-    def restore(self, handler):
+    async def restore(self, file):
+        """`file` is a FastAPI/Starlette UploadFile (multipart/form-data field name "file").
+
+        Replaces the old manual `cgi.FieldStorage` parsing — `cgi` is deprecated (PEP 594) and
+        gone entirely in Python 3.13, so this also removes a landmine for the "possible OS
+        upgrade" you mentioned wanting to stay ahead of.
+        """
         try:
-            content_length = int(handler.headers['Content-Length'])
-            field_data = handler.rfile.read(content_length)
-            field_storage = cgi.FieldStorage(fp=io.BytesIO(field_data), headers=handler.headers, environ={'REQUEST_METHOD': 'POST'})
+            if not file or not file.filename:
+                return JSONResponse({"status": "error", "message": "No selected file"}, status_code=400)
 
-            file_item = field_storage['file']
-            if file_item.filename:
-                backup_path = os.path.join(self.shared_data.upload_dir, file_item.filename)
-                with open(backup_path, 'wb') as output_file:
-                    output_file.write(file_item.file.read())
+            backup_path = os.path.join(self.shared_data.upload_dir, file.filename)
+            contents = await file.read()
+            with open(backup_path, 'wb') as output_file:
+                output_file.write(contents)
 
-                with zipfile.ZipFile(backup_path, 'r') as backup_zip:
-                    backup_zip.extractall(self.shared_data.currentdir)
+            with zipfile.ZipFile(backup_path, 'r') as backup_zip:
+                backup_zip.extractall(self.shared_data.currentdir)
 
-                handler.send_response(200)
-                handler.send_header("Content-type", "application/json")
-                handler.end_headers()
-                handler.wfile.write(json.dumps({"status": "success", "message": "Restore completed successfully"}).encode('utf-8'))
-            else:
-                handler.send_response(400)
-                handler.send_header("Content-type", "application/json")
-                handler.end_headers()
-                handler.wfile.write(json.dumps({"status": "error", "message": "No selected file"}).encode('utf-8'))
+            return _ok(message="Restore completed successfully")
         except Exception as e:
-            handler.send_response(500)
-            handler.send_header("Content-type", "application/json")
-            handler.end_headers()
-            handler.wfile.write(json.dumps({"status": "error", "message": str(e)}).encode('utf-8'))
+            return _err(e)
 
-    def download_backup(self, handler):
-        query = unquote(handler.path.split('?filename=')[1])
-        backup_path = os.path.join(self.shared_data.backupdir, query)
+    def download_backup(self, filename):
+        backup_path = os.path.join(self.shared_data.backupdir, filename)
         if os.path.isfile(backup_path):
-            handler.send_response(200)
-            handler.send_header("Content-Disposition", f'attachment; filename="{os.path.basename(backup_path)}"')
-            handler.send_header("Content-type", "application/zip")
-            handler.end_headers()
-            with open(backup_path, 'rb') as file:
-                handler.wfile.write(file.read())
-        else:
-            handler.send_response(404)
-            handler.end_headers()
+            return FileResponse(
+                backup_path,
+                media_type="application/zip",
+                filename=os.path.basename(backup_path),
+            )
+        return Response(status_code=404)
 
-    def serve_credentials_data(self, handler):
+    def serve_credentials_data(self):
         try:
             directory = self.shared_data.crackedpwddir
             html_content = self.generate_html_for_csv_files(directory)
-            handler.send_response(200)
-            handler.send_header("Content-type", "text/html")
-            handler.end_headers()
-            handler.wfile.write(html_content.encode('utf-8'))
+            return HTMLResponse(html_content)
         except Exception as e:
-            handler.send_response(500)
-            handler.send_header("Content-type", "application/json")
-            handler.end_headers()
-            handler.wfile.write(json.dumps({"status": "error", "message": str(e)}).encode('utf-8'))
+            return _err(e)
 
     def generate_html_for_csv_files(self, directory):
         html = '<div class="credentials-container">\n'
@@ -324,95 +320,61 @@ class WebUtils:
                 })
         return files
 
-
-
-    def serve_file(self, handler, filename):
-        try:
-            with open(os.path.join(self.shared_data.webdir, filename), 'r', encoding='utf-8') as file:
-                content = file.read()
-                content = content.replace('{{ web_delay }}', str(self.shared_data.web_delay * 1000))
-                handler.send_response(200)
-                handler.send_header("Content-type", "text/html")
-                handler.end_headers()
-                handler.wfile.write(content.encode('utf-8'))
-        except FileNotFoundError:
-            handler.send_response(404)
-            handler.end_headers()
-
-    def serve_current_config(self, handler):
-        handler.send_response(200)
-        handler.send_header("Content-type", "application/json")
-        handler.end_headers()
+    def serve_current_config(self):
         with open(self.shared_data.shared_config_json, 'r') as f:
             config = json.load(f)
-        handler.wfile.write(json.dumps(config).encode('utf-8'))
+        return JSONResponse(config)
 
-    def restore_default_config(self, handler):
-        handler.send_response(200)
-        handler.send_header("Content-type", "application/json")
-        handler.end_headers()
+    def restore_default_config(self):
         self.shared_data.config = self.shared_data.default_config.copy()
         self.shared_data.save_config()
-        handler.wfile.write(json.dumps(self.shared_data.config).encode('utf-8'))
+        return JSONResponse(self.shared_data.config)
 
-    def serve_image(self, handler):
+    def serve_image(self):
         image_path = os.path.join(self.shared_data.webdir, 'screen.png')
         try:
-            with open(image_path, 'rb') as file:
-                handler.send_response(200)
-                handler.send_header("Content-type", "image/png")
-                handler.send_header("Cache-Control", "max-age=0, must-revalidate")
-                handler.end_headers()
-                handler.wfile.write(file.read())
+            return FileResponse(
+                image_path,
+                media_type="image/png",
+                headers={"Cache-Control": "max-age=0, must-revalidate"},
+            )
         except FileNotFoundError:
-            handler.send_response(404)
-            handler.end_headers()
+            return Response(status_code=404)
         except BrokenPipeError:
-            # Ignore broken pipe errors
-            pass
+            return Response(status_code=200)
         except Exception as e:
             self.logger.error(f"Unexpected error: {e}")
+            return Response(status_code=500)
 
-
-    def serve_favicon(self, handler):
-        handler.send_response(200)
-        handler.send_header("Content-type", "image/x-icon")
-        handler.end_headers()
-        favicon_path = os.path.join(self.shared_data.webdir, '/images/favicon.ico')
-        self.logger.info(f"Serving favicon from {favicon_path}")
+    def serve_favicon(self):
+        # BUG FIX: the previous version built this path with
+        #   os.path.join(self.shared_data.webdir, '/images/favicon.ico')
+        # A second argument starting with "/" makes os.path.join() DISCARD the first argument
+        # entirely (documented Python behavior), so this was resolving to the filesystem-root
+        # path "/images/favicon.ico" instead of "<webdir>/images/favicon.ico" — the favicon
+        # route has always 404'd. Fixed by dropping the leading slash.
+        favicon_path = os.path.join(self.shared_data.webdir, 'images', 'favicon.ico')
         try:
-            with open(favicon_path, 'rb') as file:
-                handler.wfile.write(file.read())
+            return FileResponse(favicon_path, media_type="image/x-icon")
         except FileNotFoundError:
             self.logger.error(f"Favicon not found at {favicon_path}")
-            handler.send_response(404)
-            handler.end_headers()
+            return Response(status_code=404)
 
-    def serve_manifest(self, handler):
-        handler.send_response(200)
-        handler.send_header("Content-type", "application/json")
-        handler.end_headers()
+    def serve_manifest(self):
         manifest_path = os.path.join(self.shared_data.webdir, 'manifest.json')
         try:
-            with open(manifest_path, 'r') as file:
-                handler.wfile.write(file.read().encode('utf-8'))
+            return FileResponse(manifest_path, media_type="application/json")
         except FileNotFoundError:
-            handler.send_response(404)
-            handler.end_headers()
-    
-    def serve_apple_touch_icon(self, handler):
-        handler.send_response(200)
-        handler.send_header("Content-type", "image/png")
-        handler.end_headers()
+            return Response(status_code=404)
+
+    def serve_apple_touch_icon(self):
         icon_path = os.path.join(self.shared_data.webdir, 'icons/apple-touch-icon.png')
         try:
-            with open(icon_path, 'rb') as file:
-                handler.wfile.write(file.read())
+            return FileResponse(icon_path, media_type="image/png")
         except FileNotFoundError:
-            handler.send_response(404)
-            handler.end_headers()
+            return Response(status_code=404)
 
-    def scan_wifi(self, handler):
+    def scan_wifi(self):
         try:
             # nmcli instead of the deprecated `iwlist wlan0 scan` (nmcli is already a dependency,
             # used by connect_wifi). `-t -f SSID dev wifi` lists one SSID per line (L4).
@@ -428,46 +390,56 @@ class WebUtils:
                 raise Exception(ssid_err)
             current_ssid = ssid_out.strip()
             self.logger.info(f"Current SSID: {current_ssid}")
-            handler.send_response(200)
-            handler.send_header("Content-type", "application/json")
-            handler.end_headers()
-            handler.wfile.write(json.dumps({"networks": networks, "current_ssid": current_ssid}).encode('utf-8'))
+            return JSONResponse({"networks": networks, "current_ssid": current_ssid})
         except Exception as e:
-            handler.send_response(500)
-            handler.send_header("Content-type", "application/json")
-            handler.end_headers()
             self.logger.error(f"Error scanning Wi-Fi networks: {e}")
-            handler.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
+            return JSONResponse({"error": str(e)}, status_code=500)
 
-    def connect_wifi(self, handler):
+    def update_nmconnection(self, ssid, password):
+        config_path = '/etc/NetworkManager/system-connections/preconfigured.nmconnection'
+        with open(config_path, 'w') as f:
+            f.write(f"""
+[connection]
+id=preconfigured
+uuid={uuid.uuid4()}
+type=wifi
+autoconnect=true
+
+[wifi]
+ssid={ssid}
+mode=infrastructure
+
+[wifi-security]
+key-mgmt=wpa-psk
+psk={password}
+
+[ipv4]
+method=auto
+
+[ipv6]
+method=auto
+""")
+        subprocess.Popen(['sudo', 'chmod', '600', config_path]).communicate()
+        subprocess.Popen(['sudo', 'nmcli', 'connection', 'reload']).communicate()
+
+    def connect_wifi(self, params):
         try:
-            content_length = int(handler.headers['Content-Length'])
-            post_data = handler.rfile.read(content_length).decode('utf-8')
-            params = json.loads(post_data)
             ssid = params['ssid']
             password = params['password']
 
             self.update_nmconnection(ssid, password)
-            command = f'sudo nmcli connection up "preconfigured"'
+            command = 'sudo nmcli connection up "preconfigured"'
             connect_result = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             stdout, stderr = connect_result.communicate()
             if connect_result.returncode != 0:
                 raise Exception(stderr)
 
             self.shared_data.wifichanged = True
-
-            handler.send_response(200)
-            handler.send_header('Content-type', 'application/json')
-            handler.end_headers()
-            handler.wfile.write(json.dumps({"status": "success", "message": "Connected to " + ssid}).encode('utf-8'))
-
+            return _ok(message="Connected to " + ssid)
         except Exception as e:
-            handler.send_response(500)
-            handler.send_header('Content-type', 'application/json')
-            handler.end_headers()
-            handler.wfile.write(json.dumps({"status": "error", "message": str(e)}).encode('utf-8'))
+            return _err(e)
 
-    def disconnect_and_clear_wifi(self, handler):
+    def disconnect_and_clear_wifi(self):
         try:
             command_disconnect = 'sudo nmcli connection down "preconfigured"'
             disconnect_result = subprocess.Popen(command_disconnect, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -482,139 +454,65 @@ class WebUtils:
             subprocess.Popen(['sudo', 'nmcli', 'connection', 'reload']).communicate()
 
             self.shared_data.wifichanged = False
-
-            handler.send_response(200)
-            handler.send_header('Content-type', 'application/json')
-            handler.end_headers()
-            handler.wfile.write(json.dumps({"status": "success", "message": "Disconnected from Wi-Fi and cleared preconfigured settings"}).encode('utf-8'))
-
+            return _ok(message="Disconnected from Wi-Fi and cleared preconfigured settings")
         except Exception as e:
-            handler.send_response(500)
-            handler.send_header('Content-type', 'application/json')
-            handler.end_headers()
-            handler.wfile.write(json.dumps({"status": "error", "message": str(e)}).encode('utf-8'))
+            return _err(e)
 
-    def clear_files(self, handler):
+    def clear_files(self):
         try:
             command = """
             sudo rm -rf config/*.json && sudo rm -rf data/*.csv && sudo rm -rf data/*.log  && sudo rm -rf backup/backups/* && sudo rm -rf backup/uploads/* && sudo rm -rf data/output/data_stolen/* && sudo rm -rf data/output/crackedpwd/* && sudo rm -rf config/* && sudo rm -rf data/output/scan_results/* && sudo rm -rf __pycache__ && sudo rm -rf config/__pycache__ && sudo rm -rf data/__pycache__  && sudo rm -rf actions/__pycache__  && sudo rm -rf resources/__pycache__ && sudo rm -rf web/__pycache__ && sudo rm -rf *.log && sudo rm -rf resources/waveshare_epd/__pycache__ && sudo rm -rf data/logs/*  && sudo rm -rf data/output/vulnerabilities/* && sudo rm -rf data/logs/*
             """
             result = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             stdout, stderr = result.communicate()
-
             if result.returncode == 0:
-                handler.send_response(200)
-                handler.send_header("Content-type", "application/json")
-                handler.end_headers()
-                handler.wfile.write(json.dumps({"status": "success", "message": "Files cleared successfully"}).encode('utf-8'))
-            else:
-                handler.send_response(500)
-                handler.send_header("Content-type", "application/json")
-                handler.end_headers()
-                handler.wfile.write(json.dumps({"status": "error", "message": stderr}).encode('utf-8'))
+                return _ok(message="Files cleared successfully")
+            return _err(stderr)
         except Exception as e:
-            handler.send_response(500)
-            handler.send_header("Content-type", "application/json")
-            handler.end_headers()
-            handler.wfile.write(json.dumps({"status": "error", "message": str(e)}).encode('utf-8'))
+            return _err(e)
 
-    def clear_files_light(self, handler):
+    def clear_files_light(self):
         try:
             command = """
             sudo rm -rf data/*.log && sudo rm -rf data/output/data_stolen/* && sudo rm -rf data/output/crackedpwd/*  && sudo rm -rf data/output/scan_results/* && sudo rm -rf __pycache__ && sudo rm -rf config/__pycache__ && sudo rm -rf data/__pycache__  && sudo rm -rf actions/__pycache__  && sudo rm -rf resources/__pycache__ && sudo rm -rf web/__pycache__ && sudo rm -rf *.log && sudo rm -rf resources/waveshare_epd/__pycache__ && sudo rm -rf data/logs/*  && sudo rm -rf data/output/vulnerabilities/* && sudo rm -rf data/logs/*
             """
             result = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             stdout, stderr = result.communicate()
-
             if result.returncode == 0:
-                handler.send_response(200)
-                handler.send_header("Content-type", "application/json")
-                handler.end_headers()
-                handler.wfile.write(json.dumps({"status": "success", "message": "Files cleared successfully"}).encode('utf-8'))
-            else:
-                handler.send_response(500)
-                handler.send_header("Content-type", "application/json")
-                handler.end_headers()
-                handler.wfile.write(json.dumps({"status": "error", "message": stderr}).encode('utf-8'))
+                return _ok(message="Files cleared successfully")
+            return _err(stderr)
         except Exception as e:
-            handler.send_response(500)
-            handler.send_header("Content-type", "application/json")
-            handler.end_headers()
-            handler.wfile.write(json.dumps({"status": "error", "message": str(e)}).encode('utf-8'))
+            return _err(e)
 
-    def initialize_csv(self, handler):
+    def initialize_csv(self):
         try:
             self.shared_data.generate_actions_json()
             self.shared_data.initialize_csv()
             self.shared_data.create_livestatusfile()
-            handler.send_response(200)
-            handler.send_header("Content-type", "application/json")
-            handler.end_headers()
-            handler.wfile.write(json.dumps({"status": "success", "message": "CSV files initialized successfully"}).encode('utf-8'))
+            return _ok(message="CSV files initialized successfully")
         except Exception as e:
-            handler.send_response(500)
-            handler.send_header("Content-type", "application/json")
-            handler.end_headers()
-            handler.wfile.write(json.dumps({"status": "error", "message": str(e)}).encode('utf-8'))
+            return _err(e)
 
-    def reboot_system(self, handler):
+    def reboot_system(self):
         try:
-            command = "sudo reboot"
-            subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            handler.send_response(200)
-            handler.send_header("Content-type", "application/json")
-            handler.end_headers()
-            handler.wfile.write(json.dumps({"status": "success", "message": "System is rebooting"}).encode('utf-8'))
+            subprocess.Popen("sudo reboot", shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            return _ok(message="System is rebooting")
         except subprocess.CalledProcessError as e:
-            handler.send_response(500)
-            handler.send_header("Content-type", "application/json")
-            handler.end_headers()
-            handler.wfile.write(json.dumps({"status": "error", "message": str(e)}).encode('utf-8'))
+            return _err(e)
 
-    def shutdown_system(self, handler):
+    def shutdown_system(self):
         try:
-            command = "sudo shutdown now"
-            subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            handler.send_response(200)
-            handler.send_header("Content-type", "application/json")
-            handler.end_headers()
-            handler.wfile.write(json.dumps({"status": "success", "message": "System is shutting down"}).encode('utf-8'))
+            subprocess.Popen("sudo shutdown now", shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            return _ok(message="System is shutting down")
         except subprocess.CalledProcessError as e:
-            handler.send_response(500)
-            handler.send_header("Content-type", "application/json")
-            handler.end_headers()
-            handler.wfile.write(json.dumps({"status": "error", "message": str(e)}).encode('utf-8'))
+            return _err(e)
 
-    def restart_bjorn_service(self, handler):
+    def restart_bjorn_service(self):
         try:
-            command = "sudo systemctl restart bjorn.service"
-            subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            handler.send_response(200)
-            handler.send_header("Content-type", "application/json")
-            handler.end_headers()
-            handler.wfile.write(json.dumps({"status": "success", "message": "Bjorn service restarted successfully"}).encode('utf-8'))
+            subprocess.Popen("sudo systemctl restart bjorn.service", shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            return _ok(message="Bjorn service restarted successfully")
         except subprocess.CalledProcessError as e:
-            handler.send_response(500)
-            handler.send_header("Content-type", "application/json")
-            handler.end_headers()
-            handler.wfile.write(json.dumps({"status": "error", "message": str(e)}).encode('utf-8'))
-
-    def serve_network_data(self, handler):
-        try:
-            latest_file = max(
-                [os.path.join(self.shared_data.scan_results_dir, f) for f in os.listdir(self.shared_data.scan_results_dir) if f.startswith('result_')],
-                key=os.path.getctime
-            )
-            table_html = self.generate_html_table(latest_file)
-            handler.send_response(200)
-            handler.send_header("Content-type", "text/html")
-            handler.end_headers()
-            handler.wfile.write(table_html.encode('utf-8'))
-        except Exception as e:
-            handler.send_response(500)
-            handler.send_header("Content-type", "application/json")
-            handler.end_headers()
-            handler.wfile.write(json.dumps({"status": "error", "message": str(e)}).encode('utf-8'))
+            return _err(e)
 
     def generate_html_table(self, file_path):
         table_html = '<table class="styled-table"><thead><tr>'
@@ -660,53 +558,16 @@ class WebUtils:
             self.logger.error(f"Error in generate_html_table_netkb: {e}")
         return table_html
 
-
-    def serve_netkb_data(self, handler):
+    def serve_netkb_data(self):
         try:
             latest_file = self.shared_data.netkbfile
             table_html = self.generate_html_table_netkb(latest_file)
-            handler.send_response(200)
-            handler.send_header("Content-type", "text/html")
-            handler.end_headers()
-            handler.wfile.write(table_html.encode('utf-8'))
+            return HTMLResponse(table_html)
         except Exception as e:
-            handler.send_response(500)
-            handler.send_header("Content-type", "application/json")
-            handler.end_headers()
-            handler.wfile.write(json.dumps({"status": "error", "message": str(e)}).encode('utf-8'))
+            return _err(e)
 
-    def update_nmconnection(self, ssid, password):
-        config_path = '/etc/NetworkManager/system-connections/preconfigured.nmconnection'
-        with open(config_path, 'w') as f:
-            f.write(f"""
-[connection]
-id=preconfigured
-uuid={uuid.uuid4()}
-type=wifi
-autoconnect=true
-
-[wifi]
-ssid={ssid}
-mode=infrastructure
-
-[wifi-security]
-key-mgmt=wpa-psk
-psk={password}
-
-[ipv4]
-method=auto
-
-[ipv6]
-method=auto
-""")
-        subprocess.Popen(['sudo', 'chmod', '600', config_path]).communicate()
-        subprocess.Popen(['sudo', 'nmcli', 'connection', 'reload']).communicate()
-
-    def save_configuration(self, handler):
+    def save_configuration(self, params):
         try:
-            content_length = int(handler.headers['Content-Length'])
-            post_data = handler.rfile.read(content_length).decode('utf-8')
-            params = json.loads(post_data)
             fichier = self.shared_data.shared_config_json
             self.logger.info(f"Received params: {params}")
 
@@ -723,7 +584,7 @@ method=auto
                 elif isinstance(value, list):
                     # Lets boot any values in a list that are just empty strings
                     for val in value[:]:
-                        if val == "" :
+                        if val == "":
                             value.remove(val)
                     current_config[key] = value
                 elif isinstance(value, str):
@@ -738,71 +599,37 @@ method=auto
                 json.dump(current_config, f, indent=4)
             self.logger.info("Configuration saved to file")
 
-            handler.send_response(200)
-            handler.send_header('Content-type', 'application/json')
-            handler.end_headers()
-            handler.wfile.write(json.dumps({"status": "success", "message": "Configuration saved"}).encode('utf-8'))
-            self.logger.info("Configuration saved (web)")
-
             self.shared_data.load_config()
             self.logger.info("Configuration reloaded (web)")
 
+            return _ok(message="Configuration saved")
         except Exception as e:
-            handler.send_response(500)
-            handler.send_header('Content-type', 'application/json')
-            handler.end_headers()
-            error_message = {"status": "error", "message": str(e)}
-            handler.wfile.write(json.dumps(error_message).encode('utf-8'))
             self.logger.error(f"Error saving configuration: {e}")
+            return _err(e)
 
-    def list_files(self, directory):
-        files = []
-        for entry in os.scandir(directory):
-            if entry.is_dir():
-                files.append({
-                    "name": entry.name,
-                    "is_directory": True,
-                    "children": self.list_files(entry.path)
-                })
-            else:
-                files.append({
-                    "name": entry.name,
-                    "is_directory": False,
-                    "path": entry.path
-                })
-        return files
-
-    def list_files_endpoint(self, handler):
+    def list_files_endpoint(self):
         try:
             files = self.list_files(self.shared_data.datastolendir)
-            handler.send_response(200)
-            handler.send_header("Content-type", "application/json")
-            handler.end_headers()
-            handler.wfile.write(json.dumps(files).encode('utf-8'))
+            return JSONResponse(files)
         except Exception as e:
-            handler.send_response(500)
-            handler.send_header("Content-type", "application/json")
-            handler.end_headers()
-            handler.wfile.write(json.dumps({"status": "error", "message": str(e)}).encode('utf-8'))
+            return _err(e)
 
-    def download_file(self, handler):
+    def download_file(self, path):
         try:
-            query = unquote(handler.path.split('?path=')[1])
-            file_path = os.path.join(self.shared_data.datastolendir, query)
+            file_path = os.path.join(self.shared_data.datastolendir, path)
             if os.path.isfile(file_path):
-                handler.send_response(200)
-                handler.send_header("Content-Disposition", f'attachment; filename="{os.path.basename(file_path)}"')
-                handler.end_headers()
-                with open(file_path, 'rb') as file:
-                    handler.wfile.write(file.read())
-            else:
-                handler.send_response(404)
-                handler.end_headers()
+                return FileResponse(file_path, filename=os.path.basename(file_path))
+            return Response(status_code=404)
         except Exception as e:
-            handler.send_response(500)
-            handler.send_header("Content-type", "application/json")
-            handler.end_headers()
-            handler.wfile.write(json.dumps({"status": "error", "message": str(e)}).encode('utf-8'))
+            return _err(e)
 
-
-
+    def serve_network_data(self):
+        try:
+            latest_file = max(
+                [os.path.join(self.shared_data.scan_results_dir, f) for f in os.listdir(self.shared_data.scan_results_dir) if f.startswith('result_')],
+                key=os.path.getctime
+            )
+            table_html = self.generate_html_table(latest_file)
+            return HTMLResponse(table_html)
+        except Exception as e:
+            return _err(e)

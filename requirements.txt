@@ -4,6 +4,12 @@
 gpiozero
 lgpio
 spidev==3.5
+# Web server stack (webapp v3 — replaces the stdlib http.server/socketserver implementation).
+# uvicorn[standard] pulls in websockets (needed for /ws/stats) and uvloop where available.
+# python-multipart is required by FastAPI's UploadFile (used by the /restore endpoint).
+fastapi==0.140.13
+uvicorn[standard]==0.51.0
+python-multipart==0.0.32
 # ponytail: versions below are the stale 2024 pins. Refresh + re-pin via `pip freeze`
 # on the target Pi OS Python (PRD §9 step 2 / P1-2) — must run on the Pi, not this dev box.
 Pillow==9.4.0

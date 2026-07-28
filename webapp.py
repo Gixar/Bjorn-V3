@@ -1,14 +1,42 @@
-#webapp.py 
-import json
-import threading
-import http.server
-import socketserver
+#webapp.py
+#
+# MIGRATION NOTE (webapp v3):
+# Rewritten from a raw `http.server.SimpleHTTPRequestHandler` + single-threaded
+# `socketserver.TCPServer` to FastAPI + Uvicorn. It runs a Uvicorn server on its own asyncio
+# event loop inside a background thread (WebThread below) — this keeps the exact shape Bjorn.py
+# already expects (a `web_thread` object with .start()/.is_alive()/.join(), started once at
+# boot) and, critically, keeps the web server in the SAME PROCESS as the orchestrator and
+# display threads, so it still reads/writes the same in-memory `shared_data` singleton directly
+# — no IPC, no second process, nothing else about Bjorn.py needs to change.
+#
+# From a browser's point of view, every existing route behaves the same, with two exceptions:
+#   1. utils.py: serve_favicon() had a real path bug (documented there) — now fixed.
+#   2. New: GET /api/stats + WebSocket /ws/stats + GET /stats.html for the live stats
+#      dashboard (the coinnbr/levelnbr/vulnnbr/... numbers already computed in shared.py's
+#      update_stats() but never previously exposed anywhere off the e-Paper image).
+#
+# SECURITY NOTE found during the migration: the old do_GET() fell through to
+# `super().do_GET()` (SimpleHTTPRequestHandler's default) for any unmatched path, which serves
+# files relative to the process's working directory. Since Bjorn runs from inside the repo
+# root, an unmatched request like GET /shared_config.json or GET /requirements.txt would have
+# been served directly by the stdlib handler. This version has no such fallback: unmatched
+# paths get a 404, and the only static assets served are the ones explicitly mounted under
+# /web (css/js/images) — nothing outside that directory is reachable.
+
+import asyncio
 import logging
-import sys
-import signal
 import os
-import gzip
-import io
+import signal
+import sys
+import threading
+
+import uvicorn
+from fastapi import FastAPI, Request, UploadFile, File, WebSocket, WebSocketDisconnect
+from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse, JSONResponse, Response
+from pydantic import BaseModel
+
 from logger import Logger
 from init_shared import shared_data
 from utils import WebUtils
@@ -16,198 +44,308 @@ from utils import WebUtils
 # Initialize the logger
 logger = Logger(name="webapp.py", level=logging.DEBUG)
 
-# Set the path to the favicon
-favicon_path = os.path.join(shared_data.webdir, '/images/favicon.ico')
+web_utils = WebUtils(shared_data, logger)
 
-class CustomHandler(http.server.SimpleHTTPRequestHandler):
-    def __init__(self, *args, **kwargs):
-        self.shared_data = shared_data
-        self.web_utils = WebUtils(shared_data, logger)
-        super().__init__(*args, **kwargs)
+app = FastAPI(title="Bjorn", docs_url="/api/docs", redoc_url="/api/redoc")
+# GZip everything over ~1KB — replaces the old per-page manual gzip_encode()/serve_file_gzipped().
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 
-    def log_message(self, format, *args):
-        # Override to suppress logging of GET requests.
-        if 'GET' not in format % args:
-            logger.info("%s - - [%s] %s\n" %
-                        (self.client_address[0],
-                         self.log_date_time_string(),
-                         format % args))
-
-    def gzip_encode(self, content):
-        """Gzip compress the given content."""
-        out = io.BytesIO()
-        with gzip.GzipFile(fileobj=out, mode="w") as f:
-            f.write(content)
-        return out.getvalue()
-
-    def send_gzipped_response(self, content, content_type):
-        """Send a gzipped HTTP response."""
-        gzipped_content = self.gzip_encode(content)
-        self.send_response(200)
-        self.send_header("Content-type", content_type)
-        self.send_header("Content-Encoding", "gzip")
-        self.send_header("Content-Length", str(len(gzipped_content)))
-        self.end_headers()
-        self.wfile.write(gzipped_content)
-
-    def serve_file_gzipped(self, file_path, content_type):
-        """Serve a file with gzip compression."""
-        with open(file_path, 'rb') as file:
-            content = file.read()
-        self.send_gzipped_response(content, content_type)
-
-    def do_GET(self):
-        # Handle GET requests. Serve the HTML interface and the EPD image.
-        if self.path == '/index.html' or self.path == '/':
-            self.serve_file_gzipped(os.path.join(self.shared_data.webdir, 'index.html'), 'text/html')
-        elif self.path == '/config.html':
-            self.serve_file_gzipped(os.path.join(self.shared_data.webdir, 'config.html'), 'text/html')
-        elif self.path == '/actions.html':
-            self.serve_file_gzipped(os.path.join(self.shared_data.webdir, 'actions.html'), 'text/html')
-        elif self.path == '/network.html':
-            self.serve_file_gzipped(os.path.join(self.shared_data.webdir, 'network.html'), 'text/html')
-        elif self.path == '/netkb.html':
-            self.serve_file_gzipped(os.path.join(self.shared_data.webdir, 'netkb.html'), 'text/html')
-        elif self.path == '/bjorn.html':
-            self.serve_file_gzipped(os.path.join(self.shared_data.webdir, 'bjorn.html'), 'text/html')
-        elif self.path == '/loot.html':
-            self.serve_file_gzipped(os.path.join(self.shared_data.webdir, 'loot.html'), 'text/html')
-        elif self.path == '/credentials.html':
-            self.serve_file_gzipped(os.path.join(self.shared_data.webdir, 'credentials.html'), 'text/html')
-        elif self.path == '/load_config':
-            self.web_utils.serve_current_config(self)
-        elif self.path == '/restore_default_config':
-            self.web_utils.restore_default_config(self)
-        elif self.path == '/get_web_delay':
-            self.send_response(200)
-            self.send_header("Content-type", "application/json")
-            self.end_headers()
-            response = json.dumps({"web_delay": self.shared_data.web_delay})
-            self.wfile.write(response.encode('utf-8'))
-        elif self.path == '/scan_wifi':
-            self.web_utils.scan_wifi(self)
-        elif self.path == '/network_data':
-            self.web_utils.serve_network_data(self)
-        elif self.path == '/netkb_data':
-            self.web_utils.serve_netkb_data(self)
-        elif self.path == '/netkb_data_json':
-            self.web_utils.serve_netkb_data_json(self)
-        elif self.path.startswith('/screen.png'):
-            self.web_utils.serve_image(self)
-        elif self.path == '/favicon.ico':
-            self.web_utils.serve_favicon(self)
-        elif self.path == '/manifest.json':
-            self.web_utils.serve_manifest(self)
-        elif self.path == '/apple-touch-icon':
-            self.web_utils.serve_apple_touch_icon(self)
-        elif self.path == '/get_logs':
-            self.web_utils.serve_logs(self)
-        elif self.path == '/list_credentials':
-            self.web_utils.serve_credentials_data(self)
-        elif self.path.startswith('/list_files'):
-            self.web_utils.list_files_endpoint(self)
-        elif self.path.startswith('/download_file'):
-            self.web_utils.download_file(self)
-        elif self.path.startswith('/download_backup'):
-            self.web_utils.download_backup(self)
-        else:
-            super().do_GET()
-
-    def do_POST(self):
-        # Handle POST requests for saving configuration, connecting to Wi-Fi, clearing files, rebooting, and shutting down.
-        if self.path == '/save_config':
-            self.web_utils.save_configuration(self)
-        elif self.path == '/connect_wifi':
-            self.web_utils.connect_wifi(self)
-            self.shared_data.wifichanged = True  # Set the flag when Wi-Fi is connected
-        elif self.path == '/disconnect_wifi':  # New route to disconnect Wi-Fi
-            self.web_utils.disconnect_and_clear_wifi(self)
-        elif self.path == '/clear_files':
-            self.web_utils.clear_files(self)
-        elif self.path == '/clear_files_light':
-            self.web_utils.clear_files_light(self)
-        elif self.path == '/initialize_csv':
-            self.web_utils.initialize_csv(self)
-        elif self.path == '/reboot':
-            self.web_utils.reboot_system(self)
-        elif self.path == '/shutdown':
-            self.web_utils.shutdown_system(self)
-        elif self.path == '/restart_bjorn_service':
-            self.web_utils.restart_bjorn_service(self)
-        elif self.path == '/backup':
-            self.web_utils.backup(self)
-        elif self.path == '/restore':
-            self.web_utils.restore(self)
-        elif self.path == '/stop_orchestrator':  # New route to stop the orchestrator
-            self.web_utils.stop_orchestrator(self)
-        elif self.path == '/start_orchestrator':  # New route to start the orchestrator
-            self.web_utils.start_orchestrator(self)
-        elif self.path == '/execute_manual_attack':  # New route to execute a manual attack
-            self.web_utils.execute_manual_attack(self)
-        else:
-            self.send_response(404)
-            self.end_headers()
-
-class ReusableTCPServer(socketserver.TCPServer):
-    # Allow immediate reuse of the port after a restart (SO_REUSEADDR). socketserver.TCPServer
-    # defaults allow_reuse_address = False, so restarting while the old socket is still in
-    # TIME_WAIT fails with errno 98 and the server "hops" to 8001+ (upstream issue #16).
-    allow_reuse_address = True
+# Static assets: css/js/images, referenced from every page as "web/..." or "/web/...".
+app.mount("/web", StaticFiles(directory=shared_data.webdir), name="web")
 
 
+# ---------------------------------------------------------------------------
+# Request bodies — free validation via Pydantic, replacing the manual json.loads(...) +
+# KeyError handling that used to live inline in each handler.
+# ---------------------------------------------------------------------------
+class WifiCredentials(BaseModel):
+    ssid: str
+    password: str
+
+
+class ManualAttackRequest(BaseModel):
+    ip: str
+    port: str
+    action: str
+
+
+# ---------------------------------------------------------------------------
+# Pages
+# ---------------------------------------------------------------------------
+_PAGES = {
+    "index", "config", "actions", "network", "netkb",
+    "bjorn", "loot", "credentials",
+    "stats",  # new — live stats dashboard
+}
+
+
+def _page(filename):
+    return FileResponse(os.path.join(shared_data.webdir, filename), media_type="text/html")
+
+
+@app.get("/")
+@app.get("/index.html")
+def index():
+    return _page("index.html")
+
+
+@app.get("/{page_name}.html")
+def serve_page(page_name: str):
+    if page_name not in _PAGES:
+        return Response(status_code=404)
+    return _page(f"{page_name}.html")
+
+
+# ---------------------------------------------------------------------------
+# Config
+# ---------------------------------------------------------------------------
+@app.get("/load_config")
+def load_config():
+    return web_utils.serve_current_config()
+
+
+@app.get("/restore_default_config")
+def restore_default_config():
+    return web_utils.restore_default_config()
+
+
+@app.post("/save_config")
+async def save_config(request: Request):
+    params = await request.json()
+    return web_utils.save_configuration(params)
+
+
+@app.get("/get_web_delay")
+def get_web_delay():
+    return JSONResponse({"web_delay": shared_data.web_delay})
+
+
+# ---------------------------------------------------------------------------
+# Wi-Fi
+# ---------------------------------------------------------------------------
+@app.get("/scan_wifi")
+def scan_wifi():
+    return web_utils.scan_wifi()
+
+
+@app.post("/connect_wifi")
+def connect_wifi(body: WifiCredentials):
+    response = web_utils.connect_wifi(body.model_dump())
+    # Matches the original behavior: wifichanged is set unconditionally after the call,
+    # even if connect_wifi() itself failed internally and returned an error response.
+    shared_data.wifichanged = True
+    return response
+
+
+@app.post("/disconnect_wifi")
+def disconnect_wifi():
+    return web_utils.disconnect_and_clear_wifi()
+
+
+# ---------------------------------------------------------------------------
+# Network / NetKB data
+# ---------------------------------------------------------------------------
+@app.get("/network_data")
+def network_data():
+    return web_utils.serve_network_data()
+
+
+@app.get("/netkb_data")
+def netkb_data():
+    return web_utils.serve_netkb_data()
+
+
+@app.get("/netkb_data_json")
+def netkb_data_json():
+    return web_utils.serve_netkb_data_json()
+
+
+# ---------------------------------------------------------------------------
+# Stats dashboard (new)
+# ---------------------------------------------------------------------------
+@app.get("/api/stats")
+def api_stats():
+    return JSONResponse(web_utils.get_stats_snapshot())
+
+
+@app.websocket("/ws/stats")
+async def ws_stats(websocket: WebSocket):
+    await websocket.accept()
+    # Config-tunable push interval (config/shared_config.json: "stats_ws_interval"), falls
+    # back to 2s if the key isn't present (e.g. an older config that predates this feature).
+    interval = getattr(shared_data, "stats_ws_interval", 2)
+    try:
+        while True:
+            await websocket.send_json(web_utils.get_stats_snapshot())
+            await asyncio.sleep(interval)
+    except WebSocketDisconnect:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Assets served at root (browsers request these exact paths regardless of current page)
+# ---------------------------------------------------------------------------
+@app.get("/screen.png")
+def screen_png():
+    return web_utils.serve_image()
+
+
+@app.get("/favicon.ico")
+def favicon():
+    return web_utils.serve_favicon()
+
+
+@app.get("/manifest.json")
+def manifest():
+    return web_utils.serve_manifest()
+
+
+@app.get("/apple-touch-icon")
+def apple_touch_icon():
+    return web_utils.serve_apple_touch_icon()
+
+
+# ---------------------------------------------------------------------------
+# Logs / credentials / loot files
+# ---------------------------------------------------------------------------
+@app.get("/get_logs")
+def get_logs():
+    return web_utils.serve_logs()
+
+
+@app.get("/list_credentials")
+def list_credentials():
+    return web_utils.serve_credentials_data()
+
+
+@app.get("/list_files")
+def list_files():
+    return web_utils.list_files_endpoint()
+
+
+@app.get("/download_file")
+def download_file(path: str):
+    return web_utils.download_file(path)
+
+
+@app.get("/download_backup")
+def download_backup(filename: str):
+    return web_utils.download_backup(filename)
+
+
+# ---------------------------------------------------------------------------
+# System / housekeeping actions
+# ---------------------------------------------------------------------------
+@app.post("/clear_files")
+def clear_files():
+    return web_utils.clear_files()
+
+
+@app.post("/clear_files_light")
+def clear_files_light():
+    return web_utils.clear_files_light()
+
+
+@app.post("/initialize_csv")
+def initialize_csv():
+    return web_utils.initialize_csv()
+
+
+@app.post("/reboot")
+def reboot():
+    return web_utils.reboot_system()
+
+
+@app.post("/shutdown")
+def shutdown():
+    return web_utils.shutdown_system()
+
+
+@app.post("/restart_bjorn_service")
+def restart_bjorn_service():
+    return web_utils.restart_bjorn_service()
+
+
+@app.post("/backup")
+def backup():
+    return web_utils.backup()
+
+
+@app.post("/restore")
+async def restore(file: UploadFile = File(...)):
+    return await web_utils.restore(file)
+
+
+@app.post("/stop_orchestrator")
+def stop_orchestrator():
+    return web_utils.stop_orchestrator()
+
+
+@app.post("/start_orchestrator")
+def start_orchestrator():
+    return web_utils.start_orchestrator()
+
+
+@app.post("/execute_manual_attack")
+def execute_manual_attack(body: ManualAttackRequest):
+    return web_utils.execute_manual_attack(body.model_dump())
+
+
+# ---------------------------------------------------------------------------
+# Thread wrapper — drop-in replacement for the old WebThread(threading.Thread) so Bjorn.py
+# doesn't need to change. Runs a Uvicorn server on its own asyncio event loop inside this
+# thread, in the SAME process as the orchestrator/display threads (see migration note at top).
+# ---------------------------------------------------------------------------
 class WebThread(threading.Thread):
-    """
-    Thread to run the web server serving the EPD display interface.
-    """
-    def __init__(self, handler_class=CustomHandler, port=8000):
-        super().__init__()
+    """Thread to run the FastAPI/Uvicorn web server serving the EPD display interface."""
+
+    def __init__(self, port=8000):
+        super().__init__(daemon=True)
         self.shared_data = shared_data
         self.port = port
-        self.handler_class = handler_class
-        self.httpd = None
+        self._loop = None
+        config = uvicorn.Config(
+            app,
+            host="0.0.0.0",
+            port=self.port,
+            log_level="warning",  # webapp.py's own Logger already handles app-level logging
+            loop="asyncio",
+        )
+        self.server = uvicorn.Server(config)
+        # Note: no manual "port + 1 on conflict" retry loop here (the old TCPServer version
+        # bumped 8000 -> 8001 -> ... on "Address already in use"). asyncio's loop.create_server()
+        # sets SO_REUSEADDR by default on POSIX (unlike socketserver.TCPServer, which is why the
+        # old code needed the separate ReusableTCPServer/allow_reuse_address fix for issue #16),
+        # so a quick restart reclaims :8000 immediately instead of drifting to the next port.
 
     def run(self):
-        """
-        Run the web server in a separate thread.
-        """
-        while not self.shared_data.webapp_should_exit:
-            try:
-                with ReusableTCPServer(("", self.port), self.handler_class) as httpd:
-                    self.httpd = httpd
-                    logger.info(f"Serving at port {self.port}")
-                    while not self.shared_data.webapp_should_exit:
-                        httpd.handle_request()
-            except OSError as e:
-                if e.errno == 98:  # Address already in use error
-                    logger.warning(f"Port {self.port} is in use, trying the next port...")
-                    self.port += 1
-                else:
-                    logger.error(f"Error in web server: {e}")
-                    break
-            finally:
-                if self.httpd:
-                    self.httpd.server_close()
-                    logger.info("Web server closed.")
+        """Run the Uvicorn server in this thread's own event loop."""
+        self._loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self._loop)
+        try:
+            logger.info(f"Serving at port {self.port}")
+            self._loop.run_until_complete(self.server.serve())
+        except Exception as e:
+            logger.error(f"Error in web server: {e}")
+        finally:
+            self._loop.close()
+            logger.info("Web server closed.")
 
     def shutdown(self):
-        """
-        Shutdown the web server gracefully.
-        """
-        if self.httpd:
-            self.httpd.shutdown()
-            self.httpd.server_close()
-            logger.info("Web server shutdown initiated.")
+        """Shutdown the web server gracefully."""
+        if self.server:
+            self.server.should_exit = True
+
 
 def handle_exit_web(signum, frame):
-    """
-    Handle exit signals to shutdown the web server cleanly.
-    """
+    """Handle exit signals to shutdown the web server cleanly."""
     shared_data.webapp_should_exit = True
     if web_thread.is_alive():
         web_thread.shutdown()
-        web_thread.join()  # Wait until the web_thread is finished
+        web_thread.join()
     logger.info("Server shutting down...")
     sys.exit(0)
+
 
 # Initialize the web thread
 web_thread = WebThread(port=8000)

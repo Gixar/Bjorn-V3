@@ -410,7 +410,9 @@ ExecStartPost=/bin/bash -c 'FILE_LIMIT=\$(ulimit -n); THRESHOLD=\$(( FILE_LIMIT 
 # PG-4 watchdog: restart if the main loop stops refreshing /run/bjorn_heartbeat (i.e. it wedged
 # while the process is still alive — which Restart=always alone can't catch). 180s stale window;
 # the loop refreshes every ~10s. Keep the path in sync with Bjorn.py::HEARTBEAT_FILE.
-ExecStartPost=/bin/bash -c 'HB=/run/bjorn_heartbeat; while :; do if [ -f "\$HB" ]; then AGE=\$(( \$(date +%s) - \$(stat -c %Y "\$HB") )); if [ "\$AGE" -ge 180 ]; then echo "Bjorn heartbeat stale (\${AGE}s). Restarting service."; systemctl restart bjorn.service; exit 0; fi; fi; sleep 15; done &'
+# NOTE: %s and %Y must be escaped as %%s / %%Y — in a systemd unit '%' is a specifier char, so a
+# bare %s expands to the shell and %Y to a path, corrupting the command. %% -> literal % on load.
+ExecStartPost=/bin/bash -c 'HB=/run/bjorn_heartbeat; while :; do if [ -f "\$HB" ]; then AGE=\$(( \$(date +%%s) - \$(stat -c %%Y "\$HB") )); if [ "\$AGE" -ge 180 ]; then echo "Bjorn heartbeat stale (\${AGE}s). Restarting service."; systemctl restart bjorn.service; exit 0; fi; fi; sleep 15; done &'
 
 [Install]
 WantedBy=multi-user.target

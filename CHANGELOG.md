@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.4.1-alpha] — 2026-07-28
+
+### Fixed
+- **PG-4 watchdog was a silent no-op** (found on real hardware). In the systemd unit, the
+  heartbeat-age `ExecStartPost` used `date +%s` / `stat -c %Y`, but `%` is a systemd *specifier*
+  char — systemd expanded `%s`→shell and `%Y`→a path when loading the unit, corrupting the
+  command so it never computed a real age and never restarted on a hang. Escaped as `%%s` / `%%Y`.
+  Everything else (service, display, fd-watchdog) was unaffected. Live fix for an existing
+  install: `sudo sed -i 's/date +%s/date +%%s/; s/stat -c %Y/stat -c %%Y/'
+  /etc/systemd/system/bjorn.service && sudo systemctl daemon-reload && sudo systemctl restart
+  bjorn.service`.
+
 All notable changes to this project are documented here. This file also serves as the
 process log for the PRD §9 (P1) modernization pass.
 

@@ -52,11 +52,10 @@ keep each pass to one testable area):
 
 ## Ideas from Pwnagotchi (adjacent project — full analysis in PRD §11)
 
-Done in v2.3.0-alpha: **PG-1** (`epd_type: "auto"` driver selection). Deferred:
+Done: **PG-1** (`epd_type: "auto"`, v2.3.0-alpha); **PG-2/PG-3/PG-4** (v2.4.0-alpha — atomic
+netkb writes + `TimeoutStopSec`; opt-in `battery.py` PiSugar monitor + low-charge shutdown;
+`/run` heartbeat + systemd watchdog restart). Deferred:
 
-- **PG-2 — graceful shutdown on power loss** (SD-card protection): trap power/shutdown signals and flush + halt cleanly. High value for an appliance that gets unplugged; Bjorn currently has none.
-- **PG-3 — battery / UPS awareness** (PiSugar / universal UPS): %, runtime estimate, auto-shutdown at low charge. Conditional — only if run portable with a battery HAT.
-- **PG-4 — watchdog / auto-restart on a wedged main loop**: the installer already ships an fd-watchdog; add a "main loop hasn't progressed" watchdog for the orchestrator/display threads.
 - **PG-5 — plugin system** (lifecycle + UI + web hooks): widen the P3-1 module contract from attack-modules-only to features generally (folded into P3-1 scope, not separate work).
 - **PG-6 — GPS tagging of findings**: stretch (Bjorn is LAN-stationary); cheap only if a GPS is attached.
 

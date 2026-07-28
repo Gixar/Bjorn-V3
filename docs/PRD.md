@@ -312,9 +312,9 @@ genuinely new here (cross-checked against §4–§10 and `docs/BACKLOG.md`):
 | # | Idea (Pwnagotchi origin) | Fit for Bjorn | Status |
 |---|---|---|---|
 | **PG-1** | **Display driver breadth + `auto` selection.** Many Waveshare variants via one config value; V4 is compatible with V3. | Directly relevant — extends `epd_type` + `scripts/epd_test.py`. | ✅ Done (v2.3.0-alpha) — `epd_type: "auto"` |
-| **PG-2** | **Graceful shutdown on power loss** (SD-card protection). | High value for an appliance that gets unplugged; Bjorn has none. | Backlog |
-| **PG-3** | **Battery / UPS awareness** (PiSugar / universal UPS: %, runtime, auto-shutdown at low charge). | Only if run portable with a battery HAT. | Backlog (conditional) |
-| **PG-4** | **Watchdog / auto-restart on a wedged main loop.** | Resilience for an unattended device (installer already has an fd-watchdog, not a loop one). | Backlog |
+| **PG-2** | **Graceful shutdown on power loss** (SD-card protection). | High value for an appliance that gets unplugged; Bjorn has none. | ✅ Done (v2.4.0-alpha) — atomic netkb writes + `TimeoutStopSec` |
+| **PG-3** | **Battery / UPS awareness** (PiSugar / universal UPS: %, runtime, auto-shutdown at low charge). | Only if run portable with a battery HAT. | ✅ Done (v2.4.0-alpha) — `battery.py`, opt-in, low-charge → clean shutdown |
+| **PG-4** | **Watchdog / auto-restart on a wedged main loop.** | Resilience for an unattended device (installer already has an fd-watchdog, not a loop one). | ✅ Done (v2.4.0-alpha) — `/run` heartbeat + systemd restart loop |
 | **PG-5** | **Plugin system** (lifecycle + UI + web hooks) — broader than attack modules. | Widens the P3-1 "module contract" from attack-only to features generally. | Folded into P3-1 scope |
 | **PG-6** | **GPS tagging of findings.** | Stretch — Bjorn is LAN-stationary; cheap only if a GPS is present. | Backlog (low priority) |
 
@@ -323,6 +323,14 @@ genuinely new here (cross-checked against §4–§10 and `docs/BACKLOG.md`):
 > graceful degradation + first-boot convenience, **not** fixing a "driver inits but renders
 > blank" case — for that, `scripts/epd_test.py --all` (visual probe) is the tiebreaker, then pin
 > the working value.
+
+> ⚠️ **PG-2/3/4 honesty note.** True power *loss* (wall plug pulled) gives no warning, so PG-2 is
+> really: atomic `os.replace` writes so a mid-write plug-pull can't corrupt `netkb.csv`, plus a
+> clean flush window on *commanded* shutdown (`TimeoutStopSec`). PG-3 (battery) is the only path
+> that reacts to *impending* loss — opt-in, no-op without a PiSugar-style server, low charge →
+> clean shutdown. PG-4 uses a `/run` heartbeat + a systemd background-loop restart (chosen over
+> `Type=notify` sd_notify to avoid any risk of the service failing to start on hardware I can't
+> test). All three are **unverified on hardware.**
 
 **Already covered / validated (no action):** remote notifications (Discord/Telegram/ntfy) →
 P3-3; multi-unit cooperation & anonymized swarm export → `BACKLOG.md` (Bjorn-cortex); wpa-sec

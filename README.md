@@ -42,6 +42,11 @@ This is a modernized fork of [infinition/Bjorn](https://github.com/infinition/Bj
 **Display robustness (2.3.0-alpha):**
 - **`epd_type: "auto"`** — Bjorn tries the known Waveshare drivers in order and boots on the first that initializes, so a wrong/absent driver no longer stops it. (Idea from Pwnagotchi's multi-display support — see PRD §11.) It selects by driver *init*, so it can't tell a V3 panel from a V4; if the screen still shows nothing, run `sudo python3 scripts/epd_test.py --all` to see which driver actually renders, then set that exact `epd_type`.
 
+**Appliance resilience (2.4.0-alpha, Pwnagotchi ideas — see PRD §11; unverified on hardware):**
+- **SD-card protection** — `netkb.csv` is written atomically, so a yanked power plug mid-write can't corrupt it; commanded shutdowns get a flush window.
+- **Loop watchdog** — a `/run` heartbeat lets systemd restart Bjorn if the main loop wedges (not just if it crashes).
+- **Battery awareness (opt-in)** — set `battery_monitor_enabled: true`; with a PiSugar power server, Bjorn shuts down cleanly below `battery_shutdown_percent`. No-op without a battery.
+
 > **Pi-gated (not yet verified on hardware):** dependency version refresh, real e-Paper render, a full installer run, **the 2.2.0-alpha scan-engine rewrite**, and the **2.3.0-alpha `auto` display detection** (all need a real Pi + LAN). See the CHANGELOG for the split between what's verified and what awaits the Pi.
 
 ## 📚 Table of Contents

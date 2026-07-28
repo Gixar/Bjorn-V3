@@ -3,7 +3,24 @@
 All notable changes to this project are documented here. This file also serves as the
 process log for the PRD §9 (P1) modernization pass.
 
-## [Unreleased]
+## [2.4.0-alpha] — 2026-07-28
+
+### Added (resilience — Pwnagotchi ideas PG-2/3/4; PRD §11)
+- **PG-4 loop watchdog.** The main loop refreshes a `/run/bjorn_heartbeat` file each iteration
+  (tmpfs → zero SD writes); a systemd `ExecStartPost` background loop restarts `bjorn.service` if
+  it goes stale (>180 s), catching a *wedged* main loop that `Restart=always` alone can't (the
+  process is still alive). Chose this over `Type=notify` sd_notify to avoid any chance of the
+  service failing to start on hardware that couldn't be tested.
+- **PG-3 battery/UPS awareness** (`battery.py`, opt-in via `battery_monitor_enabled`). Reads charge
+  from a PiSugar power server (stdlib sockets, no dependency); when charge ≤ `battery_shutdown_percent`
+  (default 10) Bjorn powers off cleanly to protect the SD card. No-op when no battery server is
+  reachable, so it's harmless on a mains-powered Pi.
+
+### Changed
+- **PG-2 SD-card protection.** `netkb.csv` is now written atomically (`write temp → fsync →
+  os.replace`) so a power loss mid-write can't leave a half-written, corrupt CSV (it's rewritten
+  on every action — the most exposed file). The systemd unit gained `TimeoutStopSec=30` so a
+  commanded shutdown/reboot gives Bjorn time to flush, and `RestartSec=10`.
 
 ### Added
 - **`scripts/bjorn_doctor.sh`** — one read-only command that aggregates the whole health

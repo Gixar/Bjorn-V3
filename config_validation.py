@@ -9,11 +9,13 @@ KNOWN_EPD_TYPES = {
     "epd2in13", "epd2in13_V2", "epd2in13_V3", "epd2in13_V4", "epd2in7", "mock", "auto",
 }
 
-_BOOL_KEYS = ("manual_mode", "websrv", "debug_mode", "scan_vuln_running")
+_BOOL_KEYS = ("manual_mode", "websrv", "debug_mode", "scan_vuln_running",
+              "battery_monitor_enabled")
 # These must be non-negative integers (JSON bools are excluded — bool is an int subclass).
 _NONNEG_INT_KEYS = (
     "startup_delay", "scan_interval", "scan_vuln_interval",
     "failed_retry_delay", "success_retry_delay", "ref_width", "ref_height",
+    "battery_shutdown_percent",
 )
 
 

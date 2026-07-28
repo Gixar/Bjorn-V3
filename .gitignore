@@ -139,6 +139,7 @@ $RECYCLE.BIN/
 data/logs/*
 !data/logs/.gitkeep
 data/netkb.csv
+data/netkb.csv.tmp
 data/livestatus.csv
 data/output/run_reports/
 data/output/improvement_notes/

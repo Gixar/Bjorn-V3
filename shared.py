@@ -145,6 +145,10 @@ class SharedData:
             "ref_width" :122 ,
             "ref_height" : 250,
             "epd_type": "epd2in13_V4",
+
+            # PG-3 battery/UPS awareness (opt-in; no-op without a PiSugar-style server).
+            "battery_monitor_enabled": False,
+            "battery_shutdown_percent": 10,
             
             
             "__title_lists__": "List Settings",
@@ -707,14 +711,19 @@ class SharedData:
                 # Add new row
                 mac_to_existing_row[mac_address] = new_row
 
-        # Write updated data back to CSV
-        with open(self.netkbfile, 'w', newline='') as file:
+        # PG-2 (SD-card protection): write to a temp file in the same dir, then os.replace().
+        # os.replace is atomic on POSIX, so a power loss mid-write leaves netkb.csv either fully
+        # old or fully new — never a half-written, corrupt CSV (this file is rewritten on every
+        # action, so it's the most exposed to a yanked-plug corruption).
+        tmpfile = self.netkbfile + '.tmp'
+        with open(tmpfile, 'w', newline='') as file:
             writer = csv.DictWriter(file, fieldnames=headers)
             writer.writeheader()
-
-            # Write all data
             for row in mac_to_existing_row.values():
                 writer.writerow(row)
+            file.flush()
+            os.fsync(file.fileno())  # force bytes to the SD before the rename
+        os.replace(tmpfile, self.netkbfile)
 
     def update_stats(self):
         """Update the stats based on formulas."""

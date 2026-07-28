@@ -399,10 +399,18 @@ WorkingDirectory=/home/bjorn/Bjorn
 StandardOutput=inherit
 StandardError=inherit
 Restart=always
+RestartSec=10
+# PG-2: give Bjorn time to flush on a commanded shutdown/reboot before systemd kills it.
+TimeoutStopSec=30
 User=root
 
 # Check open files and restart if it reached the limit (ulimit -n buffer of 1000)
 ExecStartPost=/bin/bash -c 'FILE_LIMIT=\$(ulimit -n); THRESHOLD=\$(( FILE_LIMIT - 1000 )); while :; do TOTAL_OPEN_FILES=\$(lsof | wc -l); if [ "\$TOTAL_OPEN_FILES" -ge "\$THRESHOLD" ]; then echo "File descriptor threshold reached: \$TOTAL_OPEN_FILES (threshold: \$THRESHOLD). Restarting service."; systemctl restart bjorn.service; exit 0; fi; sleep 10; done &'
+
+# PG-4 watchdog: restart if the main loop stops refreshing /run/bjorn_heartbeat (i.e. it wedged
+# while the process is still alive — which Restart=always alone can't catch). 180s stale window;
+# the loop refreshes every ~10s. Keep the path in sync with Bjorn.py::HEARTBEAT_FILE.
+ExecStartPost=/bin/bash -c 'HB=/run/bjorn_heartbeat; while :; do if [ -f "\$HB" ]; then AGE=\$(( \$(date +%s) - \$(stat -c %Y "\$HB") )); if [ "\$AGE" -ge 180 ]; then echo "Bjorn heartbeat stale (\${AGE}s). Restarting service."; systemctl restart bjorn.service; exit 0; fi; fi; sleep 15; done &'
 
 [Install]
 WantedBy=multi-user.target

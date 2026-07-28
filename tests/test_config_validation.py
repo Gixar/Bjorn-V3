@@ -14,6 +14,7 @@ def _good_config():
         "startup_delay": 10, "scan_interval": 180, "scan_vuln_interval": 900,
         "failed_retry_delay": 600, "success_retry_delay": 900, "ref_width": 122, "ref_height": 250,
         "epd_type": "epd2in13_V4", "portlist": [22, 80, 443],
+        "battery_monitor_enabled": False, "battery_shutdown_percent": 10,
     }
 
 

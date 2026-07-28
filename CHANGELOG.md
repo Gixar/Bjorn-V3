@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.4.2-alpha] — 2026-07-28
+
+### Fixed
+- **e-Paper log spam** (found on hardware). The display calls `init_partial_update()` +
+  `display_partial()` on every refresh (~1–2×/s); the logging added in 2.3.0 logged success on
+  those per-frame paths, producing ~3 log lines/second (85 KB in 11 min → needless SD writes,
+  against the PG-2 SD-protection goal). Now the per-frame methods log **failures only**; the
+  one-time full-init/load/clear messages stay. Live fix for an existing install:
+  `sudo sed -i "/Initializing EPD.*partial update/d; /EPD partial update initialization complete/d; /Partial display update complete/d" /home/bjorn/Bjorn/epd_helper.py && sudo systemctl restart bjorn.service`.
+
 ## [2.4.1-alpha] — 2026-07-28
 
 ### Fixed

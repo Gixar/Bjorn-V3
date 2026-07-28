@@ -59,27 +59,27 @@ class EPDHelper:
             raise
 
     def init_partial_update(self):
+        # Called on every refresh — log only failures, never per-frame success (that produced
+        # ~3 log lines/second → log bloat + needless SD writes; cf. PG-2 SD-protection).
         try:
-            logger.info(f"Initializing EPD '{self.epd_type}' (partial update)...")
             if hasattr(self.epd, 'PART_UPDATE'):
                 self.epd.init(self.epd.PART_UPDATE)
             elif hasattr(self.epd, 'lut_partial_update'):
                 self.epd.init(self.epd.lut_partial_update)
             else:
                 self.epd.init()
-            logger.info("EPD partial update initialization complete.")
         except Exception as e:
             logger.error(f"Error initializing EPD '{self.epd_type}' for partial update: {e}")
             logger.error(traceback.format_exc())
             raise
 
     def display_partial(self, image):
+        # Per-frame — failures only (see init_partial_update note).
         try:
             if hasattr(self.epd, 'displayPartial'):
                 self.epd.displayPartial(self.epd.getbuffer(image))
             else:
                 self.epd.display(self.epd.getbuffer(image))
-            logger.debug("Partial display update complete.")  # debug: called every refresh, don't spam info
         except Exception as e:
             logger.error(f"Error during partial display update on '{self.epd_type}': {e}")
             logger.error(traceback.format_exc())

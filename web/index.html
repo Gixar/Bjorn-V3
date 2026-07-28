@@ -34,6 +34,12 @@
         <button type="button" onclick="window.location.href='/loot.html'" title="Loot">
             <img src="/web/images/loot_icon.png" alt="Icon_loot" style="height: 50px;">
         </button>
+        <button type="button" onclick="window.location.href='/stats.html'" title="Stats">
+            <!-- Inline SVG so this doesn't 404 waiting on a new icon asset -->
+            <svg width="50" height="50" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M4 20V10M12 20V4M20 20v-7" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+        </button>
     </div>
     <div class="console-toolbar">
         <button type="button" class="toolbar-button" onclick="adjustFontSize(-1)" title="-">

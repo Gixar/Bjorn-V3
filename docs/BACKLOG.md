@@ -64,3 +64,63 @@ netkb writes + `TimeoutStopSec`; opt-in `battery.py` PiSugar monitor + low-charg
 - `LOCOSP/BjornWpaSecHarvester` — wpa-sec/Pwnagotchi import.
 - `infinition/Bjorn-cortex` — swarm-AI training hub (heavyweight).
 - `PierreGode/Ragnar` — the predecessor project.
+
+## Future changes ideas.
+
+  - **RustScan for full-port discovery** — replace/augment the 2.2.0-alpha `nmap -sT`
+  sweep with RustScan for the initial port-discovery pass: it scans all 65,535 ports
+  in ~3s via adaptive-batched async sockets (vs. the curated `portlist`/`portstart`-
+  `portend` range scanning currently uses to stay within the scan interval), then
+  hands its results to `nmap` for service/version detail — the same two-stage shape
+  the current engine already uses, so this is a discovery-stage swap, not a pipeline
+  rewrite. Officially install-only via `cargo install rustscan` (Rust toolchain
+  required); community ARM packages exist (Snap Store, Arch Linux ARM aarch64) but
+  aren't official releases — installer prerequisite checks would need a new block
+  alongside the existing `nmap`/`nmcli` checks. GPL-3.0 licensed, same license family
+  as `nmap`/`nmcli` which Bjorn already shells out to as external processes, so no
+  new licensing exposure for Bjorn's own MIT code. Batch size needs on-device tuning
+  against the Zero 2 W's file descriptor limits — too-aggressive batching is
+  RustScan's documented failure mode (dropped/missed ports, not an error), so this
+  needs real benchmarking before it replaces anything, not just a swap-in.
+
+  - **Bluetooth PAN access from a phone** — run the Pi as a Bluetooth NAP (Network
+  Access Point) via BlueZ's `bt-pan` so a paired phone gets a real IP over Bluetooth
+  (`bnep0`/`pan0` + a `dnsmasq`-scoped DHCP lease) and can hit the existing FastAPI
+  web server directly (`http://<bt-ip>:8000/`) — no new app-layer code needed, every
+  current endpoint (config, stats, backup/restore, file download) works unmodified
+  since it's just another network interface. Both Zero W (Bluetooth 4.1) and Zero 2 W
+  (4.2 + BLE) already have the hardware. Real value: admin access without Bjorn
+  needing to join or host a Wi-Fi network — useful given it's meant to be carried
+  around. Needs: (1) pin down which BlueZ NAP tooling ships on the target Bookworm
+  image (`pand` is deprecated; `bt-network`/`test-network` vs. the newer `bt-pan`
+  script vary by guide/version), (2) `bluetoothd` plugin config so the Pi isn't
+  misidentified as an audio device, (3) real on-device testing of connection
+  stability (dropped-bnep0 reports exist in the wild), (4) confirm Android vs. iOS
+  support — Android's PAN-client role is well-proven, iOS's is unconfirmed and may
+  not be viable as a client into a third-party NAP. Installer would need a new
+  prerequisite/setup block alongside the existing Wi-Fi (`nmcli`) handling.
+
+  - **Auto-report collected data via Telegram (or email) when internet is available** —
+  extend the existing redacted run_reports pipeline (2.0.0-alpha) with an online
+  delivery step: render a small Markdown summary (host/port/vuln counts, action
+  success/fail tallies — same shape as the /api/stats snapshot the web dashboard
+  uses) and send it as a Telegram sendDocument attachment once Bjorn detects
+  internet access. Default to counts/errors only, matching the run_reports
+  redaction policy already in place — including raw cracked credentials or stolen
+  files should be an explicit opt-in config flag, not the default, since this adds
+  a third-party transit hop for that data. Connectivity check: either a periodic
+  lightweight socket check (simple, small delay) or a NetworkManager dispatcher
+  script for instant on-connect firing (matches the existing nmcli dependency,
+  more moving parts) — needs a decision. Needs send throttling (per-SSID or
+  per-time-window) so a flapping connection doesn't spam the channel. Telegram
+  preferred over email for this specifically: HTTPS-only (SMTP ports 587/465 are
+  commonly blocked on public/hotel/corporate Wi-Fi — exactly the networks this
+  device roams onto), simpler bot-token auth vs. SMTP credential management, and
+  pairs directly with an n8n Telegram Trigger for downstream automation/analysis
+  of incoming reports. Send the .md as a document attachment with a plain caption
+  rather than MarkdownV2-formatted message text — avoids MarkdownV2's escaping
+  requirements for `_ * `` [` entirely. Email as a config-swappable fallback
+  channel via stdlib smtplib (no new dependency), for networks where Telegram
+  itself is blocked.
+
+  - **Bettercap integration (Pwnagotchi-style), opt-in and off by default** — run bettercap (GPL-3.0, single Go binary, same "external process via subprocess" pattern already used for `nmap`/`nmcli`, so no new licensing exposure) as its own managed process via a new systemd unit alongside the existing `bjorn.service`, driven by a new `bettercap_client.py` that follows Pwnagotchi's own `pwnagotchi/bettercap.py` template — a thin REST client against bettercap's `api.rest` module (HTTP Basic Auth; note it defaults to weak `user`/`pass` credentials and needs the same "don't ship this open" treatment as Bjorn's own endpoints) polling or websocket-subscribing `/api/events` and feeding discoveries into the existing `netkb.csv`/stats pipeline as a new data source rather than a separate silo. Ships with only the managed-mode capabilities active — ARP spoofing, MITM, traffic sniffing on whatever network Bjorn is already joined to via `nmcli` — since those need no monitor mode or packet injection and are safe on the current hardware as-is; genuinely new capability over today's port-scan-and-bruteforce model. The 802.11 monitor-mode/deauth/WPA-handshake-capture piece (the actual Pwnagotchi headline feature) stays disabled until the user opts in from the web config, both because it's the flakier hardware path and because monitor mode and managed/connected mode are mutually exclusive on the same radio — running it on `wlan0` would knock Bjorn off its own network (web UI, Telegram reporting, its own scanning) the moment it activated, so enabling it requires a second wireless interface, never `wlan0`. New config keys `bettercap_monitor_enabled` (default `false`) and `bettercap_monitor_iface` (default unset); the config page lists present wireless interfaces as a dropdown (via `iw dev`/`netifaces`, already a dependency) instead of free text, plus a "test monitor mode support" button that runs `iw phy <phy> info` against the selected interface and checks for `monitor` in its supported modes before the user commits to it, and `config_validation.py` fail-fasts at startup — enabled but the configured interface missing or lacking monitor support logs clearly and falls back to disabled rather than crashing or silently no-op'ing. Worth noting for whoever picks a dongle: the onboard chip needs the nexmon firmware patch to enter monitor mode at all, and the Zero 2 W specifically has a currently-open, unresolved nexmon crash-on-injection bug (~50-200 packets before it dies) — the older Zero W's onboard chip is reportedly more reliable for this despite being the weaker board — which is exactly the kind of unreliability this whole opt-in/second-interface design is meant to keep away from Bjorn's own connectivity.

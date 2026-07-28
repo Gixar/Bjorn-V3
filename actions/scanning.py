@@ -47,6 +47,21 @@ class NetworkScanner:
         self.nm = nmap.PortScanner()  # Initialize nmap.PortScanner()
         self.running = False
 
+    def get_local_ips(self):
+        """This device's own IPv4 addresses across all interfaces (wlan0/eth0/usb0/...).
+        Recomputed each scan and added to the scan blacklist so Bjorn never targets itself —
+        dynamic, so it survives DHCP address changes (unlike a fixed IP in the config)."""
+        ips = set()
+        try:
+            for iface in netifaces.interfaces():
+                for addr in netifaces.ifaddresses(iface).get(netifaces.AF_INET, []):
+                    ip = addr.get('addr')
+                    if ip and not ip.startswith('127.'):
+                        ips.add(ip)
+        except Exception as e:
+            self.logger.error(f"Error getting local IPs: {e}")
+        return list(ips)
+
     def check_if_csv_scan_file_exists(self, csv_scan_file, csv_result_file, netkbfile):
         """
         Checks and prepares the necessary CSV files for the scan.
@@ -484,6 +499,13 @@ class NetworkScanner:
         try:
             self.shared_data.bjornorch_status = "NetworkScanner"
             self.logger.info(f"Starting Network Scanner")
+            # Rebuild the IP blacklist from config + this device's *current* IPs each scan, so
+            # Bjorn never scans/attacks itself even after a DHCP address change. All the blacklist
+            # checks below read self.ip_scan_blacklist, so refreshing it here covers them.
+            local_ips = self.get_local_ips()
+            self.ip_scan_blacklist = list(self.shared_data.ip_scan_blacklist) + local_ips
+            if local_ips:
+                self.logger.info(f"Excluding own IPs from scan: {local_ips}")
             network = self.get_network()
             self.shared_data.bjornstatustext2 = str(network)
             portstart = self.shared_data.portstart

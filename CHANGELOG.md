@@ -1,5 +1,21 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- **Bjorn no longer scans/attacks itself.** `NetworkScanner` now detects this device's own IPv4
+  addresses (all interfaces, via `netifaces`) at the start of *every* scan and adds them to the
+  scan blacklist — dynamic, so it survives DHCP address changes (a fixed IP in the config would
+  rot). Fixes the case where the Pi's own netKB row uses a fallback MAC, so the existing
+  MAC-blacklist missed it and the SSH brute-force ran against localhost.
+
+### Added (merged via sync — FastAPI web rewrite / live stats dashboard)
+- Web server migrated from stdlib `http.server` to **FastAPI/Starlette + uvicorn** (`webapp.py`,
+  `utils.py`), adding a **live stats dashboard** (`/api/stats`, WebSocket `/ws/stats`,
+  `web/stats.html`). Adds `fastapi`/`uvicorn[standard]`/`python-multipart` to `requirements.txt`
+  and `stats_ws_interval` to the config. (Landed on the remote between 2.4.2 and this sync;
+  documented here for completeness — see the `webapp v3` migration note in `utils.py`.)
+
 ## [2.4.2-alpha] — 2026-07-28
 
 ### Fixed

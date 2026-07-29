@@ -10,7 +10,7 @@ KNOWN_EPD_TYPES = {
 }
 
 _BOOL_KEYS = ("manual_mode", "websrv", "debug_mode", "scan_vuln_running",
-              "battery_monitor_enabled")
+              "battery_monitor_enabled", "vuln_scan_sv", "vuln_scan_vulners")
 # These must be non-negative integers (JSON bools are excluded — bool is an int subclass).
 _NONNEG_INT_KEYS = (
     "startup_delay", "scan_interval", "scan_vuln_interval",

@@ -48,7 +48,7 @@ keep each pass to one testable area):
 - **P3** — `shared.py::write_data` rewrites the whole `netkb.csv` after every action; batch or write once per cycle.
 - ~~**P4**~~ — ✅ **DONE** — removed the duplicate nested action loop that `run()` ran inline after `process_alive_ips()`; the single `process_alive_ips()` call now handles it.
 - **P5** — `display.py` re-reads 3 CSVs via pandas on every refresh; cache counts, recompute on scan events.
-- **L3** — vuln scan is `nmap -T2 -sV --script vulners.nse` (internet-dependent, heaviest op); make timing + `-sV`/`vulners.nse` config-driven/optional.
+- ~~**L3**~~ — ✅ **DONE** — vuln-scan flags now config-driven: timing was already `nmap_scan_aggressivity`; added `vuln_scan_sv` and `vuln_scan_vulners` bools (both default True) so `-sV` and the internet-dependent `vulners.nse` are optional. Args built conditionally in `nmap_vuln_scanner.py`; both validated as bools.
 
 ## Ideas from Pwnagotchi (adjacent project — full analysis in PRD §11)
 

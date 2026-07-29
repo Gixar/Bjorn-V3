@@ -190,14 +190,12 @@ class Orchestrator:
             else:
                 row[action_key] = f'failed_{timestamp}'
             self._record_result(action.action_name, result == 'success')
-            self.shared_data.write_data(current_data)
             return result == 'success'
         except Exception as e:
             logger.error(f"Action {action.action_name} failed: {e}")
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             row[action_key] = f'failed_{timestamp}'
             self._record_result(action.action_name, False, error=e)
-            self.shared_data.write_data(current_data)
             return False
 
     def execute_standalone_action(self, action, current_data):
@@ -244,14 +242,12 @@ class Orchestrator:
                 row[action_key] = f'failed_{timestamp}'
                 logger.error(f"Standalone action {action.action_name} failed")
             self._record_result(action.action_name, result == 'success')
-            self.shared_data.write_data(current_data)
             return result == 'success'
         except Exception as e:
             logger.error(f"Standalone action {action.action_name} failed: {e}")
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             row[action_key] = f'failed_{timestamp}'
             self._record_result(action.action_name, False, error=e)
-            self.shared_data.write_data(current_data)
             return False
 
     def run(self):
@@ -267,6 +263,7 @@ class Orchestrator:
             action_retry_pending = False
             any_action_executed = self.process_alive_ips(current_data)
 
+            # P3: one netkb write per cycle here — execute_action no longer writes per action.
             self.shared_data.write_data(current_data)
 
             if not any_action_executed:
@@ -314,7 +311,6 @@ class Orchestrator:
                                                 row["NmapVulnScanner"] = f'success_{timestamp}'
                                             else:
                                                 row["NmapVulnScanner"] = f'failed_{timestamp}'
-                                            self.shared_data.write_data(current_data)
                                 self.last_vuln_scan_time = current_time
                             except Exception as e:
                                 logger.error(f"Error during vulnerability scan: {e}")
@@ -329,6 +325,11 @@ class Orchestrator:
                             if self.execute_standalone_action(action, current_data):
                                 self.failed_scans_count = 0
                                 break
+                    # P3: batch the idle-cycle netkb write — one write for the whole branch
+                    # (post-scan action pass + vuln scan + standalone) instead of after every
+                    # action. ponytail: mid-cycle results are lost on a crash, but the actions
+                    # just re-run next cycle.
+                    self.shared_data.write_data(current_data)
                     idle_start_time = datetime.now()
                     idle_end_time = idle_start_time + timedelta(seconds=self.shared_data.scan_interval)
                     while datetime.now() < idle_end_time:

@@ -45,7 +45,7 @@ keep each pass to one testable area):
 
 - ~~**P1**~~ — ✅ **DONE** — brute-force connectors (SSH/Telnet/SQL/SMB/FTP/RDP) no longer hardcode 40 threads; new `bruteforce_threads` config key (0 = auto → `min(8, cpu*4)`), validated non-negative in `config_validation.py`.
 - **P2** — `import pandas` at module top in ~10 files; on ARMv6 that's ~2–5 s + 50–80 MB each. Replace with stdlib `csv` in the connectors and `display.py` (they only read + count/dedupe); lazy-import elsewhere. Biggest memory win on a 512 MB Zero.
-- **P3** — `shared.py::write_data` rewrites the whole `netkb.csv` after every action; batch or write once per cycle.
+- ~~**P3**~~ — ✅ **DONE** — `execute_action`/`execute_standalone_action` and the vuln loop no longer call `write_data` per action; `run()` now batches to one `netkb.csv` write per cycle branch (active + idle). `write_data` itself (atomic temp-file + fsync merge) is unchanged. Trade-off: mid-cycle results lost on a crash — actions just re-run next cycle. Needs the Pi to verify end-to-end.
 - ~~**P4**~~ — ✅ **DONE** — removed the duplicate nested action loop that `run()` ran inline after `process_alive_ips()`; the single `process_alive_ips()` call now handles it.
 - **P5** — `display.py` re-reads 3 CSVs via pandas on every refresh; cache counts, recompute on scan events.
 - ~~**L3**~~ — ✅ **DONE** — vuln-scan flags now config-driven: timing was already `nmap_scan_aggressivity`; added `vuln_scan_sv` and `vuln_scan_vulners` bools (both default True) so `-sV` and the internet-dependent `vulners.nse` are optional. Args built conditionally in `nmap_vuln_scanner.py`; both validated as bools.

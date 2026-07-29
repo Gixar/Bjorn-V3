@@ -43,7 +43,7 @@ Done in v2.2.0-alpha: **L1** (nmap port scan), **L2** (MAC from nmap), **P6** (r
 sleeps/race), **L4** (nmcli Wi-Fi scan). Still deferred (mostly safe code changes, held back to
 keep each pass to one testable area):
 
-- **P1** — brute-force connectors (SSH/Telnet/SQL/SMB) hardcode **40 threads**; make config-driven and core-aware (`os.cpu_count()`), default ~8.
+- ~~**P1**~~ — ✅ **DONE** — brute-force connectors (SSH/Telnet/SQL/SMB/FTP/RDP) no longer hardcode 40 threads; new `bruteforce_threads` config key (0 = auto → `min(8, cpu*4)`), validated non-negative in `config_validation.py`.
 - **P2** — `import pandas` at module top in ~10 files; on ARMv6 that's ~2–5 s + 50–80 MB each. Replace with stdlib `csv` in the connectors and `display.py` (they only read + count/dedupe); lazy-import elsewhere. Biggest memory win on a 512 MB Zero.
 - **P3** — `shared.py::write_data` rewrites the whole `netkb.csv` after every action; batch or write once per cycle.
 - ~~**P4**~~ — ✅ **DONE** — removed the duplicate nested action loop that `run()` ran inline after `process_alive_ips()`; the single `process_alive_ips()` call now handles it.

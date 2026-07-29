@@ -142,7 +142,8 @@ class SharedData:
             "scan_interval": 180,
             "scan_vuln_interval": 900,
             "failed_retry_delay": 600,
-            "success_retry_delay": 900, 
+            "success_retry_delay": 900,
+            "bruteforce_threads": 0,  # brute-force worker threads per connector; 0 = auto (core-aware, capped at 8)
             "ref_width" :122 ,
             "ref_height" : 250,
             "epd_type": "epd2in13_V4",
@@ -321,6 +322,9 @@ class SharedData:
 
     def initialize_variables(self):
         """Initialize the variables."""
+        # Resolve auto (0) brute-force thread count: core-aware, capped at 8 (IO-bound, so >cores is fine).
+        if not getattr(self, "bruteforce_threads", 0):
+            self.bruteforce_threads = min(8, (os.cpu_count() or 1) * 4)
         self.should_exit = False
         self.display_should_exit = False
         self.orchestrator_should_exit = False 

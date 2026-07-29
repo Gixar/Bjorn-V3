@@ -15,7 +15,7 @@ _BOOL_KEYS = ("manual_mode", "websrv", "debug_mode", "scan_vuln_running",
 _NONNEG_INT_KEYS = (
     "startup_delay", "scan_interval", "scan_vuln_interval",
     "failed_retry_delay", "success_retry_delay", "ref_width", "ref_height",
-    "battery_shutdown_percent",
+    "battery_shutdown_percent", "bruteforce_threads",
 )
 
 

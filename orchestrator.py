@@ -264,44 +264,8 @@ class Orchestrator:
         while not self.shared_data.orchestrator_should_exit:
             current_data = self.shared_data.read_data()
             any_action_executed = False
-            action_executed_status = None
             action_retry_pending = False
             any_action_executed = self.process_alive_ips(current_data)
-
-            for action in self.actions:
-                for row in current_data:
-                    if row["Alive"] != '1':
-                        continue
-                    ip, ports = row["IPs"], row["Ports"].split(';')
-                    action_key = action.action_name
-
-                    if action.b_parent_action is None:
-                        with self.semaphore:
-                            if self.execute_action(action, ip, ports, row, action_key, current_data):
-                                action_executed_status = action_key
-                                any_action_executed = True
-                                self.shared_data.bjornorch_status = action_executed_status
-
-                                for child_action in self.actions:
-                                    if child_action.b_parent_action == action_key:
-                                        with self.semaphore:
-                                            if self.execute_action(child_action, ip, ports, row, child_action.action_name, current_data):
-                                                action_executed_status = child_action.action_name
-                                                self.shared_data.bjornorch_status = action_executed_status
-                                                break
-                                break
-
-            for child_action in self.actions:
-                if child_action.b_parent_action:
-                    action_key = child_action.action_name
-                    for row in current_data:
-                        ip, ports = row["IPs"], row["Ports"].split(';')
-                        with self.semaphore:
-                            if self.execute_action(child_action, ip, ports, row, action_key, current_data):
-                                action_executed_status = child_action.action_name
-                                any_action_executed = True
-                                self.shared_data.bjornorch_status = action_executed_status
-                                break
 
             self.shared_data.write_data(current_data)
 

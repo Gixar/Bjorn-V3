@@ -154,20 +154,28 @@ class WebUtils:
             # Charger les actions si ce n'est pas déjà fait
             self.load_actions()
 
-            action_instance = next((action for action in self.actions if action.action_name == action_class), None)
-            if action_instance is None:
-                raise Exception(f"Action class {action_class} not found")
-
-            # Charger les données actuelles
+            # Load current netKB data (both branches below need the target host's row).
             current_data = self.shared_data.read_data()
             row = next((r for r in current_data if r["IPs"] == ip), None)
-
             if row is None:
                 raise Exception(f"No data found for IP: {ip}")
 
-            action_key = action_instance.action_name
+            action_key = action_class
             self.logger.info(f"Executing {action_key} on {ip}:{port}")
-            result = action_instance.execute(ip, port, row, action_key)
+
+            # NmapVulnScanner is loaded separately (not into self.actions) and its execute()
+            # signature is (ip, row, status_key) — not the connectors' (ip, port, row, action_key).
+            # Handle it explicitly so a manual vuln scan works instead of "action not found".
+            if action_class == "NmapVulnScanner":
+                vuln_scanner = getattr(self, "nmap_vuln_scanner", None)
+                if vuln_scanner is None:
+                    raise Exception("NmapVulnScanner is not loaded")
+                result = vuln_scanner.execute(ip, row, action_key)
+            else:
+                action_instance = next((action for action in self.actions if action.action_name == action_class), None)
+                if action_instance is None:
+                    raise Exception(f"Action class {action_class} not found")
+                result = action_instance.execute(ip, port, row, action_key)
 
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             if result == 'success':

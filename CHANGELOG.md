@@ -3,6 +3,11 @@
 ## [Unreleased]
 
 ### Fixed
+- **Manual attack with `NmapVulnScanner` no longer 500s** ("Action class NmapVulnScanner not
+  found"). The manual-attack handler only searched `self.actions`, but the vuln scanner is loaded
+  separately (`self.nmap_vuln_scanner`) and has a different `execute(ip, row, status_key)`
+  signature than the connectors. It's now special-cased. (In the FastAPI `utils.py` — takes effect
+  once the web dashboard / Tier-2 files are deployed.)
 - **Bjorn no longer scans/attacks itself.** `NetworkScanner` now detects this device's own IPv4
   addresses (all interfaces, via `netifaces`) at the start of *every* scan and adds them to the
   scan blacklist — dynamic, so it survives DHCP address changes (a fixed IP in the config would

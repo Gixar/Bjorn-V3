@@ -402,7 +402,13 @@ class NetworkScanner:
                                     if info.get('state') == 'open':
                                         self.open_ports[ip].append(int(port))
                 except Exception as e:
-                    self.logger.error(f"Error during nmap port scan: {e}")
+                    # Most commonly this is nmap being killed mid-scan (service restart) — python-nmap
+                    # then fails to parse the truncated XML and its str(e) is a wall of raw XML. Log a
+                    # concise WARNING (existing port data is preserved; the next scan retries) and keep
+                    # the raw detail at debug only.
+                    self.logger.warning("nmap port scan did not complete this cycle "
+                                        "(interrupted or nmap parse error); keeping existing port data.")
+                    self.logger.debug(f"nmap port scan error detail: {str(e)[:300]}")
 
             self.all_ports = sorted(list(set(port for ports in self.open_ports.values() for port in ports)))
             alive_ips = set(self.ip_data.ip_list)

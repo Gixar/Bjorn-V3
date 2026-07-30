@@ -3,7 +3,6 @@ ssh_connector.py - This script performs a brute force attack on SSH services (po
 """
 
 import os
-import pandas as pd
 import paramiko
 import socket
 import threading
@@ -11,7 +10,7 @@ import logging
 from queue import Queue
 from rich.console import Console
 from rich.progress import Progress, BarColumn, TextColumn, SpinnerColumn
-from shared import SharedData
+from shared import SharedData, netkb_targets, append_csv_rows, dedupe_csv
 from logger import Logger
 
 # Configure the logger
@@ -55,11 +54,7 @@ class SSHConnector:
     """
     def __init__(self, shared_data):
         self.shared_data = shared_data
-        self.scan = pd.read_csv(shared_data.netkbfile)
-
-        if "Ports" not in self.scan.columns:
-            self.scan["Ports"] = None
-        self.scan = self.scan[self.scan["Ports"].str.contains("22", na=False)]
+        self.load_scan_file()
 
         self.users = open(shared_data.usersfile, "r").read().splitlines()
         self.passwords = open(shared_data.passwordsfile, "r").read().splitlines()
@@ -78,10 +73,7 @@ class SSHConnector:
         """
         Load the netkb file and filter it for SSH ports.
         """
-        self.scan = pd.read_csv(self.shared_data.netkbfile)
-        if "Ports" not in self.scan.columns:
-            self.scan["Ports"] = None
-        self.scan = self.scan[self.scan["Ports"].str.contains("22", na=False)]
+        self.scan = netkb_targets(self.shared_data.netkbfile, "22")
 
     def ssh_connect(self, adresse_ip, user, password):
         """
@@ -122,8 +114,12 @@ class SSHConnector:
     def run_bruteforce(self, adresse_ip, port):
         self.load_scan_file()  # Reload the scan file to get the latest IPs and ports
 
-        mac_address = self.scan.loc[self.scan['IPs'] == adresse_ip, 'MAC Address'].values[0]
-        hostname = self.scan.loc[self.scan['IPs'] == adresse_ip, 'Hostnames'].values[0]
+        match = next((r for r in self.scan if r.get('IPs') == adresse_ip), None)
+        if match is None:
+            logger.error(f"No netkb entry for {adresse_ip}; skipping.")
+            return False, []
+        mac_address = match['MAC Address']
+        hostname = match['Hostnames']
 
         total_tasks = len(self.users) * len(self.passwords)
         
@@ -165,17 +161,14 @@ class SSHConnector:
         """
         Save the results of successful connection attempts to a CSV file.
         """
-        df = pd.DataFrame(self.results, columns=['MAC Address', 'IP Address', 'Hostname', 'User', 'Password', 'Port'])
-        df.to_csv(self.sshfile, index=False, mode='a', header=not os.path.exists(self.sshfile))
+        append_csv_rows(self.sshfile, self.results)
         self.results = []  # Reset temporary results after saving
 
     def removeduplicates(self):
         """
         Remove duplicate entries from the results CSV file.
         """
-        df = pd.read_csv(self.sshfile)
-        df.drop_duplicates(inplace=True)
-        df.to_csv(self.sshfile, index=False)
+        dedupe_csv(self.sshfile)
 
 if __name__ == "__main__":
     shared_data = SharedData()

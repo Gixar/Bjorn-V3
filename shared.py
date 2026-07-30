@@ -746,3 +746,50 @@ class SharedData:
         """Print a debug message if debug mode is enabled."""
         if self.config['debug_mode']:
             logger.debug(message)
+
+
+# ---------------------------------------------------------------------------
+# Small stdlib-CSV helpers (P2): the connectors + display only read/count/dedupe
+# netkb and creds files. Doing that with the `csv` module avoids importing pandas
+# (~2-5s + 50-80MB on a Pi Zero) in the always-loaded scan/attack path.
+# ---------------------------------------------------------------------------
+def netkb_targets(netkbfile, port):
+    """Rows from netkb whose Ports field contains str(port).
+
+    Substring match, matching the old pandas `Ports.str.contains(port, na=False)`.
+    Returns a list of dict rows (csv.DictReader); [] if the file is missing.
+    """
+    port_s = str(port)
+    rows = []
+    try:
+        with open(netkbfile, newline='') as f:
+            for row in csv.DictReader(f):
+                if port_s in (row.get("Ports") or ""):
+                    rows.append(row)
+    except FileNotFoundError:
+        pass
+    return rows
+
+
+def append_csv_rows(path, rows):
+    """Append list-of-list rows to a CSV (no header — the file is created with one)."""
+    with open(path, "a", newline='') as f:
+        csv.writer(f).writerows(rows)
+
+
+def dedupe_csv(path):
+    """Drop duplicate rows from a CSV in place, keeping first-occurrence order (incl. header).
+
+    Equivalent to the old `pd.read_csv(...).drop_duplicates().to_csv(...)`.
+    """
+    with open(path, newline='') as f:
+        rows = list(csv.reader(f))
+    seen = set()
+    unique = []
+    for row in rows:
+        key = tuple(row)
+        if key not in seen:
+            seen.add(key)
+            unique.append(row)
+    with open(path, "w", newline='') as f:
+        csv.writer(f).writerows(unique)

@@ -3,7 +3,6 @@
 # It scans for vulnerabilities on various ports and saves the results and progress.
 
 import os
-import pandas as pd
 import subprocess
 import logging
 from datetime import datetime
@@ -37,6 +36,7 @@ class NmapVulnScanner:
         Creates a summary file for vulnerabilities if it does not exist.
         """
         if not os.path.exists(self.summary_file):
+            import pandas as pd  # lazy: keep pandas out of module import (P2)
             os.makedirs(self.shared_data.vulnerabilities_dir, exist_ok=True)
             df = pd.DataFrame(columns=["IP", "Hostname", "MAC Address", "Port", "Vulnerabilities"])
             df.to_csv(self.summary_file, index=False)
@@ -46,6 +46,7 @@ class NmapVulnScanner:
         Updates the summary file with the scan results.
         """
         try:
+            import pandas as pd  # lazy: keep pandas out of module import (P2)
             # Read existing data
             df = pd.read_csv(self.summary_file)
             
@@ -149,6 +150,7 @@ class NmapVulnScanner:
         Saves a summary of all scanned vulnerabilities to a final summary file.
         """
         try:
+            import pandas as pd  # lazy: keep pandas out of module import (P2)
             final_summary_file = os.path.join(self.shared_data.vulnerabilities_dir, "final_vulnerability_summary.csv")
             df = pd.read_csv(self.summary_file)
             summary_data = df.groupby(["IP", "Hostname", "MAC Address"])["Vulnerabilities"].apply(lambda x: "; ".join(set("; ".join(x).split("; ")))).reset_index()

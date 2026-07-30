@@ -1,5 +1,4 @@
 import os
-import pandas as pd
 import pymysql
 import threading
 import logging
@@ -7,7 +6,7 @@ import time
 from rich.console import Console
 from rich.progress import Progress, BarColumn, TextColumn, SpinnerColumn
 from queue import Queue
-from shared import SharedData
+from shared import SharedData, netkb_targets, append_csv_rows, dedupe_csv
 from logger import Logger
 
 # Configure the logger
@@ -66,10 +65,7 @@ class SQLConnector:
         """
         Load the scan file and filter it for SQL ports.
         """
-        self.scan = pd.read_csv(self.shared_data.netkbfile)
-        if "Ports" not in self.scan.columns:
-            self.scan["Ports"] = None
-        self.scan = self.scan[self.scan["Ports"].str.contains("3306", na=False)]
+        self.scan = netkb_targets(self.shared_data.netkbfile, "3306")
 
     def sql_connect(self, adresse_ip, user, password):
         """
@@ -171,8 +167,7 @@ class SQLConnector:
         """
         Save the results of successful connection attempts to a CSV file.
         """
-        df = pd.DataFrame(self.results, columns=['IP Address', 'User', 'Password', 'Port', 'Database'])
-        df.to_csv(self.sqlfile, index=False, mode='a', header=not os.path.exists(self.sqlfile))
+        append_csv_rows(self.sqlfile, self.results)
         logger.info(f"Saved results to {self.sqlfile}")
         self.results = []
 
@@ -180,9 +175,7 @@ class SQLConnector:
         """
         Remove duplicate entries from the results CSV file.
         """
-        df = pd.read_csv(self.sqlfile)
-        df.drop_duplicates(inplace=True)
-        df.to_csv(self.sqlfile, index=False)
+        dedupe_csv(self.sqlfile)
 
 if __name__ == "__main__":
     shared_data = SharedData()

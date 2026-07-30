@@ -3,7 +3,6 @@ rdp_connector.py - This script performs a brute force attack on RDP services (po
 """
 
 import os
-import pandas as pd
 import subprocess
 import threading
 import logging
@@ -11,7 +10,7 @@ import time
 from rich.console import Console
 from rich.progress import Progress, BarColumn, TextColumn, SpinnerColumn
 from queue import Queue
-from shared import SharedData
+from shared import SharedData, netkb_targets, append_csv_rows, dedupe_csv
 from logger import Logger
 
 # Configure the logger
@@ -55,11 +54,7 @@ class RDPConnector:
     """
     def __init__(self, shared_data):
         self.shared_data = shared_data
-        self.scan = pd.read_csv(shared_data.netkbfile)
-
-        if "Ports" not in self.scan.columns:
-            self.scan["Ports"] = None
-        self.scan = self.scan[self.scan["Ports"].str.contains("3389", na=False)]
+        self.load_scan_file()
 
         self.users = open(shared_data.usersfile, "r").read().splitlines()
         self.passwords = open(shared_data.passwordsfile, "r").read().splitlines()
@@ -79,11 +74,7 @@ class RDPConnector:
         """
         Load the netkb file and filter it for RDP ports.
         """
-        self.scan = pd.read_csv(self.shared_data.netkbfile)
-
-        if "Ports" not in self.scan.columns:
-            self.scan["Ports"] = None
-        self.scan = self.scan[self.scan["Ports"].str.contains("3389", na=False)]
+        self.scan = netkb_targets(self.shared_data.netkbfile, "3389")
 
     def rdp_connect(self, adresse_ip, user, password):
         """
@@ -138,8 +129,12 @@ class RDPConnector:
         with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), BarColumn(), TextColumn("[progress.percentage]{task.percentage:>3.0f}%")) as progress:
             task_id = progress.add_task("[cyan]Bruteforcing RDP...", total=total_tasks)
 
-            mac_address = self.scan.loc[self.scan['IPs'] == adresse_ip, 'MAC Address'].values[0]
-            hostname = self.scan.loc[self.scan['IPs'] == adresse_ip, 'Hostnames'].values[0]
+            match = next((r for r in self.scan if r.get('IPs') == adresse_ip), None)
+            if match is None:
+                logger.error(f"No netkb entry for {adresse_ip}; skipping.")
+                return False, []
+            mac_address = match['MAC Address']
+            hostname = match['Hostnames']
 
             for _ in range(self.shared_data.bruteforce_threads):  # config-driven, core-aware (shared_data.bruteforce_threads)
                 t = threading.Thread(target=self.worker, args=(progress, task_id, success_flag))
@@ -165,17 +160,14 @@ class RDPConnector:
         """
         Save the results of successful connection attempts to a CSV file.
         """
-        df = pd.DataFrame(self.results, columns=['MAC Address', 'IP Address', 'Hostname', 'User', 'Password', 'Port'])
-        df.to_csv(self.rdpfile, index=False, mode='a', header=not os.path.exists(self.rdpfile))
+        append_csv_rows(self.rdpfile, self.results)
         self.results = []  # Reset temporary results after saving
 
     def removeduplicates(self):
         """
         Remove duplicate entries from the results CSV file.
         """
-        df = pd.read_csv(self.rdpfile)
-        df.drop_duplicates(inplace=True)
-        df.to_csv(self.rdpfile, index=False)
+        dedupe_csv(self.rdpfile)
 
 if __name__ == "__main__":
     shared_data = SharedData()

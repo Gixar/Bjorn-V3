@@ -5,7 +5,6 @@
 import os
 import threading
 import csv
-import pandas as pd
 import netifaces
 import time
 import glob
@@ -443,6 +442,7 @@ class NetworkScanner:
             Reads the source CSV file into a DataFrame.
             """
             try:
+                import pandas as pd  # lazy: keep pandas out of module import (P2)
                 self.df = pd.read_csv(self.source_csv_path)
             except Exception as e:
                 self.logger.error(f"Error in read_csv: {e}")
@@ -475,6 +475,7 @@ class NetworkScanner:
             Saves the calculated results to the output CSV file.
             """
             try:
+                import pandas as pd  # lazy: keep pandas out of module import (P2)
                 if os.path.exists(self.output_csv_path):
                     results_df = pd.read_csv(self.output_csv_path)
                     results_df.loc[0, 'Total Open Ports'] = self.total_open_ports

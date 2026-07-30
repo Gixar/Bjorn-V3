@@ -1,9 +1,4 @@
-// stats.js — live stats dashboard client.
-//
-// Primary path: WebSocket to /ws/stats, which the server pushes to on an interval
-// (config/shared_config.json: "stats_ws_interval", default 2s — see webapp.py).
-// If the WebSocket can't connect after a few tries (e.g. a proxy/browser that blocks it),
-// this falls back to polling GET /api/stats on the same interval, so the page still works.
+// stats.js — live stats dashboard client (WebSocket + polling fallback)
 
 const STAT_KEYS = [
     "coins", "level", "known_hosts", "vulnerabilities",
@@ -11,8 +6,6 @@ const STAT_KEYS = [
     "targets", "open_ports",
 ];
 
-// Keep a bounded rolling window client-side. There's no server-side history yet (see the
-// note under the chart) — this only reflects what's happened since the page was opened.
 const MAX_CHART_POINTS = 60;
 const CHART_TRACKED = ["coins", "known_hosts", "vulnerabilities", "attacks"];
 const CHART_COLORS = {
@@ -24,7 +17,6 @@ const CHART_COLORS = {
 
 let ws = null;
 let wsRetryCount = 0;
-let wsRetryTimer = null;
 let pollTimer = null;
 let chart = null;
 let chartLabels = [];
@@ -33,6 +25,7 @@ let chartData = { coins: [], known_hosts: [], vulnerabilities: [], attacks: [] }
 function setIndicator(state, text) {
     const el = document.getElementById("ws-indicator");
     const textEl = document.getElementById("ws-indicator-text");
+    if (!el || !textEl) return;
     el.className = "ws-indicator ws-" + state;
     textEl.textContent = text;
 }
@@ -40,22 +33,26 @@ function setIndicator(state, text) {
 function applySnapshot(data) {
     STAT_KEYS.forEach((key) => {
         const el = document.getElementById("stat-" + key);
-        if (el && data[key] !== undefined) {
-            el.textContent = data[key];
-        }
+        if (el && data[key] !== undefined) el.textContent = data[key];
     });
 
     const orchBadge = document.getElementById("orchestrator-badge");
-    orchBadge.textContent = "Orchestrator: " + (data.orchestrator_status || "—");
-    orchBadge.className = "status-badge " + (data.orchestrator_status === "IDLE" ? "badge-idle" : "badge-active");
+    if (orchBadge) {
+        orchBadge.textContent = "Orchestrator: " + (data.orchestrator_status || "—");
+        orchBadge.className = "status-badge " + (data.orchestrator_status === "IDLE" ? "badge-idle" : "badge-active");
+    }
 
     const wifiBadge = document.getElementById("wifi-badge");
-    wifiBadge.textContent = data.wifi_connected ? "Wi-Fi: connected" : "Wi-Fi: disconnected";
-    wifiBadge.className = "status-badge " + (data.wifi_connected ? "badge-good" : "badge-bad");
+    if (wifiBadge) {
+        wifiBadge.textContent = data.wifi_connected ? "Wi-Fi: connected" : "Wi-Fi: disconnected";
+        wifiBadge.className = "status-badge " + (data.wifi_connected ? "badge-good" : "badge-bad");
+    }
 
     const modeBadge = document.getElementById("mode-badge");
-    modeBadge.textContent = data.manual_mode ? "Mode: manual" : "Mode: auto";
-    modeBadge.className = "status-badge badge-idle";
+    if (modeBadge) {
+        modeBadge.textContent = data.manual_mode ? "Mode: manual" : "Mode: auto";
+        modeBadge.className = "status-badge badge-idle";
+    }
 
     pushChartPoint(data);
 }
@@ -75,7 +72,7 @@ function pushChartPoint(data) {
     chart.data.datasets.forEach((ds) => {
         ds.data = chartData[ds.statKey];
     });
-    chart.update("none"); // no animation — this runs every couple seconds
+    chart.update("none");
 }
 
 function initChart() {
@@ -101,8 +98,8 @@ function initChart() {
             responsive: true,
             animation: false,
             scales: {
-                x: { ticks: { color: "#999", maxTicksLimit: 8 }, grid: { color: "#444" } },
-                y: { ticks: { color: "#999" }, grid: { color: "#444" }, beginAtZero: true },
+                x: { ticks: { color: "#999", maxTicksLimit: 8 }, grid: { color: "#333" } },
+                y: { ticks: { color: "#999" }, grid: { color: "#333" }, beginAtZero: true },
             },
             plugins: {
                 legend: { labels: { color: "#e0e0e0" } },
@@ -142,14 +139,14 @@ function connectWebSocket() {
     };
 
     ws.onerror = () => {
-        ws.close();
+        try { ws.close(); } catch (_) {}
     };
 }
 
 function scheduleReconnectOrFallback() {
     wsRetryCount += 1;
     if (wsRetryCount <= 5) {
-        wsRetryTimer = setTimeout(connectWebSocket, Math.min(1000 * wsRetryCount, 5000));
+        setTimeout(connectWebSocket, Math.min(1000 * wsRetryCount, 5000));
     } else {
         setIndicator("polling", "Live (polling)");
         startPolling();
@@ -177,15 +174,13 @@ function pollOnce() {
 }
 
 document.addEventListener("DOMContentLoaded", () => {
+    if (typeof renderNav === "function") renderNav();
     initChart();
-    // Immediate first paint from REST so the cards aren't empty while the WS handshake happens.
     pollOnce();
     connectWebSocket();
 });
 
 document.addEventListener("visibilitychange", () => {
-    // Pause polling (not the WS — browsers throttle but don't kill open sockets) when the tab
-    // is hidden, so a phone left on the loot page overnight isn't hammering /api/stats.
     if (document.hidden) {
         stopPolling();
     } else if (!ws || ws.readyState !== WebSocket.OPEN) {

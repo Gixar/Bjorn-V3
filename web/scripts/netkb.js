@@ -1,45 +1,29 @@
-let fontSize = 12;
-        // Adjust font size based on device type
-if (/Mobi|Android/i.test(navigator.userAgent)) {
-    fontSize = 7; // size for mobile
-}
+let fontSize = /Mobi|Android/i.test(navigator.userAgent) ? 11 : 13;
+
 function fetchNetkbData() {
-    fetch('/netkb_data')
-        .then(response => response.text())
-        .then(data => {
-            document.getElementById('netkb-table').innerHTML = data;
+    fetch("/netkb_data")
+        .then((r) => r.text())
+        .then((data) => {
+            const el = document.getElementById("netkb-table");
+            if (el) el.innerHTML = data;
         })
-        .catch(error => {
-            console.error('Error:', error);
+        .catch((error) => {
+            console.error("Error:", error);
+            if (typeof toast === "function") toast("Failed to load NetKB", "error");
         });
 }
+
 function adjustNetkbFontSize(change) {
     fontSize += change;
-    document.getElementById('netkb-table').style.fontSize = fontSize + 'px';
+    const el = document.getElementById("netkb-table");
+    if (el) el.style.fontSize = fontSize + "px";
 }
 
-
-
-
-function toggleNetkbToolbar() {
-    const mainToolbar = document.querySelector('.toolbar');
-    const toggleButton = document.getElementById('toggle-toolbar')
-    const toggleIcon = document.getElementById('toggle-icon');
-    if (mainToolbar.classList.contains('hidden')) {
-        mainToolbar.classList.remove('hidden');
-        toggleIcon.src = '/web/images/hide.png';
-        toggleButton.setAttribute('data-open', 'false');
-    } else {
-        mainToolbar.classList.add('hidden');
-        toggleIcon.src = '/web/images/reveal.png';
-        toggleButton.setAttribute('data-open', 'true');
-
-    }
-}
-
-document.addEventListener("DOMContentLoaded", function() {
-    fetchNetkbData(); // Initial fetch
-    setInterval(fetchNetkbData, 10000); // Refresh every 10 seconds
+document.addEventListener("DOMContentLoaded", () => {
+    if (typeof renderNav === "function") renderNav();
+    fetchNetkbData();
+    setInterval(fetchNetkbData, 10000);
 });
 
-
+window.adjustNetkbFontSize = adjustNetkbFontSize;
+window.fetchNetkbData = fetchNetkbData;

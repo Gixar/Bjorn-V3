@@ -3,50 +3,33 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Bjorn Cyberviking - Stats</title>
+    <title>Bjorn Cyberviking — Stats</title>
     <link rel="icon" href="web/images/favicon.ico" type="image/x-icon">
     <link rel="stylesheet" href="web/css/styles.css">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="192x192" href="web/images/icon-192x192.png">
-    <!-- Chart.js for the session trend line — same CDN-script pattern index.html already uses for dx.all.js -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+    <script src="web/scripts/common.js" defer></script>
     <script src="web/scripts/stats.js" defer></script>
 </head>
-
 <body>
-    <div class="toolbar" id="mainToolbar">
-        <button type="button" onclick="window.location.href='/index.html'" title="Playground">
-            <img src="/web/images/console_icon.png" alt="Bjorn" style="height: 50px;">
-        </button>
-        <button type="button" onclick="window.location.href='/config.html'" title="Config">
-            <img src="/web/images/config_icon.png" alt="Icon_config" style="height: 50px;">
-        </button>
-        <button type="button" onclick="window.location.href='/network.html'" title="Network">
-            <img src="/web/images/network_icon.png" alt="Icon_network" style="height: 50px;">
-        </button>
-        <button type="button" onclick="window.location.href='/netkb.html'" title="NetKB">
-            <img src="/web/images/netkb_icon.png" alt="Icon_netkb" style="height: 50px;">
-        </button>
-        <button type="button" onclick="window.location.href='/credentials.html'" title="Credentials">
-            <img src="/web/images/cred_icon.png" alt="Icon_cred" style="height: 50px;">
-        </button>
-        <button type="button" onclick="window.location.href='/loot.html'" title="Loot">
-            <img src="/web/images/loot_icon.png" alt="Icon_loot" style="height: 50px;">
-        </button>
-        <button type="button" onclick="window.location.href='/stats.html'" title="Stats" class="active-page">
-            <!-- Inline SVG so this doesn't 404 waiting on a new icon asset -->
-            <svg width="50" height="50" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M4 20V10M12 20V4M20 20v-7" stroke-linecap="round" stroke-linejoin="round"/>
-            </svg>
-        </button>
-    </div>
+    <nav id="app-nav" class="topnav"></nav>
 
-    <div class="stats-container">
-        <div class="stats-header">
-            <div id="ws-indicator" class="ws-indicator ws-connecting">
-                <span class="ws-dot"></span>
-                <span id="ws-indicator-text">Connecting…</span>
+    <main class="page stats-container">
+        <div class="page-header">
+            <div>
+                <h1>Stats</h1>
+                <p class="card-subtitle">Live counters from the orchestrator</p>
             </div>
+            <div class="page-header-actions">
+                <div id="ws-indicator" class="ws-indicator ws-connecting">
+                    <span class="ws-dot"></span>
+                    <span id="ws-indicator-text">Connecting…</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="stats-header">
             <div class="stats-status-badges">
                 <span id="orchestrator-badge" class="status-badge">—</span>
                 <span id="wifi-badge" class="status-badge">—</span>
@@ -110,10 +93,10 @@
         <div class="stats-chart-container">
             <div class="stats-chart-header">
                 <span>Session trend</span>
-                <span class="stats-chart-note">Resets on page reload — this is a live view, not stored history yet.</span>
+                <span class="stats-chart-note">Resets on page reload — live view, not stored history yet.</span>
             </div>
             <canvas id="stats-chart" height="90"></canvas>
         </div>
-    </div>
+    </main>
 </body>
 </html>

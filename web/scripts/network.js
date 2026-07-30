@@ -1,47 +1,29 @@
-let fontSize = 12;
-// Adjust font size based on device type
-if (/Mobi|Android/i.test(navigator.userAgent)) {
-    fontSize = 7; // size for mobile
-}
+let fontSize = /Mobi|Android/i.test(navigator.userAgent) ? 11 : 13;
 
 function fetchNetworkData() {
-    fetch('/network_data')
-        .then(response => response.text())
-        .then(data => {
-            document.getElementById('network-table').innerHTML = data;
+    fetch("/network_data")
+        .then((r) => r.text())
+        .then((data) => {
+            const el = document.getElementById("network-table");
+            if (el) el.innerHTML = data;
         })
-        .catch(error => {
-            console.error('Error:', error);
+        .catch((error) => {
+            console.error("Error:", error);
+            if (typeof toast === "function") toast("Failed to load network data", "error");
         });
 }
 
 function adjustNetworkFontSize(change) {
     fontSize += change;
-    document.getElementById('network-table').style.fontSize = fontSize + 'px';
+    const el = document.getElementById("network-table");
+    if (el) el.style.fontSize = fontSize + "px";
 }
 
-function toggleNetworkToolbar() {
-    const mainToolbar = document.querySelector('.toolbar');
-    const toggleButton = document.getElementById('toggle-toolbar');
-    const toggleIcon = document.getElementById('toggle-icon');
-
-    if (mainToolbar.classList.contains('hidden')) {
-        mainToolbar.classList.remove('hidden');
-        toggleIcon.src = '/web/images/hide.png';
-        toggleButton.setAttribute('data-open', 'true');
-    } else {
-        mainToolbar.classList.add('hidden');
-        toggleIcon.src = '/web/images/reveal.png';
-        toggleButton.setAttribute('data-open', 'false');
-    }
-}
-
-
-
-
-
-
-document.addEventListener("DOMContentLoaded", function() {
-    fetchNetworkData(); // Initial fetch
-    setInterval(fetchNetworkData, 60000); // Refresh every 60 seconds
+document.addEventListener("DOMContentLoaded", () => {
+    if (typeof renderNav === "function") renderNav();
+    fetchNetworkData();
+    setInterval(fetchNetworkData, 60000);
 });
+
+window.adjustNetworkFontSize = adjustNetworkFontSize;
+window.fetchNetworkData = fetchNetworkData;

@@ -124,3 +124,30 @@ netkb writes + `TimeoutStopSec`; opt-in `battery.py` PiSugar monitor + low-charg
   itself is blocked.
 
   - **Bettercap integration (Pwnagotchi-style), opt-in and off by default** — run bettercap (GPL-3.0, single Go binary, same "external process via subprocess" pattern already used for `nmap`/`nmcli`, so no new licensing exposure) as its own managed process via a new systemd unit alongside the existing `bjorn.service`, driven by a new `bettercap_client.py` that follows Pwnagotchi's own `pwnagotchi/bettercap.py` template — a thin REST client against bettercap's `api.rest` module (HTTP Basic Auth; note it defaults to weak `user`/`pass` credentials and needs the same "don't ship this open" treatment as Bjorn's own endpoints) polling or websocket-subscribing `/api/events` and feeding discoveries into the existing `netkb.csv`/stats pipeline as a new data source rather than a separate silo. Ships with only the managed-mode capabilities active — ARP spoofing, MITM, traffic sniffing on whatever network Bjorn is already joined to via `nmcli` — since those need no monitor mode or packet injection and are safe on the current hardware as-is; genuinely new capability over today's port-scan-and-bruteforce model. The 802.11 monitor-mode/deauth/WPA-handshake-capture piece (the actual Pwnagotchi headline feature) stays disabled until the user opts in from the web config, both because it's the flakier hardware path and because monitor mode and managed/connected mode are mutually exclusive on the same radio — running it on `wlan0` would knock Bjorn off its own network (web UI, Telegram reporting, its own scanning) the moment it activated, so enabling it requires a second wireless interface, never `wlan0`. New config keys `bettercap_monitor_enabled` (default `false`) and `bettercap_monitor_iface` (default unset); the config page lists present wireless interfaces as a dropdown (via `iw dev`/`netifaces`, already a dependency) instead of free text, plus a "test monitor mode support" button that runs `iw phy <phy> info` against the selected interface and checks for `monitor` in its supported modes before the user commits to it, and `config_validation.py` fail-fasts at startup — enabled but the configured interface missing or lacking monitor support logs clearly and falls back to disabled rather than crashing or silently no-op'ing. Worth noting for whoever picks a dongle: the onboard chip needs the nexmon firmware patch to enter monitor mode at all, and the Zero 2 W specifically has a currently-open, unresolved nexmon crash-on-injection bug (~50-200 packets before it dies) — the older Zero W's onboard chip is reportedly more reliable for this despite being the weaker board — which is exactly the kind of unreliability this whole opt-in/second-interface design is meant to keep away from Bjorn's own connectivity.
+
+ **Inventory — a fleet of purpose-built ESP32 satellites commanded by Bjorn** — fresh custom
+  firmware (not a fork of Marauder's own codebase) reusing its proven WiFi/BLE attack
+  techniques (deauth, beacon spam, BLE spam, handshake capture) but architected around a
+  wireless command channel from the start, since Marauder's own remote-control path (the
+  Flipper Zero companion protocol) is wired serial and doesn't fit a wireless fleet. Hybrid
+  dual-radio command design: BLE is the always-on, low-bandwidth control channel — a satellite
+  stays reachable over BLE to receive new orders and report short status/results no matter what
+  its WiFi radio is doing, so command delivery never competes with an active attack. WiFi/MQTT
+  is the bulk-data channel, used before/after a task (not during) to push heavier payloads —
+  full task configs, captured PCAPs/handshakes — since BLE's throughput is too limited for that.
+  A satellite commits to an assigned task until completion or timeout once started — no
+  mid-task interruption — which is what makes the BLE-always-reachable design sufficient instead
+  of needing to interrupt an in-progress WiFi operation. Raid mode targets true synchronized
+  simultaneous action (e.g. multi-point deauth across channels to defeat channel-hopping
+  defenses) — this needs more than "send each device a command whenever": a scheduled
+  wall-clock start time and task parameters get pushed to all satellites ahead of time over
+  BLE, and each begins independently at that moment, rather than relying on command-delivery
+  latency to line up. Devices join the inventory via a runtime pairing handshake rather than
+  fixed build-time identity (worth flagging even though not asked for: no revocation mechanism
+  is in scope yet, which is worth revisiting given a lost or compromised unit is a lost or
+  compromised attack tool, not just a lost gadget). Discovered devices (APs by BSSID, BLE
+  peripherals) feed into the existing netkb.csv/stats pipeline rather than a separate model —
+  needs schema work, since netkb.csv's current columns (IPs, Ports) assume IP-layer hosts and
+  don't natively fit wireless-layer discoveries; likely needs either nullable IP/Port fields for
+  wireless-only entries or a device-type column to distinguish IP host vs. WiFi AP vs. BLE
+  device within the same table.

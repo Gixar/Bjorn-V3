@@ -786,6 +786,24 @@ td:first-child, th:first-child {
     color: var(--info);
     font-weight: 700;
 }
+.wifi-static {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.wifi-static label { font-size: 13px; color: var(--muted); }
+.wifi-static-hint { font-weight: 400; opacity: 0.8; }
+.wifi-static input {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text);
+    padding: 8px 10px;
+    font-size: 13px;
+}
 
 /* ==========================================================================
    Loot / credentials / content containers

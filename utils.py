@@ -18,6 +18,7 @@ import json
 import subprocess
 import os
 import csv
+import ipaddress
 import zipfile
 import uuid
 import importlib
@@ -403,7 +404,37 @@ class WebUtils:
             self.logger.error(f"Error scanning Wi-Fi networks: {e}")
             return JSONResponse({"error": str(e)}, status_code=500)
 
-    def update_nmconnection(self, ssid, password):
+    def _static_ipv4(self, params):
+        """Validate optional static-IP params from the WebUI.
+
+        Returns a dict {address, gateway, dns:[...]} using canonical strings parsed by the
+        stdlib ipaddress module, or None for DHCP. Raises ValueError on malformed input so the
+        caller rejects it *before* anything is written to the NetworkManager keyfile — the
+        parsed/reconstructed values can't inject extra config lines.
+        """
+        address = (params.get('ip_address') or "").strip()
+        if not address:
+            return None
+        if '/' not in address:
+            # A bare IP would become /32 and silently break LAN routing — require the prefix.
+            raise ValueError("address must include a prefix, e.g. 192.168.1.50/24")
+        iface = ipaddress.ip_interface(address)  # e.g. 192.168.1.50/24
+        gateway = (params.get('gateway') or "").strip()
+        if gateway:
+            gateway = str(ipaddress.ip_address(gateway))
+        dns = []
+        for d in (params.get('dns') or "").replace(',', ' ').split():
+            dns.append(str(ipaddress.ip_address(d)))
+        return {"address": str(iface), "gateway": gateway, "dns": dns}
+
+    def update_nmconnection(self, ssid, password, ipv4=None):
+        if ipv4:
+            a1 = f"{ipv4['address']},{ipv4['gateway']}" if ipv4['gateway'] else ipv4['address']
+            ipv4_block = f"method=manual\naddress1={a1}\n"
+            if ipv4['dns']:
+                ipv4_block += "dns=" + ";".join(ipv4['dns']) + ";\n"
+        else:
+            ipv4_block = "method=auto\n"
         config_path = '/etc/NetworkManager/system-connections/preconfigured.nmconnection'
         with open(config_path, 'w') as f:
             f.write(f"""
@@ -422,8 +453,7 @@ key-mgmt=wpa-psk
 psk={password}
 
 [ipv4]
-method=auto
-
+{ipv4_block}
 [ipv6]
 method=auto
 """)
@@ -434,8 +464,12 @@ method=auto
         try:
             ssid = params['ssid']
             password = params['password']
+            try:
+                ipv4 = self._static_ipv4(params)
+            except ValueError as ve:
+                return _err(f"Invalid static IP: {ve}")
 
-            self.update_nmconnection(ssid, password)
+            self.update_nmconnection(ssid, password, ipv4)
             command = 'sudo nmcli connection up "preconfigured"'
             connect_result = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             stdout, stderr = connect_result.communicate()

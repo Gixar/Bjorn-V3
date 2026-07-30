@@ -13,7 +13,7 @@ Already fixed this cycle (see `CHANGELOG.md`): #16 port hopping, #147 installer 
 | Ref | Issue | Likely fix / pointer |
 |---|---|---|
 | #176 | Can't enter comma-separated ports in GUI Settings | **Appears already resolved** in current code — `web/scripts/config.js` renders `portlist` as a text input and `saveConfig` splits on commas into an array. Re-test in the UI; no code change identified. |
-| #190 / #160 | Wi-Fi APs not shown / no SSID switch in WebUI | Backend works (`scan_wifi` returns `{networks, current_ssid}`, `connect_wifi` takes `{ssid, password}`). The gap is front-end render / runtime (`iwlist wlan0` needs sudo + wlan0). Needs the running UI on the Pi to diagnose. |
+| ~~#190 / #160~~ | ~~Wi-Fi APs not shown / no SSID switch in WebUI~~ | **Appears already resolved** — `config.js::scanWifi` renders `data.networks`, marks `current_ssid`, and click-to-connect POSTs `{ssid, password}`; backend uses `nmcli` (not the old `iwlist`). Only the on-Pi runtime (sudo/nmcli perms on `wlan0`) remains — re-test on the device. |
 | ~~#130 / #81~~ | ~~404 / error executing a manual attack~~ | ✅ **FIXED** — real cause was `index.html` fetching `/recent_logs` (nonexistent) right after the attack; changed to `/get_logs`. The dead `/manual.html` route was removed. The manual-attack UI already lives in `index.html`. |
 | #155 | Web server not showing | Overlaps #16 (port hopping) — re-test after the SO_REUSEADDR fix; if still failing, check the systemd unit + firewall. |
 | #122 | Installed but no Display *or* WebUI (most-commented) | Multi-cause: partly #16 (port), partly EPD init failing on the panel. Re-test after the port fix; if the display is still dead, check `epd_type` + wiring. Pi-only. |
@@ -31,7 +31,7 @@ Already fixed this cycle (see `CHANGELOG.md`): #16 port hopping, #147 installer 
 
 ## Quality-of-life
 - ~~**In-WebUI log viewer**~~ (from `BjornCocaine`): ✅ **DONE** — added `web/logs.html` + `web/scripts/logs.js` + a "Logs" nav entry (`common.js`) + `logs` in `_PAGES` (`webapp.py`). The colorize/escape renderer was extracted to `common.js` (`colorizeLogLine`/`renderLogsInto`) and shared with the home console. WebUI-only; re-check rendering on the Pi.
-- **Static IP assignment** (#26, done upstream): port their dhcpcd/NetworkManager static-IP config + a WebUI toggle.
+- ~~**Static IP assignment**~~ (#26, done upstream): ✅ **DONE** — the Wi-Fi connect panel now takes optional Address/CIDR + Gateway + DNS fields (`config.html`/`config.js`); `utils.py::_static_ipv4` validates them with stdlib `ipaddress` (rejects malformed input / requires a prefix so nothing unsafe reaches the NM keyfile) and `update_nmconnection` writes `method=manual` when set, else DHCP as before. Default (blank) path unchanged. Needs on-Pi verification that NetworkManager applies the manual profile.
 - ~~**Proxmox / headless-VM deployment**~~ (#138): ✅ **DONE (docs)** — added `docs/INSTALL_VM.md` (set `epd_type: "mock"`, which installer steps are Pi-only). End-to-end verification on a real hypervisor still open.
 
 ## AI / learning (overlaps §4a + P-AI — keep lazy)

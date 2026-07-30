@@ -61,6 +61,11 @@ app.mount("/web", StaticFiles(directory=shared_data.webdir), name="web")
 class WifiCredentials(BaseModel):
     ssid: str
     password: str
+    # Optional static IPv4. When ip_address is set (CIDR, e.g. 192.168.1.50/24) the
+    # connection uses method=manual; left blank it stays DHCP (method=auto) as before.
+    ip_address: str = ""
+    gateway: str = ""
+    dns: str = ""
 
 
 class ManualAttackRequest(BaseModel):

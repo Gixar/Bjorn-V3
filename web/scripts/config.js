@@ -174,10 +174,14 @@ function scanWifi(update = false) {
 function connectWifi(ssid) {
     const password = prompt("Enter the password for " + ssid);
     if (!password) return;
+    // Optional static IP; blank fields → DHCP (backend defaults to method=auto).
+    const ip_address = (document.getElementById("wifi-ip")?.value || "").trim();
+    const gateway = (document.getElementById("wifi-gw")?.value || "").trim();
+    const dns = (document.getElementById("wifi-dns")?.value || "").trim();
     fetch("/connect_wifi", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ssid, password }),
+        body: JSON.stringify({ ssid, password, ip_address, gateway, dns }),
     })
         .then((r) => r.json())
         .then((data) => {

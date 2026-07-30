@@ -50,6 +50,12 @@
             <button class="close-btn" onclick="closeWifiPanel()" aria-label="Close">✖</button>
         </div>
         <ul id="wifi-list"></ul>
+        <div class="wifi-static">
+            <label>Static IP <span class="wifi-static-hint">(optional — leave blank for DHCP)</span></label>
+            <input type="text" id="wifi-ip" placeholder="Address/CIDR, e.g. 192.168.1.50/24" autocomplete="off">
+            <input type="text" id="wifi-gw" placeholder="Gateway, e.g. 192.168.1.1" autocomplete="off">
+            <input type="text" id="wifi-dns" placeholder="DNS, e.g. 1.1.1.1 8.8.8.8" autocomplete="off">
+        </div>
     </div>
 </body>
 </html>

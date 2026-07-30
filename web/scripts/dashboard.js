@@ -150,13 +150,23 @@ function getRandomColor() {
     return color;
 }
 
+function esc(s) {
+    return String(s)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+}
+
 function colorizeLine(line) {
     if (line.includes("==>") || line.includes("<==")) return null;
-    let modified = line;
+    // Escape first: log lines carry scan/target-controlled text before decoration.
+    let modified = esc(line);
 
     const regexFile = /(\w+\.py)/g;
     let match;
-    while ((match = regexFile.exec(line)) !== null) {
+    while ((match = regexFile.exec(modified)) !== null) {
         const fileName = match[1];
         if (!fileColors.has(fileName)) fileColors.set(fileName, getRandomColor());
         modified = modified.replace(
@@ -264,12 +274,12 @@ function loadManualOptions() {
 
             const ips = data.ips || [];
             ipDropdown.innerHTML = ips.length
-                ? ips.map((ip) => `<option value="${ip}">${ip}</option>`).join("")
+                ? ips.map((ip) => `<option value="${esc(ip)}">${esc(ip)}</option>`).join("")
                 : `<option value="">No live hosts</option>`;
 
             const actions = data.actions || [];
             actionDropdown.innerHTML = actions.length
-                ? actions.map((a) => `<option value="${a}">${a}</option>`).join("")
+                ? actions.map((a) => `<option value="${esc(a)}">${esc(a)}</option>`).join("")
                 : `<option value="">No actions</option>`;
 
             updatePorts();
@@ -286,7 +296,7 @@ function updatePorts() {
     if (!portDropdown) return;
     const ports = (netkbCache && netkbCache.ports && netkbCache.ports[ip]) || [];
     portDropdown.innerHTML = ports.length
-        ? ports.map((p) => `<option value="${p}">${p}</option>`).join("")
+        ? ports.map((p) => `<option value="${esc(p)}">${esc(p)}</option>`).join("")
         : `<option value="">—</option>`;
 }
 

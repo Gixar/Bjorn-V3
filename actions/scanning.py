@@ -259,22 +259,37 @@ class NetworkScanner:
             except Exception as e:
                 self.logger.error(f"Error in display_csv: {e}")
 
-    def get_network(self):
+    def get_networks(self):
         """
-        Retrieves the network information including the default gateway and subnet.
+        Retrieves the subnet of every interface that has an IPv4 address (#133).
+
+        Bjorn used to scan only the default gateway's network; a device on more than one LAN
+        (eth0 + wlan0 + usb0, etc.) never saw the others. This returns a de-duplicated list of
+        IPv4Network objects, one per interface subnet, skipping loopback and link-local. The
+        caller scans each and merges the results into a single netkb.
         """
+        networks = {}
         try:
-            gws = netifaces.gateways()
-            default_gateway = gws['default'][netifaces.AF_INET][1]
-            iface = netifaces.ifaddresses(default_gateway)[netifaces.AF_INET][0]
-            ip_address = iface['addr']
-            netmask = iface['netmask']
-            cidr = sum([bin(int(x)).count('1') for x in netmask.split('.')])
-            network = ipaddress.IPv4Network(f"{ip_address}/{cidr}", strict=False)
-            self.logger.info(f"Network: {network}")
-            return network
+            for iface in netifaces.interfaces():
+                for addr in netifaces.ifaddresses(iface).get(netifaces.AF_INET, []):
+                    ip_address = addr.get('addr')
+                    netmask = addr.get('netmask')
+                    if not ip_address or not netmask:
+                        continue
+                    if ip_address.startswith('127.') or ip_address.startswith('169.254.'):
+                        continue
+                    try:
+                        network = ipaddress.IPv4Network(f"{ip_address}/{netmask}", strict=False)
+                    except ValueError as ve:
+                        self.logger.warning(f"Skipping {iface} {ip_address}/{netmask}: {ve}")
+                        continue
+                    networks[str(network)] = network  # dedupe interfaces sharing a subnet
+            result = list(networks.values())
+            self.logger.info(f"Networks to scan: {[str(n) for n in result]}")
+            return result
         except Exception as e:
-            self.logger.error(f"Error in get_network: {e}")
+            self.logger.error(f"Error in get_networks: {e}")
+            return []
 
     def get_mac_address(self, ip, hostname):
         """
@@ -512,47 +527,47 @@ class NetworkScanner:
             self.ip_scan_blacklist = list(self.shared_data.ip_scan_blacklist) + local_ips
             if local_ips:
                 self.logger.info(f"Excluding own IPs from scan: {local_ips}")
-            network = self.get_network()
-            self.shared_data.bjornstatustext2 = str(network)
+            networks = self.get_networks()
+            if not networks:
+                self.logger.error("No scannable networks found; skipping scan.")
+                return
+            self.shared_data.bjornstatustext2 = ", ".join(str(n) for n in networks)
             portstart = self.shared_data.portstart
             portend = self.shared_data.portend
             extra_ports = self.shared_data.portlist
-            scanner = self.ScanPorts(self, network, portstart, portend, extra_ports)
-            ip_data, open_ports, all_ports, csv_result_file, netkbfile, alive_ips = scanner.start()
 
-            alive_macs = set(ip_data.mac_list)
+            # Scan every interface subnet (#133) and merge into ONE netkb write. update_netkb marks
+            # any MAC not in alive_macs as dead, so it must see the alive hosts from *all* networks
+            # at once — writing per-network would make each subnet mark the others' hosts offline.
+            combined_netkb_data = []
+            combined_alive_macs = set()
+            netkbfile = self.shared_data.netkbfile
+            for network in networks:
+                scanner = self.ScanPorts(self, network, portstart, portend, extra_ports)
+                ip_data, open_ports, all_ports, csv_result_file, _netkbfile, alive_ips = scanner.start()
 
-            table = Table(title="Scan Results", show_lines=True)
-            table.add_column("IP", style="cyan", no_wrap=True)
-            table.add_column("Hostname", style="cyan", no_wrap=True)
-            table.add_column("Alive", style="cyan", no_wrap=True)
-            table.add_column("MAC Address", style="cyan", no_wrap=True)
-            for port in all_ports:
-                table.add_column(f"{port}", style="green")
+                alive_macs = set(ip_data.mac_list)
+                combined_alive_macs |= alive_macs
 
-            netkb_data = []
-            for ip, ports, hostname, mac in zip(ip_data.ip_list, open_ports.values(), ip_data.hostname_list, ip_data.mac_list):
-                if self.blacklistcheck and (mac in self.mac_scan_blacklist or ip in self.ip_scan_blacklist):
-                    continue
-                alive = '1' if mac in alive_macs else '0'
-                row = [ip, hostname, alive, mac] + [Text(str(port), style="green bold") if port in ports else Text("", style="on red") for port in all_ports]
-                table.add_row(*row)
-                netkb_data.append([mac, ip, hostname, ports])
+                with self.lock:
+                    with open(csv_result_file, 'w', newline='') as file:
+                        writer = csv.writer(file)
+                        writer.writerow(["IP", "Hostname", "Alive", "MAC Address"] + [str(port) for port in all_ports])
+                        for ip, ports, hostname, mac in zip(ip_data.ip_list, open_ports.values(), ip_data.hostname_list, ip_data.mac_list):
+                            if self.blacklistcheck and (mac in self.mac_scan_blacklist or ip in self.ip_scan_blacklist):
+                                continue
+                            alive = '1' if mac in alive_macs else '0'
+                            writer.writerow([ip, hostname, alive, mac] + [str(port) if port in ports else '' for port in all_ports])
 
-            with self.lock:
-                with open(csv_result_file, 'w', newline='') as file:
-                    writer = csv.writer(file)
-                    writer.writerow(["IP", "Hostname", "Alive", "MAC Address"] + [str(port) for port in all_ports])
-                    for ip, ports, hostname, mac in zip(ip_data.ip_list, open_ports.values(), ip_data.hostname_list, ip_data.mac_list):
-                        if self.blacklistcheck and (mac in self.mac_scan_blacklist or ip in self.ip_scan_blacklist):
-                            continue
-                        alive = '1' if mac in alive_macs else '0'
-                        writer.writerow([ip, hostname, alive, mac] + [str(port) if port in ports else '' for port in all_ports])
+                for ip, ports, hostname, mac in zip(ip_data.ip_list, open_ports.values(), ip_data.hostname_list, ip_data.mac_list):
+                    if self.blacklistcheck and (mac in self.mac_scan_blacklist or ip in self.ip_scan_blacklist):
+                        continue
+                    combined_netkb_data.append([mac, ip, hostname, ports])
 
-            self.update_netkb(netkbfile, netkb_data, alive_macs)
+                if self.displaying_csv:
+                    self.display_csv(csv_result_file)
 
-            if self.displaying_csv:
-                self.display_csv(csv_result_file)
+            self.update_netkb(netkbfile, combined_netkb_data, combined_alive_macs)
 
             source_csv_path = self.shared_data.netkbfile
             output_csv_path = self.shared_data.livestatusfile
@@ -560,6 +575,10 @@ class NetworkScanner:
             updater = self.LiveStatusUpdater(source_csv_path, output_csv_path)
             updater.update_livestatus()
             updater.clean_scan_results(self.shared_data.scan_results_dir)
+
+            # Signal the display threads that netkb/livestatus changed (P5) so they recompute
+            # counts this cycle instead of re-parsing the CSVs on every idle refresh.
+            self.shared_data.data_generation += 1
         except Exception as e:
             self.logger.error(f"Error in scan: {e}")
 

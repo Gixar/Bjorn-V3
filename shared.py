@@ -356,6 +356,10 @@ class SharedData:
         self.levelnbr = 0
         self.networkkbnbr = 0
         self.attacksnbr = 0
+        # Bumped once per completed network scan (scanning.py). The display threads read it to
+        # skip re-parsing netkb/livestatus when nothing changed (P5). Single writer (scanner),
+        # multiple readers → no lock needed; a stale read just recomputes one extra time.
+        self.data_generation = 0
         self.show_first_image = True
 
     def delete_webconsolelog(self):

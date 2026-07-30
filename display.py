@@ -40,6 +40,11 @@ class Display:
         self.screen_reversed = self.shared_data.screen_reversed
         self.web_screen_reversed = self.shared_data.web_screen_reversed
 
+        # P5: skip re-parsing netkb/livestatus when no scan has happened since we last did.
+        # -1 forces a compute on the first tick (data_generation starts at 0).
+        self._last_shared_gen = -1
+        self._last_vuln_gen = -1
+
         # Define frise positions for different display types
         self.frise_positions = {
             "epd2in7": {
@@ -129,6 +134,12 @@ class Display:
                     self.shared_data.vulnnbr = 0
                     logger.info("Vulnerability summary file created.")
                 else:
+                    # P5: netkb/vuln_summary only change on a scan. If none happened since the last
+                    # compute, keep the cached vulnnbr and skip the full-file re-parse below.
+                    gen = self.shared_data.data_generation
+                    if gen == self._last_vuln_gen:
+                        return
+                    self._last_vuln_gen = gen
                     if os.path.exists(self.shared_data.netkbfile):
                         with open(self.shared_data.netkbfile, 'r') as file:
                             netkb_df = pd.read_csv(file)
@@ -168,13 +179,20 @@ class Display:
         """Update the shared data with the latest system information."""
         with self.semaphore:
             try:
-                with open(self.shared_data.livestatusfile, 'r') as file:
-                    livestatus_df = pd.read_csv(file)
-                    self.shared_data.portnbr = livestatus_df['Total Open Ports'].iloc[0]
-                    self.shared_data.targetnbr = livestatus_df['Alive Hosts Count'].iloc[0]
-                    self.shared_data.networkkbnbr = livestatus_df['All Known Hosts Count'].iloc[0]
-                    self.shared_data.vulnnbr = livestatus_df['Vulnerabilities Count'].iloc[0]
+                # P5: the livestatus counts only change on a scan. Re-read them only when a scan
+                # has bumped data_generation; otherwise keep the cached values on shared_data.
+                gen = self.shared_data.data_generation
+                if gen != self._last_shared_gen:
+                    self._last_shared_gen = gen
+                    with open(self.shared_data.livestatusfile, 'r') as file:
+                        livestatus_df = pd.read_csv(file)
+                        self.shared_data.portnbr = livestatus_df['Total Open Ports'].iloc[0]
+                        self.shared_data.targetnbr = livestatus_df['Alive Hosts Count'].iloc[0]
+                        self.shared_data.networkkbnbr = livestatus_df['All Known Hosts Count'].iloc[0]
+                        self.shared_data.vulnnbr = livestatus_df['Vulnerabilities Count'].iloc[0]
 
+                # Cracked creds / loot / zombies / attacks change from actions, not scans, so these
+                # cheap filesystem counts stay per-tick (not gated on data_generation).
                 crackedpw_files = glob.glob(f"{self.shared_data.crackedpwddir}/*.csv")
 
                 total_passwords = 0

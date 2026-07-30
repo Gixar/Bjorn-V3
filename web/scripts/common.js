@@ -1,19 +1,24 @@
 /* common.js — shared navigation, toasts, and helpers for Bjorn web UI */
 
+const STATS_SVG = `<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+  <path d="M4 20V10M12 20V4M20 20v-7" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>`;
+
+const LOGS_SVG = `<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+  <path d="M4 6h16M4 12h16M4 18h10" stroke-linecap="round"/>
+</svg>`;
+
 const BJORN_NAV = [
     { href: "/index.html", label: "Home", icon: "/web/images/console_icon.png", match: ["/", "/index.html"] },
-    { href: "/stats.html", label: "Stats", icon: null, svg: true, match: ["/stats.html"] },
+    { href: "/stats.html", label: "Stats", svg: STATS_SVG, match: ["/stats.html"] },
     { href: "/network.html", label: "Network", icon: "/web/images/network_icon.png", match: ["/network.html"] },
     { href: "/netkb.html", label: "NetKB", icon: "/web/images/netkb_icon.png", match: ["/netkb.html"] },
     { href: "/credentials.html", label: "Creds", icon: "/web/images/cred_icon.png", match: ["/credentials.html"] },
     { href: "/loot.html", label: "Loot", icon: "/web/images/loot_icon.png", match: ["/loot.html"] },
     { href: "/config.html", label: "Config", icon: "/web/images/config_icon.png", match: ["/config.html"] },
     { href: "/bjorn.html", label: "Screen", icon: "/web/images/bjorn_icon.png", match: ["/bjorn.html"] },
+    { href: "/logs.html", label: "Logs", svg: LOGS_SVG, match: ["/logs.html"] },
 ];
-
-const STATS_SVG = `<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-  <path d="M4 20V10M12 20V4M20 20v-7" stroke-linecap="round" stroke-linejoin="round"/>
-</svg>`;
 
 function currentPath() {
     let p = window.location.pathname || "/";
@@ -39,7 +44,7 @@ function renderNav(extraStatusHtml = "") {
     const links = BJORN_NAV.map((item) => {
         const active = isActive(item) ? " active" : "";
         const icon = item.svg
-            ? STATS_SVG
+            ? item.svg
             : `<img src="${item.icon}" alt="">`;
         return `<a class="nav-link${active}" href="${item.href}" title="${item.label}">
             ${icon}
@@ -55,6 +60,70 @@ function renderNav(extraStatusHtml = "") {
         <div class="topnav-links">${links}</div>
         <div class="topnav-status" id="topnav-status">${extraStatusHtml}</div>
     `;
+}
+
+// ---------------------------------------------------------------------------
+// Log console rendering (shared by the home dashboard and the Logs page).
+// Log lines carry scan/target-controlled text, so escape before decorating.
+// ---------------------------------------------------------------------------
+const LOG_LEVEL_CLASSES = {
+    DEBUG: "debug", INFO: "info", WARNING: "warning",
+    ERROR: "error", CRITICAL: "critical", SUCCESS: "success",
+};
+const _logFileColors = new Map();
+
+/** HTML-escape untrusted text before it touches innerHTML. */
+function escHtml(s) {
+    return String(s)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+}
+
+function _logRandomColor() {
+    const letters = "89ABCDEF";
+    let color = "#";
+    for (let i = 0; i < 6; i++) color += letters[Math.floor(Math.random() * letters.length)];
+    return color;
+}
+
+/** Escape a raw log line, then decorate filenames/levels/numbers. Returns null to skip. */
+function colorizeLogLine(line) {
+    if (line.includes("==>") || line.includes("<==")) return null;
+    let modified = escHtml(line);
+
+    const regexFile = /(\w+\.py)/g;
+    let match;
+    while ((match = regexFile.exec(modified)) !== null) {
+        const fileName = match[1];
+        if (!_logFileColors.has(fileName)) _logFileColors.set(fileName, _logRandomColor());
+        modified = modified.replace(
+            fileName,
+            `<span style="color:${_logFileColors.get(fileName)}">${fileName}</span>`
+        );
+    }
+
+    modified = modified.replace(/\b(DEBUG|INFO|WARNING|ERROR|CRITICAL|SUCCESS)\b/g, (m) =>
+        `<span class="${LOG_LEVEL_CLASSES[m]}">${m}</span>`
+    );
+    modified = modified.replace(/^\d+/, (m) => `<span class="line-number">${m}</span>`);
+    modified = modified.replace(/\b\d+\b/g, (m) => `<span class="number">${m}</span>`);
+    return modified;
+}
+
+/** Render raw /get_logs text into an element, keeping at most maxLines, auto-scrolled. */
+function renderLogsInto(el, text, maxLines) {
+    const colored = [];
+    text.split("\n").forEach((line) => {
+        const c = colorizeLogLine(line);
+        if (c !== null) colored.push(c);
+    });
+    let all = colored;
+    if (maxLines && all.length > maxLines) all = all.slice(all.length - maxLines);
+    el.innerHTML = all.join("<br>") + "<br>";
+    el.scrollTop = el.scrollHeight;
 }
 
 /** Simple toast notifications (replaces alert() for non-blocking feedback). */

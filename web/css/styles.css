@@ -602,6 +602,9 @@ input:checked + .slider:before { transform: translateX(20px); }
     white-space: pre-wrap;
     word-break: break-word;
 }
+/* Dedicated Logs page: use the viewport instead of the small dashboard box. */
+.log-console-full { max-height: none; height: calc(100vh - 220px); min-height: 320px; }
+
 .log-console .debug { color: #9a9a9a; }
 .log-console .info { color: #5b9bd5; }
 .log-console .warning { color: var(--warning); }

@@ -6,15 +6,6 @@ const STAT_KEYS = [
     "targets", "open_ports",
 ];
 
-const levelClasses = {
-    DEBUG: "debug",
-    INFO: "info",
-    WARNING: "warning",
-    ERROR: "error",
-    CRITICAL: "critical",
-    SUCCESS: "success",
-};
-
 let fontSize = /Mobi|Android/i.test(navigator.userAgent) ? 11 : 12.5;
 let logInterval = null;
 let isConsoleOn = false;
@@ -24,7 +15,6 @@ let wsRetryCount = 0;
 let pollTimer = null;
 let manualOpen = false;
 let netkbCache = null;
-const fileColors = new Map();
 const maxLines = 1500;
 
 // ---------------------------------------------------------------------------
@@ -141,64 +131,14 @@ function startEpdLiveview(delayMs) {
 }
 
 // ---------------------------------------------------------------------------
-// Console
+// Console (rendering lives in common.js: colorizeLogLine / renderLogsInto)
 // ---------------------------------------------------------------------------
-function getRandomColor() {
-    const letters = "89ABCDEF";
-    let color = "#";
-    for (let i = 0; i < 6; i++) color += letters[Math.floor(Math.random() * letters.length)];
-    return color;
-}
-
-function esc(s) {
-    return String(s)
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;")
-        .replace(/'/g, "&#39;");
-}
-
-function colorizeLine(line) {
-    if (line.includes("==>") || line.includes("<==")) return null;
-    // Escape first: log lines carry scan/target-controlled text before decoration.
-    let modified = esc(line);
-
-    const regexFile = /(\w+\.py)/g;
-    let match;
-    while ((match = regexFile.exec(modified)) !== null) {
-        const fileName = match[1];
-        if (!fileColors.has(fileName)) fileColors.set(fileName, getRandomColor());
-        modified = modified.replace(
-            fileName,
-            `<span style="color:${fileColors.get(fileName)}">${fileName}</span>`
-        );
-    }
-
-    modified = modified.replace(/\b(DEBUG|INFO|WARNING|ERROR|CRITICAL|SUCCESS)\b/g, (m) =>
-        `<span class="${levelClasses[m]}">${m}</span>`
-    );
-    modified = modified.replace(/^\d+/, (m) => `<span class="line-number">${m}</span>`);
-    modified = modified.replace(/\b\d+\b/g, (m) => `<span class="number">${m}</span>`);
-    return modified;
-}
-
 function fetchLogs() {
     fetch("/get_logs")
         .then((r) => r.text())
         .then((data) => {
-            const lines = data.split("\n");
-            const colored = [];
-            lines.forEach((line) => {
-                const c = colorizeLine(line);
-                if (c !== null) colored.push(c);
-            });
             const logConsole = document.getElementById("log-console");
-            if (!logConsole) return;
-            let all = colored;
-            if (all.length > maxLines) all = all.slice(all.length - maxLines);
-            logConsole.innerHTML = all.join("<br>") + "<br>";
-            logConsole.scrollTop = logConsole.scrollHeight;
+            if (logConsole) renderLogsInto(logConsole, data, maxLines);
         })
         .catch((e) => console.error("fetch logs", e));
 }
@@ -274,12 +214,12 @@ function loadManualOptions() {
 
             const ips = data.ips || [];
             ipDropdown.innerHTML = ips.length
-                ? ips.map((ip) => `<option value="${esc(ip)}">${esc(ip)}</option>`).join("")
+                ? ips.map((ip) => `<option value="${escHtml(ip)}">${escHtml(ip)}</option>`).join("")
                 : `<option value="">No live hosts</option>`;
 
             const actions = data.actions || [];
             actionDropdown.innerHTML = actions.length
-                ? actions.map((a) => `<option value="${esc(a)}">${esc(a)}</option>`).join("")
+                ? actions.map((a) => `<option value="${escHtml(a)}">${escHtml(a)}</option>`).join("")
                 : `<option value="">No actions</option>`;
 
             updatePorts();
@@ -296,7 +236,7 @@ function updatePorts() {
     if (!portDropdown) return;
     const ports = (netkbCache && netkbCache.ports && netkbCache.ports[ip]) || [];
     portDropdown.innerHTML = ports.length
-        ? ports.map((p) => `<option value="${esc(p)}">${esc(p)}</option>`).join("")
+        ? ports.map((p) => `<option value="${escHtml(p)}">${escHtml(p)}</option>`).join("")
         : `<option value="">—</option>`;
 }
 

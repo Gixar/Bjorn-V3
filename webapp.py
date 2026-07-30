@@ -76,6 +76,7 @@ _PAGES = {
     "index", "config", "actions", "network", "netkb",
     "bjorn", "loot", "credentials",
     "stats",  # new — live stats dashboard
+    "logs",   # new — dedicated log viewer
 }
 
 

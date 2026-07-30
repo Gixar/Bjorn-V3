@@ -30,9 +30,9 @@ Already fixed this cycle (see `CHANGELOG.md`): #16 port hopping, #147 installer 
 - **Waveshare 2.13" B/C tri-color** (#166): add `resources/waveshare_epd/epd2in13bc.py` from the vendor driver, then an `epd2in13bc` case in `shared.py::initialize_epd_display` and `KNOWN_EPD_TYPES` in `config_validation.py`. Needs the vendor driver + the actual panel to verify.
 
 ## Quality-of-life
-- **In-WebUI log viewer** (from `BjornCocaine`): a "LOGS" tab. `/get_logs` already exists (`webapp.py` → `serve_logs`); add a `logs.html` page + nav link. Pairs with our run-reports. Small-ish, WebUI-only to verify.
+- ~~**In-WebUI log viewer**~~ (from `BjornCocaine`): ✅ **DONE** — added `web/logs.html` + `web/scripts/logs.js` + a "Logs" nav entry (`common.js`) + `logs` in `_PAGES` (`webapp.py`). The colorize/escape renderer was extracted to `common.js` (`colorizeLogLine`/`renderLogsInto`) and shared with the home console. WebUI-only; re-check rendering on the Pi.
 - **Static IP assignment** (#26, done upstream): port their dhcpcd/NetworkManager static-IP config + a WebUI toggle.
-- **Proxmox / headless-VM deployment** (#138): our `epd_type: "mock"` already makes headless runs feasible — this is mostly a docs page (`docs/INSTALL_VM.md`) + confirming the installer's Pi-only steps are skippable.
+- ~~**Proxmox / headless-VM deployment**~~ (#138): ✅ **DONE (docs)** — added `docs/INSTALL_VM.md` (set `epd_type: "mock"`, which installer steps are Pi-only). End-to-end verification on a real hypervisor still open.
 
 ## AI / learning (overlaps §4a + P-AI — keep lazy)
 - **Anonymized mission-data export** (the `infinition/Bjorn-cortex` framing): our run-reports already do the redacted-export half. Adopting Cortex's `.csv.gz` shape would make us swarm-compatible later **without** committing to the heavy VPS/TensorFlow stack. YAGNI until there's a Cortex to feed — revisit only if we join a swarm.

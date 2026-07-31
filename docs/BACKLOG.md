@@ -23,11 +23,15 @@ Already fixed this cycle (see `CHANGELOG.md`): #16 port hopping, #147 installer 
 ## New capabilities (extend the offensive/recon surface — feeds P3-1 module contract)
 - **wpa-sec / Pwnagotchi network import** (from `LOCOSP/BjornWpaSecHarvester`): pull cracked Wi-Fi creds from wpa-sec.stanev.org, dedupe, inject via `nmcli`. Pre-populates known creds instead of blind brute-force. New standalone action; needs network + `nmcli`.
 - ~~**Scan all network interfaces**~~ (#133): ✅ **DONE** — `get_network()` → `get_networks()` returns one IPv4Network per interface subnet (all AF_INET addrs, deduped, loopback/link-local skipped). `scan()` loops every subnet and **accumulates** hosts into a single `update_netkb` write with the union of alive MACs — writing per-network would make each subnet mark the others' hosts dead. Dropped the dead (never-printed) `table` builder while there. Needs a multi-interface host to verify end-to-end.
-- **BadUSB / HID mode** (#129): the installer already sets up a USB gadget (`configure_usb_gadget`); add an HID keyboard profile + a payload runner as a standalone action. Larger; hardware-only.
 - **SNMP enumeration** and **HTTP service fingerprinting**: new recon modules against the P3-1 `b_class/b_module/b_port/execute()` contract (HTTP fingerprint is already the PRD's P3-5 example).
 
 ## Hardware / display
-- **Waveshare 2.13" B/C tri-color** (#166): add `resources/waveshare_epd/epd2in13bc.py` from the vendor driver, then an `epd2in13bc` case in `shared.py::initialize_epd_display` and `KNOWN_EPD_TYPES` in `config_validation.py`. Needs the vendor driver + the actual panel to verify.
+- **Waveshare 2.13" B/C tri-color** (#166) — **deferred (YAGNI, single panel for now).** Only the
+  default 2.13" V4 panel is in use, so multi-panel support isn't needed yet. Revisit when a
+  tri-color (or other) panel is actually on hand — the change is small: add
+  `resources/waveshare_epd/epd2in13bc.py` from the vendor driver, an `epd2in13bc` case in
+  `shared.py::initialize_epd_display`, and the type to `KNOWN_EPD_TYPES` in `config_validation.py`.
+  Needs the vendor driver + the actual panel to verify.
 
 ## Quality-of-life
 - ~~**In-WebUI log viewer**~~ (from `BjornCocaine`): ✅ **DONE** — added `web/logs.html` + `web/scripts/logs.js` + a "Logs" nav entry (`common.js`) + `logs` in `_PAGES` (`webapp.py`). The colorize/escape renderer was extracted to `common.js` (`colorizeLogLine`/`renderLogsInto`) and shared with the home console. WebUI-only; re-check rendering on the Pi.
@@ -57,7 +61,6 @@ netkb writes + `TimeoutStopSec`; opt-in `battery.py` PiSugar monitor + low-charg
 `/run` heartbeat + systemd watchdog restart). Deferred:
 
 - **PG-5 — plugin system** (lifecycle + UI + web hooks): widen the P3-1 module contract from attack-modules-only to features generally (folded into P3-1 scope, not separate work).
-- **PG-6 — GPS tagging of findings**: stretch (Bjorn is LAN-stationary); cheap only if a GPS is attached.
 
 ## Reference forks
 - `HackCocaine/BjornCocaine` — screen-agnostic WebUI-first, LOGS button, multi-Pi.

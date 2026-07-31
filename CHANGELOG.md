@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+> These changes are **merged and pushed to `main`** but **not yet part of a tagged release**
+> (the latest tag is `v2.4.2-alpha`). Most are sandbox / `py_compile` / TestClient-checked, not
+> hardware-verified — see the README's Pi-gated note for the split.
+
 ### Added
 - **Opt-in RustScan port discovery** (backlog #12) — new `use_rustscan` config toggle (default
   `false`, so existing installs are unchanged). When on **and** the `rustscan` binary is present,

@@ -18,7 +18,7 @@ Bjorn is a « Tamagotchi like » sophisticated, autonomous network scanning, 
 
 ## 🆕 What's New in v2 (this fork)
 
-This is a modernized fork of [infinition/Bjorn](https://github.com/infinition/Bjorn), currently at tag **`v2.4.2-alpha`** with an unreleased tranche on top (RustScan, USB-gadget fix — see [Latest](#latest-unreleased-this-fork) below). It keeps the full offensive tool unchanged and adds a "runs today + safe to change" baseline. Full detail is in [`CHANGELOG.md`](CHANGELOG.md); the roadmap is in [`docs/PRD.md`](docs/PRD.md) and community ideas/bugs in [`docs/BACKLOG.md`](docs/BACKLOG.md).
+This is a modernized fork of [infinition/Bjorn](https://github.com/infinition/Bjorn), currently at tag **`v2.4.2-alpha`**, with a further tranche of work already merged to `main` but **not yet tagged** (RustScan, USB-gadget fix — see [Latest](#latest-unreleased-this-fork) below). It keeps the full offensive tool unchanged and adds a "runs today + safe to change" baseline. Full detail is in [`CHANGELOG.md`](CHANGELOG.md); the roadmap is in [`docs/PRD.md`](docs/PRD.md) and community ideas/bugs in [`docs/BACKLOG.md`](docs/BACKLOG.md).
 
 > **Note:** `v2.4.2-alpha` is the latest tag. Much of the Pi-facing work — the scan-engine rewrite, RustScan, `auto` display detection, the FastAPI web rewrite, and the USB-gadget fix — has been sandbox / `py_compile` / TestClient-checked but **not yet verified on real hardware**. See the [Pi-gated note](#pi-gated) at the end of this section for the split.
 
@@ -61,7 +61,7 @@ This is a modernized fork of [infinition/Bjorn](https://github.com/infinition/Bj
 - **All existing routes** (Wi-Fi scan/connect, backup/restore, manual attack execution, config save/load, log streaming, credentials/loot browsing, system reboot/shutdown) were ported 1:1 in behavior — verified with FastAPI's TestClient against every route plus the WebSocket, but not yet run on a real Pi, so treat this the same as the other Pi-gated items below until it's been through an actual boot and browser session.
 
 <a id="latest-unreleased-this-fork"></a>
-**Latest (unreleased, this fork):**
+**Latest (merged to `main`, not yet tagged — mostly hardware-unverified):**
 - **Optional RustScan port discovery** (backlog #12) — `use_rustscan` toggle (web config switch, off by default) swaps the discovery pass to [RustScan](https://github.com/RustScan/RustScan) when the binary is present; nmap still does service/version detail, and it auto-falls-back to nmap if RustScan is missing or fails, so a scan is never lost. The installer provisions the prebuilt binary on arm64/amd64; `rustscan_batch_size` tunes the socket batch for the Pi Zero 2 W. Compare both engines from the CLI (`python actions/scanning.py --benchmark`) or the web config **Benchmark button** — timings land in `data/scan_engine_benchmark.csv`.
 - **Scan all interface subnets** (#133) — scans every interface's subnet (eth0 + wlan0 + usb0 …), not just the default gateway's, merged into one netkb write.
 - **USB gadget `usb0` gets an IP** (#68, *needs on-Pi verification*) — the gadget setup was a three-way conflict (legacy `g_ether` racing the configfs gadget for the USB controller; three network managers fighting over `usb0`; no address handed to the connected host). Rewritten to one coherent stack — dwc2-only, `systemd-networkd` owning `usb0` with a static IP **and** a DHCP server for the host, NetworkManager set to leave it alone — so plugging the Pi into a laptop reaches the web UI at `http://172.20.2.1:8000/`.

@@ -13,6 +13,20 @@ _stubs.install()
 from actions.scanning import NetworkScanner  # noqa: E402
 
 parse = NetworkScanner._parse_rustscan_greppable
+build_cmd = NetworkScanner._rustscan_cmd
+
+
+def test_cmd_omits_batch_flag_by_default():
+    cmd = build_cmd(["10.0.0.5"], [22, 80], 0)
+    assert "-b" not in cmd
+    assert cmd[:5] == ["rustscan", "-a", "10.0.0.5", "-p", "22,80"]
+    assert "-g" in cmd and "--no-config" in cmd
+
+
+def test_cmd_adds_batch_flag_when_set():
+    cmd = build_cmd(["10.0.0.5", "10.0.0.6"], [22], 300)
+    assert cmd[-2:] == ["-b", "300"]
+    assert cmd[2] == "10.0.0.5,10.0.0.6"  # -a takes comma-joined hosts
 
 
 def test_parses_ports_per_host():

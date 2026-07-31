@@ -366,11 +366,9 @@ class NetworkScanner:
         """Discovery-only RustScan pass over the same hosts/ports. Greppable mode (-g) prints
         'IP -> [p1,p2]' and skips RustScan's built-in nmap hand-off, so this is pure port
         discovery — service/version detail still comes from nmap later, same as the nmap path.
-        Returns {ip: [open ports]}, or None so discover_ports() falls back to nmap on any failure.
-        # ponytail: default RustScan batch size; add a `-b <n>` config knob only if the Zero 2 W's
-        # fd limit turns out to drop ports (RustScan's documented failure mode). Tune on-device."""
-        port_arg = ','.join(str(p) for p in ports_to_scan)
-        cmd = ["rustscan", "-a", ','.join(ip_list), "-p", port_arg, "-g", "--no-config"]
+        Returns {ip: [open ports]}, or None so discover_ports() falls back to nmap on any failure."""
+        batch = getattr(self.shared_data, "rustscan_batch_size", 0)
+        cmd = self._rustscan_cmd(ip_list, ports_to_scan, batch)
         try:
             proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
         except Exception as e:
@@ -380,6 +378,18 @@ class NetworkScanner:
             self.logger.warning(f"rustscan exited {proc.returncode}: {proc.stderr.strip()[:200]}")
             return None
         return self._parse_rustscan_greppable(proc.stdout, ip_list)
+
+    @staticmethod
+    def _rustscan_cmd(ip_list, ports_to_scan, batch_size=0):
+        """Build the RustScan argv. batch_size > 0 sets `-b <n>` (RustScan's ulimit-bound socket
+        batch); 0 leaves RustScan's own adaptive default. On a Pi Zero 2 W a too-large batch
+        silently drops ports (RustScan's documented failure mode), so this is the on-device tuning
+        knob — start with the default, lower it if the benchmark shows missed ports."""
+        port_arg = ','.join(str(p) for p in ports_to_scan)
+        cmd = ["rustscan", "-a", ','.join(ip_list), "-p", port_arg, "-g", "--no-config"]
+        if batch_size and batch_size > 0:
+            cmd += ["-b", str(batch_size)]
+        return cmd
 
     @staticmethod
     def _parse_rustscan_greppable(output, ip_list):

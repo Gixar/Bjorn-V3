@@ -74,9 +74,10 @@ netkb writes + `TimeoutStopSec`; opt-in `battery.py` PiSugar monitor + low-charg
   now provisions the official prebuilt binary into `/usr/local/bin` on arm64/amd64 (non-fatal;
   32-bit armv7 → `cargo install rustscan` manually). Benchmark test mode
   (`python actions/scanning.py --benchmark`) times both engines on the same target into
-  `data/scan_engine_benchmark.csv`. **Still open:** on-device batch-size tuning against the Zero 2 W's
-  fd limit (add a `-b` knob if it drops ports) before considering making RustScan the default.
-  Original note kept below for the tuning rationale.
+  `data/scan_engine_benchmark.csv`. The `rustscan_batch_size` config key (0 = RustScan default)
+  now wires `-b <n>` into the command for on-device tuning. **Still open:** pick the actual batch
+  value on a real Zero 2 W (run the web Benchmark button, lower `rustscan_batch_size` if ports drop)
+  before considering making RustScan the default. Original note kept below for the tuning rationale.
   - **RustScan for full-port discovery** — replace/augment the 2.2.0-alpha `nmap -sT`
   sweep with RustScan for the initial port-discovery pass: it scans all 65,535 ports
   in ~3s via adaptive-batched async sockets (vs. the curated `portlist`/`portstart`-

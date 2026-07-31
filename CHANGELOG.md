@@ -9,8 +9,9 @@
   does the service/version detail afterward, so it's a discovery-stage swap, not a pipeline
   rewrite. Falls back to nmap automatically if the binary is missing (logs a warning) or if a
   RustScan run fails mid-scan, so a scan is never lost. Renders as a switch on the web config page
-  for free. `# ponytail`: uses RustScan's default batch size — add a `-b` knob only if the Zero 2 W
-  drops ports. The installer (`install_bjorn.sh`) provisions the RustScan binary automatically:
+  for free. New `rustscan_batch_size` config key (0 = RustScan's adaptive default) wires `-b <n>`
+  into the command so the socket batch can be tuned down on a Pi Zero 2 W if a too-large batch
+  drops ports (RustScan's documented failure mode). The installer (`install_bjorn.sh`) provisions the RustScan binary automatically:
   it drops the official prebuilt static binary into `/usr/local/bin` for arm64 (64-bit Raspberry
   Pi OS) / amd64 — no Rust toolchain, no on-Pi compile — and is non-fatal (32-bit armv7 and any
   download failure just leave Bjorn on nmap). `--dry-run` reports whether rustscan is present.

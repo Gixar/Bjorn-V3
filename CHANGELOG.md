@@ -23,6 +23,37 @@
   making RustScan the default. Also runnable from the web config page: a **"Benchmark" button**
   (`POST /run_benchmark` runs it in a background thread; `GET /benchmark_results` returns recent
   rows) that toasts the measured speedup when the run finishes.
+- **Scan all interface subnets** (#133) — `get_networks()` returns one `IPv4Network` per interface
+  subnet (all `AF_INET` addrs, deduped, loopback/link-local skipped) instead of only the default
+  gateway's network, so a host on more than one LAN (eth0 + wlan0 + usb0 …) is finally seen. `scan()`
+  loops every subnet and **accumulates** alive hosts into a single `update_netkb` write with the
+  union of alive MACs (per-network writes would make each subnet mark the others' hosts dead).
+- **In-WebUI Logs page** (from `BjornCocaine`) — `web/logs.html` + `web/scripts/logs.js` + a "Logs"
+  nav entry and `logs` in `webapp.py`'s `_PAGES`. The colorize/escape renderer was extracted to
+  `common.js` and shared with the home console.
+- **Static IP assignment** (#26) — the Wi-Fi connect panel now takes optional Address/CIDR + Gateway
+  + DNS fields; `utils.py::_static_ipv4` validates them with stdlib `ipaddress` (rejects malformed
+  input / requires a prefix), and the NM keyfile is written `method=manual` when set, else DHCP as
+  before. Blank (default) path unchanged.
+
+### Changed (performance — Pi Zero; PRD §10, passes P1–P5 + L3)
+- **P1 — brute-force thread count is config-driven.** The SSH/Telnet/SQL/SMB/FTP/RDP connectors no
+  longer hardcode 40 threads; new `bruteforce_threads` key (0 = auto → `min(8, cpu*4)`), validated
+  non-negative.
+- **P2 — `pandas` off the hot import path.** Removed the module-top `import pandas` from all 10
+  action files. The 6 connectors + `display.py` now use stdlib `csv` (via shared `netkb_targets` /
+  `append_csv_rows` / `dedupe_csv` helpers); `scanning.py`, `nmap_vuln_scanner.py`, and
+  `steal_data_sql.py` **lazy-import** pandas only in the methods that need it, so a run that never
+  vuln-scans or SQL-steals never loads it.
+- **P3 — batched netkb writes.** `execute_action`/`execute_standalone_action` and the vuln loop no
+  longer call `write_data` per action; `run()` batches to one `netkb.csv` write per cycle branch.
+  Trade-off: mid-cycle results are lost on a crash (actions just re-run next cycle).
+- **P4 — dropped a duplicate action loop** that `run()` ran inline after `process_alive_ips()`.
+- **P5 — change-gated display recomputes.** A `data_generation` counter bumps once per completed
+  scan; the display threads re-parse netkb/livestatus only when it changes (safe fallback: if the
+  counter never bumps, they recompute as before).
+- **L3 — optional vuln-scan steps.** New `vuln_scan_sv` and `vuln_scan_vulners` bools (default True)
+  make `-sV` and the internet-dependent `vulners.nse` optional in the nmap vuln scan.
 
 ### Fixed
 - **USB gadget `usb0` now actually gets an IP** (#68) — *needs on-Pi verification.*

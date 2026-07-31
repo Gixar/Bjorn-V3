@@ -126,6 +126,16 @@ def get_web_delay():
     return JSONResponse({"web_delay": shared_data.web_delay})
 
 
+@app.post("/run_benchmark")
+def run_benchmark():
+    return web_utils.run_benchmark()
+
+
+@app.get("/benchmark_results")
+def benchmark_results():
+    return web_utils.benchmark_results()
+
+
 # ---------------------------------------------------------------------------
 # Wi-Fi
 # ---------------------------------------------------------------------------

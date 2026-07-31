@@ -120,6 +120,50 @@ function loadConfig() {
         .catch((e) => console.error("load config", e));
 }
 
+// Run the nmap-vs-RustScan scan-engine benchmark, then poll for the result row it appends and
+// toast the speedup. The backend runs it in a background thread (two discovery passes), so this
+// can take a minute or two on a Pi.
+function runBenchmark() {
+    fetch("/benchmark_results")
+        .then((r) => r.json())
+        .then((data) => {
+            const baseline = (data.results || []).length; // detect the new row this run adds
+            return fetch("/run_benchmark", { method: "POST" })
+                .then((r) => r.json())
+                .then((d) => {
+                    if (d.status === "error") throw new Error(d.message);
+                    if (typeof toast === "function") toast(d.message || "Benchmark started", "info");
+                    pollBenchmark(baseline, Date.now());
+                });
+        })
+        .catch((e) => {
+            if (typeof toast === "function") toast(e.message || "Benchmark failed to start", "error");
+        });
+}
+
+function pollBenchmark(baseline, startedAt) {
+    if (Date.now() - startedAt > 5 * 60 * 1000) {
+        if (typeof toast === "function") toast("Benchmark timed out — see data/scan_engine_benchmark.csv", "error");
+        return;
+    }
+    fetch("/benchmark_results")
+        .then((r) => r.json())
+        .then((data) => {
+            const rows = data.results || [];
+            if (rows.length > baseline) {
+                const r = rows[rows.length - 1];
+                const nmap = r["nmap Seconds"], rust = r["rustscan Seconds"], sp = r["Speedup (nmap/rustscan)"];
+                const msg = sp
+                    ? `nmap ${nmap}s vs RustScan ${rust}s — ${sp}× faster (${r.Hosts} hosts)`
+                    : `nmap ${nmap}s · RustScan: ${rust || "skipped (not installed)"}`;
+                if (typeof toast === "function") toast(msg, "success");
+            } else {
+                setTimeout(() => pollBenchmark(baseline, startedAt), 4000);
+            }
+        })
+        .catch(() => setTimeout(() => pollBenchmark(baseline, startedAt), 4000));
+}
+
 let wifiIntervalId;
 
 function toggleWifiPanel() {

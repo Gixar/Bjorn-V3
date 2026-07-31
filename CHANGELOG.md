@@ -19,7 +19,9 @@
   times each, and appends the result (host/port counts, per-engine seconds, speedup) to
   `data/scan_engine_benchmark.csv`. Diagnostic only — does not touch `netkb`/`livestatus`; skips
   RustScan with a note if it isn't installed. Use it to tune the batch size on real hardware before
-  making RustScan the default.
+  making RustScan the default. Also runnable from the web config page: a **"Benchmark" button**
+  (`POST /run_benchmark` runs it in a background thread; `GET /benchmark_results` returns recent
+  rows) that toasts the measured speedup when the run finishes.
 
 ### Fixed
 - **Stale `config_validation` test fixture** — `_good_config()` was missing `vuln_scan_sv`,

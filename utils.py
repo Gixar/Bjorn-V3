@@ -19,6 +19,7 @@ import subprocess
 import os
 import csv
 import ipaddress
+import threading
 import zipfile
 import uuid
 import importlib
@@ -126,6 +127,51 @@ class WebUtils:
             "wifi_connected": getattr(sd, "wifi_connected", False),
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
+
+    # ------------------------------------------------------------------
+    # Scan-engine benchmark (nmap vs RustScan) — POST /run_benchmark, GET /benchmark_results
+    # ------------------------------------------------------------------
+    def run_benchmark(self):
+        """Start NetworkScanner.benchmark_scan_engines() in a background thread (it runs two full
+        discovery passes, so it must not block the HTTP request). Results append to
+        data/scan_engine_benchmark.csv. Guarded so two runs can't overlap."""
+        if getattr(self.shared_data, "benchmark_running", False):
+            return _err("A benchmark is already running.", status_code=409)
+        try:
+            self.load_actions()  # loads self.network_scanner (idempotent)
+        except Exception as e:
+            return _err(e)
+        scanner = getattr(self, "network_scanner", None)
+        if scanner is None:
+            return _err("Network scanner is not loaded")
+
+        def _run():
+            self.shared_data.benchmark_running = True
+            try:
+                scanner.benchmark_scan_engines()
+            except Exception as e:
+                self.logger.error(f"Benchmark failed: {e}")
+            finally:
+                self.shared_data.benchmark_running = False
+
+        threading.Thread(target=_run, daemon=True).start()
+        return _ok(message="Benchmark started — running nmap vs RustScan on the current network.")
+
+    def benchmark_results(self, limit=10):
+        """Return the most recent benchmark rows (from data/scan_engine_benchmark.csv) plus whether
+        a run is currently in progress — the config page polls this to show the result when done."""
+        path = os.path.join(self.shared_data.datadir, "scan_engine_benchmark.csv")
+        rows = []
+        try:
+            if os.path.exists(path):
+                with open(path, newline="") as f:
+                    rows = list(csv.DictReader(f))
+        except Exception as e:
+            return _err(e)
+        return JSONResponse({
+            "running": getattr(self.shared_data, "benchmark_running", False),
+            "results": rows[-limit:],
+        })
 
     def serve_netkb_data_json(self):
         try:

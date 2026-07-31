@@ -276,8 +276,9 @@ install_dependencies() {
 }
 
 # Install RustScan (optional — port-discovery speedup, off by default via the use_rustscan config
-# toggle). Not in apt; drop the official prebuilt static binary into /usr/local/bin — no Rust
-# toolchain, no compile on the Pi. Non-fatal: any failure just leaves Bjorn on nmap.
+# toggle). Not in apt. On 64-bit ARM / amd64 we drop the official prebuilt static binary into
+# /usr/local/bin (no Rust toolchain, no compile). RustScan ships no 32-bit ARM binary, so there we
+# compile from crates.io with cargo instead. Non-fatal: any failure just leaves Bjorn on nmap.
 # Bump RUSTSCAN_VERSION to match a newer release: https://github.com/RustScan/RustScan/releases
 RUSTSCAN_VERSION="2.4.1"
 install_rustscan() {
@@ -293,8 +294,12 @@ install_rustscan() {
     case "$arch" in
         aarch64|arm64) asset="aarch64-linux-rustscan.zip" ;;          # 64-bit Raspberry Pi OS
         x86_64|amd64)  asset="x86_64-linux-rustscan.tar.gz.zip" ;;    # dev box
+        armv7l|armv6l|armhf)                                          # 32-bit Pi OS — no prebuilt
+            install_rustscan_from_source
+            return 0
+            ;;
         *)
-            log "WARNING" "No prebuilt RustScan for '$arch' (e.g. 32-bit armv7). Skipping — run 'cargo install rustscan' to add it manually. Bjorn uses nmap until then."
+            log "WARNING" "No prebuilt RustScan for '$arch'. Skipping — run 'cargo install rustscan' to add it manually. Bjorn uses nmap until then."
             return 0
             ;;
     esac
@@ -320,6 +325,26 @@ install_rustscan() {
         log "WARNING" "RustScan download failed (${url}). Skipping — Bjorn uses nmap. Install manually later if wanted."
     fi
     rm -rf "$tmpdir"
+}
+
+# Compile RustScan from crates.io on architectures with no prebuilt binary (32-bit ARM).
+# Uses apt's Rust toolchain; --locked builds against RustScan's pinned Cargo.lock so old
+# transitive deps don't demand a newer compiler. Slow (~10-20 min on a Pi) but one-time.
+# ponytail: apt's cargo can still be too old for the pinned deps — if the build fails, install
+#   rustup (a current toolchain) and re-run 'cargo install rustscan --root /usr/local'.
+install_rustscan_from_source() {
+    log "INFO" "No prebuilt RustScan for 32-bit ARM — compiling from source with cargo (slow, one-time)..."
+    if ! command -v cargo >/dev/null 2>&1; then
+        apt-get install -y cargo build-essential || {
+            log "WARNING" "Could not install cargo — skipping RustScan. Bjorn uses nmap."
+            return 0
+        }
+    fi
+    if cargo install rustscan --version "${RUSTSCAN_VERSION}" --locked --root /usr/local; then
+        log "SUCCESS" "Compiled and installed RustScan to /usr/local/bin/rustscan"
+    else
+        log "WARNING" "RustScan compile failed (apt's Rust may be too old). Skipping — Bjorn uses nmap. To add it: install rustup, then 'cargo install rustscan --root /usr/local'."
+    fi
 }
 
 # Configure system limits
@@ -782,7 +807,7 @@ dry_run() {
     if command -v rustscan >/dev/null 2>&1; then
         echo "  tool rustscan: found (optional — enables use_rustscan)"
     else
-        echo "  tool rustscan: not installed (optional — installer adds the prebuilt binary on arm64/amd64)"
+        echo "  tool rustscan: not installed (optional — installer adds the prebuilt binary on arm64/amd64, compiles from source on 32-bit ARM)"
     fi
     echo
     echo "Full install would run these steps (as root):"

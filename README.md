@@ -34,6 +34,7 @@ This is a modernized fork of [infinition/Bjorn](https://github.com/infinition/Bj
 - **Manual-attack 404** (upstream #130/#81, most-upvoted open bug) — the web UI fetched a nonexistent `/recent_logs` after an attack; fixed to `/get_logs`.
 - **Web server port hopping** (#16) — the server now rebinds `:8000` on restart (SO_REUSEADDR) instead of drifting to `:8001`.
 - **Installer resilience** (#147) — a package removed on newer Debian (e.g. `libatlas-base-dev` on trixie) no longer aborts the whole install; the e-Paper option prompt count was fixed (#152).
+- **USB gadget `usb0` gets an IP** (#68, *needs on-Pi verification*) — the gadget setup was a three-way conflict (legacy `g_ether` racing the configfs gadget for the USB controller; three network managers fighting over `usb0`; and no address ever handed to the connected host). Rewritten to one coherent stack — dwc2-only, `systemd-networkd` owning `usb0` with a static IP **and** a DHCP server for the host, NetworkManager set to leave it alone — so plugging the Pi into a laptop reaches the web UI at `http://172.20.2.1:8000/`.
 
 **Performance — Pi Zero focus (2.2.0-alpha, not yet hardware-benchmarked):**
 - **nmap-based scan engine** — port scanning now runs as one `nmap -sT` process instead of a Python socket thread per host×port (was throttled by a 200-thread semaphore); each host's MAC is read from the `nmap -sn` result instead of a per-host 5×2 s ARP retry loop; fixed scan `sleep()`s removed. See [`docs/PRD.md`](docs/PRD.md) §10.
@@ -56,7 +57,7 @@ This is a modernized fork of [infinition/Bjorn](https://github.com/infinition/Bj
 - **Security fix**: no more unmatched-path fallback to SimpleHTTPRequestHandler's default do_GET. The old handler fell through to serving files relative to the process's working directory for any unmatched request — since Bjorn runs from inside the repo root, an unmatched request like GET /shared_config.json would have been served directly. The new router has no such fallback: unmatched paths 404, and only web/ (css/js/images) is reachable as static content.
 - **All existing routes** (Wi-Fi scan/connect, backup/restore, manual attack execution, config save/load, log streaming, credentials/loot browsing, system reboot/shutdown) were ported 1:1 in behavior — verified with FastAPI's TestClient against every route plus the WebSocket, but not yet run on a real Pi, so treat this the same as the other Pi-gated items below until it's been through an actual boot and browser session.
 
-> **Pi-gated (not yet verified on hardware):** dependency version refresh, real e-Paper render, a full installer run, **the 2.2.0-alpha scan-engine rewrite**, and the **2.3.0-alpha `auto` display detection** (all need a real Pi + LAN). See the CHANGELOG for the split between what's verified and what awaits the Pi.
+> **Pi-gated (not yet verified on hardware):** dependency version refresh, real e-Paper render, a full installer run, **the 2.2.0-alpha scan-engine rewrite**, the **2.3.0-alpha `auto` display detection**, and the **#68 USB-gadget `usb0` fix** (all need a real Pi + LAN/host). See the CHANGELOG for the split between what's verified and what awaits the Pi.
 
 ## 📚 Table of Contents
 

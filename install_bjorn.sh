@@ -482,14 +482,25 @@ EOF
 }
 
 # Configure USB Gadget
+# NEEDS ON-PI VERIFICATION (bug #68): this rewrite is a coherent single-stack fix (dwc2-only
+# gadget + systemd-networkd address & host DHCP + NetworkManager unmanaged), but every failure
+# mode lives in kernel USB-gadget bring-up and which network manager wins — none reproducible off
+# a real Pi. Verify on hardware: plug the Pi into a host, confirm usb0 gets 172.20.2.1, the host
+# leases 172.20.2.10-30, and http://172.20.2.1:8000/ loads. Touches boot files (cmdline/config.txt).
 configure_usb_gadget() {
     log "INFO" "Configuring USB Gadget..."
 
-    # Modify cmdline.txt
-    sed -i 's/rootwait/rootwait modules-load=dwc2,g_ether/' /boot/firmware/cmdline.txt
+    # cmdline.txt: load dwc2 only. NOT g_ether — the legacy g_ether gadget grabs the UDC at
+    # boot, so the configfs/libcomposite gadget below can't bind it ("Device or resource busy").
+    # That race was a primary cause of bug #68 (usb0 never coming up / no IP). Idempotent, and
+    # strips g_ether if a previous (broken) install added it.
+    sed -i 's/modules-load=dwc2,g_ether/modules-load=dwc2/' /boot/firmware/cmdline.txt
+    if ! grep -q "modules-load=dwc2" /boot/firmware/cmdline.txt; then
+        sed -i 's/rootwait/rootwait modules-load=dwc2/' /boot/firmware/cmdline.txt
+    fi
 
-    # Modify config.txt
-    echo "dtoverlay=dwc2" >> /boot/firmware/config.txt
+    # config.txt: enable the dwc2 overlay (idempotent — don't append twice on a re-run).
+    grep -q "^dtoverlay=dwc2" /boot/firmware/config.txt || echo "dtoverlay=dwc2" >> /boot/firmware/config.txt
 
     # Create USB gadget script
     cat > /usr/local/bin/usb-gadget.sh << 'EOF'
@@ -534,11 +545,9 @@ while ! ls /sys/class/udc > UDC 2>/dev/null; do
     sleep 1
 done
 
-if ! ip addr show usb0 | grep -q "172.20.2.1"; then
-    ifconfig usb0 172.20.2.1 netmask 255.255.255.0
-else
-    echo "Interface usb0 already configured."
-fi
+# Addressing is owned by systemd-networkd (/etc/systemd/network/10-usb0.network), NOT here.
+# The old imperative `ifconfig usb0 172.20.2.1` raced whatever network manager was active and
+# left usb0 unaddressed (bug #68); it also never gave the *host* an address at all.
 EOF
 
     chmod +x /usr/local/bin/usb-gadget.sh
@@ -559,21 +568,41 @@ RemainAfterExit=yes
 WantedBy=multi-user.target
 EOF
 
-    # Configure network interface
-    cat >> /etc/network/interfaces << EOF
+    # ONE network manager owns usb0. On Bookworm the main manager is NetworkManager (not
+    # ifupdown/systemd-networkd), so the old /etc/network/interfaces stanza was ignored and the
+    # bare `systemctl enable systemd-networkd` had no matching .network file — usb0 stayed
+    # unaddressed (bug #68). Instead: give usb0 to systemd-networkd with an explicit .network
+    # (static IP for the Pi + a built-in DHCP server so the *host* gets an address), and tell
+    # NetworkManager to leave usb0 alone so it can't clobber that.
+    mkdir -p /etc/systemd/network
+    cat > /etc/systemd/network/10-usb0.network << EOF
+[Match]
+Name=usb0
 
-allow-hotplug usb0
-iface usb0 inet static
-    address 172.20.2.1
-    netmask 255.255.255.0
+[Network]
+Address=172.20.2.1/24
+DHCPServer=yes
+
+[DHCPServer]
+PoolOffset=10
+PoolSize=20
+EmitDNS=no
 EOF
 
-    # Enable and start services
+    mkdir -p /etc/NetworkManager/conf.d
+    cat > /etc/NetworkManager/conf.d/99-usb0-unmanaged.conf << EOF
+[keyfile]
+unmanaged-devices=interface-name:usb0
+EOF
+
+    # Enable and start services (networkd owns usb0's address + host DHCP; usb-gadget builds the
+    # gadget). NetworkManager reload is best-effort — it may not be running during install.
     systemctl daemon-reload
     systemctl enable systemd-networkd
     systemctl enable usb-gadget
     systemctl start systemd-networkd
     systemctl start usb-gadget
+    systemctl reload NetworkManager 2>/dev/null || true
 
     check_success "USB Gadget configuration completed"
 }

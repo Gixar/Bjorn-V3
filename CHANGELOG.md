@@ -25,6 +25,17 @@
   rows) that toasts the measured speedup when the run finishes.
 
 ### Fixed
+- **USB gadget `usb0` now actually gets an IP** (#68) — *needs on-Pi verification.*
+  `configure_usb_gadget` was a three-way conflict: `cmdline.txt` loaded the legacy `g_ether`
+  gadget **and** the script built a configfs/`libcomposite` gadget (g_ether grabbed the UDC first
+  → "Device or resource busy"); the Pi's address was set imperatively with `ifconfig` while three
+  managers (ifupdown `/etc/network/interfaces`, `systemd-networkd` with no `.network` file, and
+  Bookworm's actual NetworkManager) fought over `usb0`; and **nothing gave the connected host an
+  address at all**. Rewritten to one coherent stack: dwc2-only (no g_ether), `systemd-networkd`
+  owns `usb0` via `/etc/systemd/network/10-usb0.network` (static `172.20.2.1/24` + a built-in
+  `DHCPServer` that leases the host `172.20.2.10-30`), and NetworkManager is told to leave `usb0`
+  unmanaged. cmdline/config.txt edits are now idempotent. Boot-file changes + kernel gadget
+  bring-up mean this can only be confirmed on real hardware.
 - **Stale `config_validation` test fixture** — `_good_config()` was missing `vuln_scan_sv`,
   `vuln_scan_vulners`, and `bruteforce_threads` (added to the validator earlier), so the suite
   failed; fixture updated (and now includes `use_rustscan`).

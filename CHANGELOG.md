@@ -2,7 +2,28 @@
 
 ## [Unreleased]
 
+### Added
+- **Opt-in RustScan port discovery** (backlog #12) — new `use_rustscan` config toggle (default
+  `false`, so existing installs are unchanged). When on **and** the `rustscan` binary is present,
+  the port-discovery stage runs RustScan (`-g` greppable mode) instead of `nmap -sT`; nmap still
+  does the service/version detail afterward, so it's a discovery-stage swap, not a pipeline
+  rewrite. Falls back to nmap automatically if the binary is missing (logs a warning) or if a
+  RustScan run fails mid-scan, so a scan is never lost. Renders as a switch on the web config page
+  for free. `# ponytail`: uses RustScan's default batch size — add a `-b` knob only if the Zero 2 W
+  drops ports.
+- **Scan-engine benchmark ("test mode")** — `python actions/scanning.py --benchmark` discovers the
+  live hosts once, then runs the *same* port scan through both nmap and RustScan back-to-back,
+  times each, and appends the result (host/port counts, per-engine seconds, speedup) to
+  `data/scan_engine_benchmark.csv`. Diagnostic only — does not touch `netkb`/`livestatus`; skips
+  RustScan with a note if it isn't installed. Use it to tune the batch size on real hardware before
+  making RustScan the default.
+
 ### Fixed
+- **Stale `config_validation` test fixture** — `_good_config()` was missing `vuln_scan_sv`,
+  `vuln_scan_vulners`, and `bruteforce_threads` (added to the validator earlier), so the suite
+  failed; fixture updated (and now includes `use_rustscan`).
+
+### Fixed (pre-existing)
 - **Manual attack with `NmapVulnScanner` no longer 500s** ("Action class NmapVulnScanner not
   found"). The manual-attack handler only searched `self.actions`, but the vuln scanner is loaded
   separately (`self.nmap_vuln_scanner`) and has a different `execute(ip, row, status_key)`

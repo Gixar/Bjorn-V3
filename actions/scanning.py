@@ -3,6 +3,8 @@
 # The results are saved to CSV files and displayed using Rich for enhanced visualization.
 
 import os
+import shutil
+import subprocess
 import threading
 import csv
 import netifaces
@@ -312,6 +314,92 @@ class NetworkScanner:
     # (Removed the socket-based PortScanner: a thread-per-port scanner throttled by a
     # 200-thread semaphore. Replaced by a single nmap port scan in ScanPorts.start() — L1.)
 
+    def selected_engine(self):
+        """Which port-discovery engine to use: 'rustscan' only if opted in AND the binary is
+        present, else 'nmap'. Warn (once per scan) when opted in but rustscan isn't installed so
+        an existing install that flips the toggle without provisioning the binary isn't silent."""
+        if getattr(self.shared_data, "use_rustscan", False):
+            if shutil.which("rustscan"):
+                return "rustscan"
+            self.logger.warning("use_rustscan is on but the 'rustscan' binary was not found; using nmap.")
+        return "nmap"
+
+    def discover_ports(self, ip_list, ports_to_scan, engine):
+        """Return {ip: [open ports]} for ip_list, using the named engine. If rustscan is asked for
+        but fails at runtime, fall back to nmap so a scan is never lost to a flaky discovery pass."""
+        if engine == "rustscan":
+            result = self._rustscan_discovery(ip_list, ports_to_scan)
+            if result is not None:
+                return result
+            self.logger.warning("rustscan discovery failed; falling back to nmap.")
+        return self._nmap_discovery(ip_list, ports_to_scan)
+
+    def _nmap_discovery(self, ip_list, ports_to_scan):
+        """L1: a single nmap TCP-connect scan over all alive hosts. One C process, light on a Pi
+        Zero. -sT needs no root; timing follows the configured nmap_scan_aggressivity."""
+        open_ports = {ip: [] for ip in ip_list}
+        port_arg = ','.join(str(p) for p in ports_to_scan)
+        nm = self.nm
+        try:
+            nm.scan(
+                hosts=' '.join(ip_list),
+                ports=port_arg,
+                arguments='-sT ' + self.shared_data.nmap_scan_aggressivity,
+            )
+            for ip in ip_list:
+                if ip in nm.all_hosts():
+                    for proto in nm[ip].all_protocols():
+                        for port, info in nm[ip][proto].items():
+                            if info.get('state') == 'open':
+                                open_ports[ip].append(int(port))
+        except Exception as e:
+            # Most commonly this is nmap being killed mid-scan (service restart) — python-nmap
+            # then fails to parse the truncated XML and its str(e) is a wall of raw XML. Log a
+            # concise WARNING (existing port data is preserved; the next scan retries) and keep
+            # the raw detail at debug only.
+            self.logger.warning("nmap port scan did not complete this cycle "
+                                "(interrupted or nmap parse error); keeping existing port data.")
+            self.logger.debug(f"nmap port scan error detail: {str(e)[:300]}")
+        return open_ports
+
+    def _rustscan_discovery(self, ip_list, ports_to_scan):
+        """Discovery-only RustScan pass over the same hosts/ports. Greppable mode (-g) prints
+        'IP -> [p1,p2]' and skips RustScan's built-in nmap hand-off, so this is pure port
+        discovery — service/version detail still comes from nmap later, same as the nmap path.
+        Returns {ip: [open ports]}, or None so discover_ports() falls back to nmap on any failure.
+        # ponytail: default RustScan batch size; add a `-b <n>` config knob only if the Zero 2 W's
+        # fd limit turns out to drop ports (RustScan's documented failure mode). Tune on-device."""
+        port_arg = ','.join(str(p) for p in ports_to_scan)
+        cmd = ["rustscan", "-a", ','.join(ip_list), "-p", port_arg, "-g", "--no-config"]
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        except Exception as e:
+            self.logger.warning(f"rustscan invocation failed: {e}")
+            return None
+        if proc.returncode != 0:
+            self.logger.warning(f"rustscan exited {proc.returncode}: {proc.stderr.strip()[:200]}")
+            return None
+        return self._parse_rustscan_greppable(proc.stdout, ip_list)
+
+    @staticmethod
+    def _parse_rustscan_greppable(output, ip_list):
+        """Parse RustScan greppable lines ('IP -> [80,443]') into {ip: [open ports]}. Pure/testable.
+        Every ip_list host is present in the result (empty list if it had no open ports)."""
+        open_ports = {ip: [] for ip in ip_list}
+        wanted = set(ip_list)
+        for line in output.splitlines():
+            if "->" not in line:
+                continue
+            ip_part, _, ports_part = line.partition("->")
+            ip = ip_part.strip()
+            if ip not in wanted:
+                continue
+            for p in ports_part.strip().strip("[]").split(","):
+                p = p.strip()
+                if p.isdigit():
+                    open_ports[ip].append(int(p))
+        return open_ports
+
     class ScanPorts:
         """
         Helper class to manage the overall port scanning process for a network.
@@ -396,33 +484,12 @@ class NetworkScanner:
             self.ip_data = self.outer_instance.GetIpFromCsv(self.outer_instance, self.csv_scan_file)
             self.open_ports = {ip: [] for ip in self.ip_data.ip_list}
 
-            # L1: a single nmap TCP-connect scan over all alive hosts, instead of a Python socket
-            # thread per (host, port). One C process, far lighter on a Pi Zero. -sT needs no root;
-            # timing follows the configured nmap_scan_aggressivity.
+            # Port discovery over all alive hosts via the selected engine (nmap -sT by default,
+            # RustScan when use_rustscan is on and installed — see NetworkScanner.discover_ports).
             if self.ip_data.ip_list:
                 ports_to_scan = sorted(set(list(range(self.portstart, self.portend)) + list(self.extra_ports)))
-                port_arg = ','.join(str(p) for p in ports_to_scan)
-                nm = self.outer_instance.nm
-                try:
-                    nm.scan(
-                        hosts=' '.join(self.ip_data.ip_list),
-                        ports=port_arg,
-                        arguments='-sT ' + self.outer_instance.shared_data.nmap_scan_aggressivity,
-                    )
-                    for ip in self.ip_data.ip_list:
-                        if ip in nm.all_hosts():
-                            for proto in nm[ip].all_protocols():
-                                for port, info in nm[ip][proto].items():
-                                    if info.get('state') == 'open':
-                                        self.open_ports[ip].append(int(port))
-                except Exception as e:
-                    # Most commonly this is nmap being killed mid-scan (service restart) — python-nmap
-                    # then fails to parse the truncated XML and its str(e) is a wall of raw XML. Log a
-                    # concise WARNING (existing port data is preserved; the next scan retries) and keep
-                    # the raw detail at debug only.
-                    self.logger.warning("nmap port scan did not complete this cycle "
-                                        "(interrupted or nmap parse error); keeping existing port data.")
-                    self.logger.debug(f"nmap port scan error detail: {str(e)[:300]}")
+                engine = self.outer_instance.selected_engine()
+                self.open_ports = self.outer_instance.discover_ports(self.ip_data.ip_list, ports_to_scan, engine)
 
             self.all_ports = sorted(list(set(port for ports in self.open_ports.values() for port in ports)))
             alive_ips = set(self.ip_data.ip_list)
@@ -583,6 +650,87 @@ class NetworkScanner:
         except Exception as e:
             self.logger.error(f"Error in scan: {e}")
 
+    def benchmark_scan_engines(self):
+        """Test mode: run the SAME port-discovery scan (same live hosts, same ports) through both
+        nmap and RustScan back-to-back, time each, and append the result to a benchmark CSV in the
+        data dir. Diagnostic only — does not touch netkb/livestatus. Skips RustScan (records a
+        note) if the binary isn't installed. Returns the results dict."""
+        self.shared_data.bjornorch_status = "NetworkScanner"
+        self.logger.info("Starting scan-engine benchmark (nmap vs rustscan)")
+        local_ips = self.get_local_ips()
+        self.ip_scan_blacklist = list(self.shared_data.ip_scan_blacklist) + local_ips
+        networks = self.get_networks()
+        if not networks:
+            self.logger.error("No scannable networks found; skipping benchmark.")
+            return None
+
+        portstart = self.shared_data.portstart
+        portend = self.shared_data.portend
+        extra_ports = self.shared_data.portlist
+        ports_to_scan = sorted(set(list(range(portstart, portend)) + list(extra_ports)))
+
+        # Discover the live hosts once — both engines then scan this identical target list.
+        ip_list = []
+        for network in networks:
+            sp = self.ScanPorts(self, network, portstart, portend, extra_ports)
+            sp.scan_network_and_write_to_csv()
+            ip_list.extend(self.GetIpFromCsv(self, sp.csv_scan_file).ip_list)
+        ip_list = sorted(set(ip_list), key=self.ip_key)
+        if not ip_list:
+            self.logger.error("Benchmark found no live hosts; nothing to scan.")
+            return None
+
+        results = {}  # engine -> {"seconds": float, "open_port_count": int} or {"skipped": reason}
+        for engine, fn in (("nmap", self._nmap_discovery), ("rustscan", self._rustscan_discovery)):
+            if engine == "rustscan" and not shutil.which("rustscan"):
+                results[engine] = {"skipped": "binary not installed"}
+                self.logger.warning("Benchmark: rustscan not installed — skipping its pass.")
+                continue
+            t0 = time.perf_counter()
+            open_ports = fn(ip_list, ports_to_scan)
+            elapsed = time.perf_counter() - t0
+            if open_ports is None:  # rustscan runtime failure
+                results[engine] = {"skipped": "run failed"}
+                continue
+            results[engine] = {
+                "seconds": round(elapsed, 3),
+                "open_port_count": sum(len(p) for p in open_ports.values()),
+            }
+            self.logger.info(f"Benchmark {engine}: {results[engine]['seconds']}s, "
+                             f"{results[engine]['open_port_count']} open ports over {len(ip_list)} hosts")
+
+        self._write_benchmark_results(len(ip_list), len(ports_to_scan), results)
+        return results
+
+    def _write_benchmark_results(self, host_count, port_count, results):
+        """Append one benchmark row to data/scan_engine_benchmark.csv (created with a header on
+        first run). History accumulates so repeated runs / batch tuning can be compared."""
+        def cell(engine, field):
+            r = results.get(engine, {})
+            return r.get(field, r.get("skipped", ""))
+
+        nmap_s = results.get("nmap", {}).get("seconds")
+        rust_s = results.get("rustscan", {}).get("seconds")
+        speedup = round(nmap_s / rust_s, 2) if (nmap_s and rust_s) else ""
+
+        path = os.path.join(self.shared_data.datadir, "scan_engine_benchmark.csv")
+        header = ["Timestamp", "Hosts", "Ports Scanned", "nmap Seconds", "rustscan Seconds",
+                  "Speedup (nmap/rustscan)", "nmap Open Ports", "rustscan Open Ports"]
+        row = [self.get_current_timestamp(), host_count, port_count,
+               cell("nmap", "seconds"), cell("rustscan", "seconds"), speedup,
+               cell("nmap", "open_port_count"), cell("rustscan", "open_port_count")]
+        try:
+            with self.lock:
+                new_file = not os.path.exists(path)
+                with open(path, "a", newline="") as f:
+                    writer = csv.writer(f)
+                    if new_file:
+                        writer.writerow(header)
+                    writer.writerow(row)
+            self.logger.info(f"Benchmark results appended to {path}")
+        except Exception as e:
+            self.logger.error(f"Error writing benchmark results: {e}")
+
     def start(self):
         """
         Starts the scanner in a separate thread.
@@ -604,6 +752,10 @@ class NetworkScanner:
             logger.info("NetworkScanner stopped.")
 
 if __name__ == "__main__":
+    import sys
     shared_data = SharedData()
     scanner = NetworkScanner(shared_data)
-    scanner.scan()
+    if "--benchmark" in sys.argv:
+        scanner.benchmark_scan_engines()  # test mode: nmap vs rustscan, results in data/scan_engine_benchmark.csv
+    else:
+        scanner.scan()

@@ -38,6 +38,7 @@ This is a modernized fork of [infinition/Bjorn](https://github.com/infinition/Bj
 **Performance — Pi Zero focus (2.2.0-alpha, not yet hardware-benchmarked):**
 - **nmap-based scan engine** — port scanning now runs as one `nmap -sT` process instead of a Python socket thread per host×port (was throttled by a 200-thread semaphore); each host's MAC is read from the `nmap -sn` result instead of a per-host 5×2 s ARP retry loop; fixed scan `sleep()`s removed. See [`docs/PRD.md`](docs/PRD.md) §10.
 - **`nmcli` Wi-Fi scan** — replaces the deprecated `iwlist wlan0 scan`.
+- **Optional RustScan port discovery** — set `"use_rustscan": true` (web config toggle, off by default) to run the discovery pass through [RustScan](https://github.com/RustScan/RustScan) instead of `nmap -sT` when the `rustscan` binary is installed; nmap still handles service/version detail, and it falls back to nmap automatically if RustScan is missing or fails. Benchmark both on your hardware first with `python actions/scanning.py --benchmark` (writes per-engine timings to `data/scan_engine_benchmark.csv`).
 
 **Display robustness (2.3.0-alpha):**
 - **`epd_type: "auto"`** — Bjorn tries the known Waveshare drivers in order and boots on the first that initializes, so a wrong/absent driver no longer stops it. (Idea from Pwnagotchi's multi-display support — see PRD §11.) It selects by driver *init*, so it can't tell a V3 panel from a V4; if the screen still shows nothing, run `sudo python3 scripts/epd_test.py --all` to see which driver actually renders, then set that exact `epd_type`.

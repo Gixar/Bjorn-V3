@@ -31,11 +31,36 @@ def install():
         progress = types.ModuleType("rich.progress")
         for cls in ("Progress", "BarColumn", "TextColumn", "SpinnerColumn"):
             setattr(progress, cls, type(cls, (), {"__init__": lambda self, *a, **k: None}))
+        table = types.ModuleType("rich.table")
+        table.Table = type("Table", (), {"__init__": lambda self, *a, **k: None})
+        text = types.ModuleType("rich.text")
+        text.Text = type("Text", (), {"__init__": lambda self, *a, **k: None})
         rich.console = console
         rich.progress = progress
+        rich.table = table
+        rich.text = text
         sys.modules["rich"] = rich
         sys.modules["rich.console"] = console
         sys.modules["rich.progress"] = progress
+        sys.modules["rich.table"] = table
+        sys.modules["rich.text"] = text
+
+    if "netifaces" not in sys.modules:
+        netifaces = types.ModuleType("netifaces")
+        netifaces.AF_INET = 2
+        netifaces.interfaces = lambda: []
+        netifaces.ifaddresses = lambda _iface: {}
+        sys.modules["netifaces"] = netifaces
+
+    if "getmac" not in sys.modules:
+        getmac = types.ModuleType("getmac")
+        getmac.get_mac_address = lambda *a, **k: None
+        sys.modules["getmac"] = getmac
+
+    if "nmap" not in sys.modules:
+        nmap = types.ModuleType("nmap")
+        nmap.PortScanner = type("PortScanner", (), {"__init__": lambda self, *a, **k: None})
+        sys.modules["nmap"] = nmap
 
     if "shared" not in sys.modules:
         shared = types.ModuleType("shared")

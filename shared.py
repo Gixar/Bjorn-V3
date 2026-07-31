@@ -161,6 +161,7 @@ class SharedData:
             "steal_file_extensions": [".bjorn",".hack",".flag"],
             
             "__title_network__": "Network",
+            "use_rustscan": False,       # port discovery via RustScan (fast) instead of nmap -sT; falls back to nmap if the binary is missing
             "nmap_scan_aggressivity": "-T2",
             "vuln_scan_sv": True,        # include nmap -sV (service/version detection) in the vuln scan
             "vuln_scan_vulners": True,   # run the vulners.nse CVE script (internet-dependent, heaviest step)

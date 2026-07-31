@@ -67,6 +67,16 @@ netkb writes + `TimeoutStopSec`; opt-in `battery.py` PiSugar monitor + low-charg
 
 ## Future changes ideas.
 
+  - ~~**RustScan for full-port discovery**~~ — ✅ **DONE (opt-in, off by default)** — added the
+  `use_rustscan` config toggle: when on and the `rustscan` binary is present, the discovery pass
+  runs RustScan (`-g` greppable) instead of `nmap -sT`, with nmap still doing service detail;
+  falls back to nmap automatically if the binary is missing or a run fails. `install_bjorn.sh`
+  now provisions the official prebuilt binary into `/usr/local/bin` on arm64/amd64 (non-fatal;
+  32-bit armv7 → `cargo install rustscan` manually). Benchmark test mode
+  (`python actions/scanning.py --benchmark`) times both engines on the same target into
+  `data/scan_engine_benchmark.csv`. **Still open:** on-device batch-size tuning against the Zero 2 W's
+  fd limit (add a `-b` knob if it drops ports) before considering making RustScan the default.
+  Original note kept below for the tuning rationale.
   - **RustScan for full-port discovery** — replace/augment the 2.2.0-alpha `nmap -sT`
   sweep with RustScan for the initial port-discovery pass: it scans all 65,535 ports
   in ~3s via adaptive-batched async sockets (vs. the curated `portlist`/`portstart`-

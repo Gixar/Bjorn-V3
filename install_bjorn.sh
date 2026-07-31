@@ -267,7 +267,59 @@ install_dependencies() {
     
     # Update nmap scripts
     nmap --script-updatedb
+
+    # Optional faster port-discovery engine (backlog #12). Off by default (use_rustscan config
+    # toggle); Bjorn falls back to nmap when it's absent, so this never aborts the install.
+    install_rustscan
+
     check_success "Dependencies installation completed"
+}
+
+# Install RustScan (optional — port-discovery speedup, off by default via the use_rustscan config
+# toggle). Not in apt; drop the official prebuilt static binary into /usr/local/bin — no Rust
+# toolchain, no compile on the Pi. Non-fatal: any failure just leaves Bjorn on nmap.
+# Bump RUSTSCAN_VERSION to match a newer release: https://github.com/RustScan/RustScan/releases
+RUSTSCAN_VERSION="2.4.1"
+install_rustscan() {
+    log "INFO" "Installing RustScan ${RUSTSCAN_VERSION} (optional — off by default; Bjorn uses nmap without it)..."
+
+    if command -v rustscan >/dev/null 2>&1; then
+        log "SUCCESS" "RustScan already installed ($(command -v rustscan))"
+        return 0
+    fi
+
+    local arch asset
+    arch="$(uname -m)"
+    case "$arch" in
+        aarch64|arm64) asset="aarch64-linux-rustscan.zip" ;;          # 64-bit Raspberry Pi OS
+        x86_64|amd64)  asset="x86_64-linux-rustscan.tar.gz.zip" ;;    # dev box
+        *)
+            log "WARNING" "No prebuilt RustScan for '$arch' (e.g. 32-bit armv7). Skipping — run 'cargo install rustscan' to add it manually. Bjorn uses nmap until then."
+            return 0
+            ;;
+    esac
+
+    local url="https://github.com/RustScan/RustScan/releases/download/${RUSTSCAN_VERSION}/${asset}"
+    local tmpdir bin inner_tgz
+    tmpdir="$(mktemp -d)"
+
+    if wget -qO "$tmpdir/rustscan.zip" "$url"; then
+        # Extract with python3 (always present) so we don't add an 'unzip' apt dependency.
+        python3 -m zipfile -e "$tmpdir/rustscan.zip" "$tmpdir/" 2>/dev/null
+        # The x86_64 asset wraps a .tar.gz inside the .zip; the aarch64 asset is the raw binary.
+        inner_tgz="$(find "$tmpdir" -name '*.tar.gz' | head -1)"
+        [ -n "$inner_tgz" ] && tar -xzf "$inner_tgz" -C "$tmpdir"
+        bin="$(find "$tmpdir" -type f -name rustscan | head -1)"
+        if [ -n "$bin" ]; then
+            install -m 0755 "$bin" /usr/local/bin/rustscan
+            log "SUCCESS" "Installed RustScan to /usr/local/bin/rustscan"
+        else
+            log "WARNING" "RustScan archive had no 'rustscan' binary — skipping. Bjorn uses nmap."
+        fi
+    else
+        log "WARNING" "RustScan download failed (${url}). Skipping — Bjorn uses nmap. Install manually later if wanted."
+    fi
+    rm -rf "$tmpdir"
 }
 
 # Configure system limits
@@ -698,10 +750,15 @@ dry_run() {
             echo "  tool $tool: MISSING"
         fi
     done
+    if command -v rustscan >/dev/null 2>&1; then
+        echo "  tool rustscan: found (optional — enables use_rustscan)"
+    else
+        echo "  tool rustscan: not installed (optional — installer adds the prebuilt binary on arm64/amd64)"
+    fi
     echo
     echo "Full install would run these steps (as root):"
     echo "  1. Check system compatibility"
-    echo "  2. Install system dependencies (apt-get)"
+    echo "  2. Install system dependencies (apt-get) + optional RustScan binary"
     echo "  3. Configure system limits"
     echo "  4. Configure interfaces"
     echo "  5. Set up BJORN (${BJORN_PATH})"

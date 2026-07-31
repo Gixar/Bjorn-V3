@@ -10,7 +10,10 @@
   rewrite. Falls back to nmap automatically if the binary is missing (logs a warning) or if a
   RustScan run fails mid-scan, so a scan is never lost. Renders as a switch on the web config page
   for free. `# ponytail`: uses RustScan's default batch size — add a `-b` knob only if the Zero 2 W
-  drops ports.
+  drops ports. The installer (`install_bjorn.sh`) provisions the RustScan binary automatically:
+  it drops the official prebuilt static binary into `/usr/local/bin` for arm64 (64-bit Raspberry
+  Pi OS) / amd64 — no Rust toolchain, no on-Pi compile — and is non-fatal (32-bit armv7 and any
+  download failure just leave Bjorn on nmap). `--dry-run` reports whether rustscan is present.
 - **Scan-engine benchmark ("test mode")** — `python actions/scanning.py --benchmark` discovers the
   live hosts once, then runs the *same* port scan through both nmap and RustScan back-to-back,
   times each, and appends the result (host/port counts, per-engine seconds, speedup) to

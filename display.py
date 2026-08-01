@@ -291,7 +291,13 @@ class Display:
             result = subprocess.Popen(['ip', 'neigh', 'show', 'dev', 'usb0'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             output, error = result.communicate()
             if result.returncode != 0:
-                logger.error(f"Error executing 'ip neigh show dev usb0': {error}")
+                # usb0 simply not existing (no gadget up / nothing plugged in) is the normal
+                # not-connected state, not an error — it was logging ERROR every ~25s (505 lines
+                # in one log pull). Only genuinely unexpected stderr stays at ERROR.
+                if 'Cannot find device' in (error or ''):
+                    logger.debug("usb0 not present (gadget down / nothing connected); treating as not connected.")
+                else:
+                    logger.error(f"Error executing 'ip neigh show dev usb0': {error}")
                 return False
             return bool(output.strip())
         except Exception as e:

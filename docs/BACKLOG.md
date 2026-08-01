@@ -33,9 +33,12 @@ collapsing to 4 distinct issues.
    idling Ns until next scan.") and the idle loop just sleeps; dropped the per-second WARNING, the
    ANSI write, and the now-unused `import sys`. This was the **likely root cause of the `logs.html`
    freeze** — the log file no longer balloons.
-2. **[P2] `usb0` "Cannot find device" — 505 errors** — `display.py` `ip neigh show dev usb0` fails
-   every ~25s. **Already tracked as #68** (fix written, awaiting on-Pi verify) — these logs confirm
-   the #68 fix is **not yet deployed on this Pi**. Action: deploy + verify #68, or the errors persist.
+2. ~~**[P2] `usb0` "Cannot find device" — 505 errors**~~ — ✅ **FIXED** — `display.py::is_usb_connected`
+   logged ERROR every ~25s whenever `ip neigh show dev usb0` failed, but a missing `usb0` (gadget
+   down / nothing plugged in) is the **normal not-connected state**, not an error — it produced all
+   505 errors in the log pull. Now the "Cannot find device" case logs at **DEBUG** and returns
+   `False` (not connected); only genuinely unexpected stderr stays at ERROR. Independent of #68
+   (the gadget-config fix) — even with usb0 configured, an unplugged device shouldn't spam ERROR.
 3. **[P3] `use_rustscan: True` but the `rustscan` binary is missing on the Pi** — `scanning.py`
    warns `"the 'rustscan' binary was not found; using nmap"` each scan, and the benchmark logs
    `"Benchmark: rustscan not installed — skipping its pass"` (nmap-only: 56.2s / 8 hosts). Blocks the

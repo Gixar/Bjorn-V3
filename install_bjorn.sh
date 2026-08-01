@@ -283,7 +283,11 @@ install_dependencies() {
 # Bump RUSTSCAN_VERSION to match a newer release: https://github.com/RustScan/RustScan/releases
 # When you bump it, rebuild the armv7 binary and re-upload it to the RUSTSCAN_ARMHF_URL release.
 RUSTSCAN_VERSION="2.4.1"
-# Self-hosted armv7 (32-bit) RustScan binary — compiled once, attached to a Bjorn-v2 release.
+# Self-hosted armv7 (32-bit) RustScan binary — compiled once, attached to a GitHub release.
+# ponytail: this points at the PRIVATE Gixar/Bjorn-v2 repo, so an unauthenticated wget on a fresh
+#   Pi 404s and falls back to the ~1h compile. It only saves time once the release is PUBLIC.
+#   Plan: move prebuilt binaries to a dedicated public repo (e.g. Gixar/bjorn-binaries) and repoint
+#   this URL there; then re-upload the binary (release assets don't travel via git push).
 RUSTSCAN_ARMHF_URL="https://github.com/Gixar/Bjorn-v2/releases/download/rustscan-v${RUSTSCAN_VERSION}-armhf/rustscan"
 install_rustscan() {
     log "INFO" "Installing RustScan ${RUSTSCAN_VERSION} (optional — off by default; Bjorn uses nmap without it)..."

@@ -277,10 +277,14 @@ install_dependencies() {
 
 # Install RustScan (optional — port-discovery speedup, off by default via the use_rustscan config
 # toggle). Not in apt. On 64-bit ARM / amd64 we drop the official prebuilt static binary into
-# /usr/local/bin (no Rust toolchain, no compile). RustScan ships no 32-bit ARM binary, so there we
-# compile from crates.io with cargo instead. Non-fatal: any failure just leaves Bjorn on nmap.
+# /usr/local/bin (no Rust toolchain, no compile). RustScan ships no 32-bit ARM binary; there we
+# pull our own once-compiled armv7 binary (RUSTSCAN_ARMHF_URL) and only fall back to a slow local
+# cargo build if that's missing. Non-fatal: any failure just leaves Bjorn on nmap.
 # Bump RUSTSCAN_VERSION to match a newer release: https://github.com/RustScan/RustScan/releases
+# When you bump it, rebuild the armv7 binary and re-upload it to the RUSTSCAN_ARMHF_URL release.
 RUSTSCAN_VERSION="2.4.1"
+# Self-hosted armv7 (32-bit) RustScan binary — compiled once, attached to a Bjorn-v2 release.
+RUSTSCAN_ARMHF_URL="https://github.com/Gixar/Bjorn-v2/releases/download/rustscan-v${RUSTSCAN_VERSION}-armhf/rustscan"
 install_rustscan() {
     log "INFO" "Installing RustScan ${RUSTSCAN_VERSION} (optional — off by default; Bjorn uses nmap without it)..."
 
@@ -294,7 +298,11 @@ install_rustscan() {
     case "$arch" in
         aarch64|arm64) asset="aarch64-linux-rustscan.zip" ;;          # 64-bit Raspberry Pi OS
         x86_64|amd64)  asset="x86_64-linux-rustscan.tar.gz.zip" ;;    # dev box
-        armv7l|armv6l|armhf)                                          # 32-bit Pi OS — no prebuilt
+        armv7l)                                                       # 32-bit ARMv7 (Pi Zero 2 W, Pi 3/4 on 32-bit OS)
+            install_rustscan_armhf_prebuilt || install_rustscan_from_source
+            return 0
+            ;;
+        armv6l)                                                       # ARMv6 (Pi Zero/1) — armv7 binary won't run, compile
             install_rustscan_from_source
             return 0
             ;;
@@ -325,6 +333,22 @@ install_rustscan() {
         log "WARNING" "RustScan download failed (${url}). Skipping — Bjorn uses nmap. Install manually later if wanted."
     fi
     rm -rf "$tmpdir"
+}
+
+# Download our once-compiled armv7 RustScan binary (RUSTSCAN_ARMHF_URL). Returns nonzero if it's
+# not published yet, so the caller falls back to a local compile.
+install_rustscan_armhf_prebuilt() {
+    local tmp
+    tmp="$(mktemp)"
+    if wget -qO "$tmp" "$RUSTSCAN_ARMHF_URL" && [ -s "$tmp" ]; then
+        install -m 0755 "$tmp" /usr/local/bin/rustscan
+        rm -f "$tmp"
+        log "SUCCESS" "Installed prebuilt RustScan (armv7) to /usr/local/bin/rustscan"
+        return 0
+    fi
+    rm -f "$tmp"
+    log "INFO" "No prebuilt armv7 RustScan at ${RUSTSCAN_ARMHF_URL} — will compile from source."
+    return 1
 }
 
 # Compile RustScan from crates.io on architectures with no prebuilt binary (32-bit ARM).

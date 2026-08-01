@@ -39,12 +39,17 @@ collapsing to 4 distinct issues.
    505 errors in the log pull. Now the "Cannot find device" case logs at **DEBUG** and returns
    `False` (not connected); only genuinely unexpected stderr stays at ERROR. Independent of #68
    (the gadget-config fix) — even with usb0 configured, an unplugged device shouldn't spam ERROR.
-3. **[P3] `use_rustscan: True` but the `rustscan` binary is missing on the Pi** — `scanning.py`
-   warns `"the 'rustscan' binary was not found; using nmap"` each scan, and the benchmark logs
-   `"Benchmark: rustscan not installed — skipping its pass"` (nmap-only: 56.2s / 8 hosts). Blocks the
-   open "tune `rustscan_batch_size` / consider making RustScan default" item below — can't benchmark
-   what isn't installed. Action: install rustscan on the Zero 2 W (installer provisions arm64/amd64;
-   confirm the armv7/arm64 path actually landed it), or set `use_rustscan: False` to silence.
+3. ~~**[P3] `use_rustscan: True` but the `rustscan` binary "not found"**~~ — ✅ **FIXED (path resolution)** —
+   rustscan **was** installed (`/home/gixar/.cargo/bin/rustscan`, v2.4.1) but `shutil.which("rustscan")`
+   missed it: the service runs as `root` under systemd with a minimal PATH that omits `~/.cargo/bin`,
+   and here it was built under a **different** user (`gixar`, not `bjorn`). Added `NetworkScanner._rustscan_bin()`
+   — `which` first, then a glob fallback over `/home/*/.cargo/bin`, `/root/.cargo/bin`, `/usr/local/bin`,
+   `/usr/bin` (root can traverse the 700-mode `/home/gixar` and exec the binary). Wired it into
+   `selected_engine`, the benchmark guard, and `_rustscan_cmd` (now takes the resolved path instead of
+   the literal `"rustscan"`). Works on the existing install with no reinstall. Tests updated + a new
+   `test_rustscan_bin_falls_back_to_cargo_path_off_PATH`. **Now unblocks** the batch-size tuning item
+   below — the benchmark can finally run rustscan's pass. Verify on the Pi: WebUI Benchmark now shows a
+   rustscan column.
 4. **[P4] nmap port scan incomplete — 1×, self-recovered** — `scanning.py` (Jul 31 21:28) logged
    `"nmap port scan did not complete this cycle … keeping existing port data"` once. Transient,
    self-healing. Monitor only; no action unless it recurs.

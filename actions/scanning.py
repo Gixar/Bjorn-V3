@@ -314,12 +314,29 @@ class NetworkScanner:
     # (Removed the socket-based PortScanner: a thread-per-port scanner throttled by a
     # 200-thread semaphore. Replaced by a single nmap port scan in ScanPorts.start() — L1.)
 
+    @staticmethod
+    def _rustscan_bin():
+        """Resolve the rustscan binary, or None. `shutil.which` alone isn't enough: the systemd
+        service runs as `bjorn` with a minimal PATH that omits ~/.cargo/bin (where `cargo install`
+        drops it), and it may have been built under a different user (e.g. /home/gixar/.cargo/bin).
+        Fall back to globbing the usual cargo/local locations so a present-but-off-PATH binary is
+        still found. Returns an absolute path or None."""
+        found = shutil.which("rustscan")
+        if found:
+            return found
+        candidates = glob.glob("/home/*/.cargo/bin/rustscan") + [
+            "/root/.cargo/bin/rustscan",
+            "/usr/local/bin/rustscan",
+            "/usr/bin/rustscan",
+        ]
+        return next((p for p in candidates if os.access(p, os.X_OK)), None)
+
     def selected_engine(self):
         """Which port-discovery engine to use: 'rustscan' only if opted in AND the binary is
         present, else 'nmap'. Warn (once per scan) when opted in but rustscan isn't installed so
         an existing install that flips the toggle without provisioning the binary isn't silent."""
         if getattr(self.shared_data, "use_rustscan", False):
-            if shutil.which("rustscan"):
+            if self._rustscan_bin():
                 return "rustscan"
             self.logger.warning("use_rustscan is on but the 'rustscan' binary was not found; using nmap.")
         return "nmap"
@@ -367,8 +384,11 @@ class NetworkScanner:
         'IP -> [p1,p2]' and skips RustScan's built-in nmap hand-off, so this is pure port
         discovery — service/version detail still comes from nmap later, same as the nmap path.
         Returns {ip: [open ports]}, or None so discover_ports() falls back to nmap on any failure."""
+        bin_path = self._rustscan_bin()
+        if not bin_path:
+            return None
         batch = getattr(self.shared_data, "rustscan_batch_size", 0)
-        cmd = self._rustscan_cmd(ip_list, ports_to_scan, batch)
+        cmd = self._rustscan_cmd(bin_path, ip_list, ports_to_scan, batch)
         try:
             proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
         except Exception as e:
@@ -380,13 +400,14 @@ class NetworkScanner:
         return self._parse_rustscan_greppable(proc.stdout, ip_list)
 
     @staticmethod
-    def _rustscan_cmd(ip_list, ports_to_scan, batch_size=0):
-        """Build the RustScan argv. batch_size > 0 sets `-b <n>` (RustScan's ulimit-bound socket
-        batch); 0 leaves RustScan's own adaptive default. On a Pi Zero 2 W a too-large batch
-        silently drops ports (RustScan's documented failure mode), so this is the on-device tuning
-        knob — start with the default, lower it if the benchmark shows missed ports."""
+    def _rustscan_cmd(bin_path, ip_list, ports_to_scan, batch_size=0):
+        """Build the RustScan argv. bin_path is the resolved binary (see _rustscan_bin). batch_size
+        > 0 sets `-b <n>` (RustScan's ulimit-bound socket batch); 0 leaves RustScan's own adaptive
+        default. On a Pi Zero 2 W a too-large batch silently drops ports (RustScan's documented
+        failure mode), so this is the on-device tuning knob — start with the default, lower it if
+        the benchmark shows missed ports."""
         port_arg = ','.join(str(p) for p in ports_to_scan)
-        cmd = ["rustscan", "-a", ','.join(ip_list), "-p", port_arg, "-g", "--no-config"]
+        cmd = [bin_path, "-a", ','.join(ip_list), "-p", port_arg, "-g", "--no-config"]
         if batch_size and batch_size > 0:
             cmd += ["-b", str(batch_size)]
         return cmd
@@ -692,7 +713,7 @@ class NetworkScanner:
 
         results = {}  # engine -> {"seconds": float, "open_port_count": int} or {"skipped": reason}
         for engine, fn in (("nmap", self._nmap_discovery), ("rustscan", self._rustscan_discovery)):
-            if engine == "rustscan" and not shutil.which("rustscan"):
+            if engine == "rustscan" and not self._rustscan_bin():
                 results[engine] = {"skipped": "binary not installed"}
                 self.logger.warning("Benchmark: rustscan not installed — skipping its pass.")
                 continue

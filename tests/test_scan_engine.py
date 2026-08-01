@@ -17,14 +17,14 @@ build_cmd = NetworkScanner._rustscan_cmd
 
 
 def test_cmd_omits_batch_flag_by_default():
-    cmd = build_cmd(["10.0.0.5"], [22, 80], 0)
+    cmd = build_cmd("/usr/bin/rustscan", ["10.0.0.5"], [22, 80], 0)
     assert "-b" not in cmd
-    assert cmd[:5] == ["rustscan", "-a", "10.0.0.5", "-p", "22,80"]
+    assert cmd[:5] == ["/usr/bin/rustscan", "-a", "10.0.0.5", "-p", "22,80"]
     assert "-g" in cmd and "--no-config" in cmd
 
 
 def test_cmd_adds_batch_flag_when_set():
-    cmd = build_cmd(["10.0.0.5", "10.0.0.6"], [22], 300)
+    cmd = build_cmd("/usr/bin/rustscan", ["10.0.0.5", "10.0.0.6"], [22], 300)
     assert cmd[-2:] == ["-b", "300"]
     assert cmd[2] == "10.0.0.5,10.0.0.6"  # -a takes comma-joined hosts
 
@@ -57,8 +57,10 @@ def test_selected_engine_falls_back_when_binary_missing(monkeypatch=None):
     scanner.shared_data = type("S", (), {"use_rustscan": True})()
 
     import actions.scanning as s
-    orig = s.shutil.which
-    s.shutil.which = lambda _name: None  # pretend rustscan isn't installed
+    orig_which, orig_glob, orig_access = s.shutil.which, s.glob.glob, s.os.access
+    s.shutil.which = lambda _name: None  # pretend rustscan isn't on PATH
+    s.glob.glob = lambda _pat: []         # and not in any cargo dir either
+    s.os.access = lambda _p, _mode: False
     try:
         assert scanner.selected_engine() == "nmap"
         scanner.shared_data.use_rustscan = False
@@ -67,7 +69,20 @@ def test_selected_engine_falls_back_when_binary_missing(monkeypatch=None):
         s.shutil.which = lambda _name: "/usr/bin/rustscan"
         assert scanner.selected_engine() == "rustscan"
     finally:
-        s.shutil.which = orig
+        s.shutil.which, s.glob.glob, s.os.access = orig_which, orig_glob, orig_access
+
+
+def test_rustscan_bin_falls_back_to_cargo_path_off_PATH():
+    # The real bug: which() misses ~/.cargo/bin under systemd / a different build user.
+    import actions.scanning as s
+    orig_which, orig_glob, orig_access = s.shutil.which, s.glob.glob, s.os.access
+    s.shutil.which = lambda _name: None  # not on PATH
+    s.glob.glob = lambda pat: ["/home/gixar/.cargo/bin/rustscan"] if "cargo" in pat else []
+    s.os.access = lambda p, _mode: p == "/home/gixar/.cargo/bin/rustscan"
+    try:
+        assert NetworkScanner._rustscan_bin() == "/home/gixar/.cargo/bin/rustscan"
+    finally:
+        s.shutil.which, s.glob.glob, s.os.access = orig_which, orig_glob, orig_access
 
 
 if __name__ == "__main__":

@@ -20,6 +20,35 @@ Already fixed this cycle (see `CHANGELOG.md`): #16 port hopping, #147 installer 
 | #113 | Waveshare **V4 unreadable** display | Affects the **default** `epd_type: "epd2in13_V4"` — reported as unreadable/garbled since May 2025. Likely a refresh-mode / LUT or rotation issue in the vendor driver. Needs the actual V4 panel to diagnose. |
 | #68 | `usb0` IP not assigned | **Fix written — needs on-Pi verification.** `configure_usb_gadget` was rewritten to one coherent stack: dwc2-only (dropped the `g_ether` that raced the configfs gadget for the UDC), `systemd-networkd` owns `usb0` via a `.network` file (static `172.20.2.1/24` + built-in DHCP server so the *host* gets `172.20.2.10-30`), NetworkManager set to leave `usb0` unmanaged, and the conflicting ifupdown/imperative-`ifconfig` bits removed. Verify on hardware (plug into a host → usb0 addressed, host leased, `http://172.20.2.1:8000/` loads). Pi-only. |
 
+## From runtime logs (`bk_log`, Jul 31 – Aug 1 2026 — priority order)
+
+Triaged from a live Pi log pull (24 files). Totals: **505 ERROR, 7221 WARNING**, all
+collapsing to 4 distinct issues.
+
+1. ~~**[P1] Orchestrator floods the log at WARNING every second while idle**~~ — ✅ **FIXED** —
+   `orchestrator.py` logged `"Scanner did not find any new targets. Next scan in: N seconds"` at
+   `logger.warning` once per second for the whole `scan_interval` (180s) idle window → **7217 lines
+   / 829 KB in `orchestrator.py.log`**, with an ANSI console-cursor trick (`\x1b[1A\x1b[2K`) mixed in.
+   Now logs the idle notice **once** per idle window at **INFO** ("Scanner found no new targets;
+   idling Ns until next scan.") and the idle loop just sleeps; dropped the per-second WARNING, the
+   ANSI write, and the now-unused `import sys`. This was the **likely root cause of the `logs.html`
+   freeze** — the log file no longer balloons.
+2. **[P2] `usb0` "Cannot find device" — 505 errors** — `display.py` `ip neigh show dev usb0` fails
+   every ~25s. **Already tracked as #68** (fix written, awaiting on-Pi verify) — these logs confirm
+   the #68 fix is **not yet deployed on this Pi**. Action: deploy + verify #68, or the errors persist.
+3. **[P3] `use_rustscan: True` but the `rustscan` binary is missing on the Pi** — `scanning.py`
+   warns `"the 'rustscan' binary was not found; using nmap"` each scan, and the benchmark logs
+   `"Benchmark: rustscan not installed — skipping its pass"` (nmap-only: 56.2s / 8 hosts). Blocks the
+   open "tune `rustscan_batch_size` / consider making RustScan default" item below — can't benchmark
+   what isn't installed. Action: install rustscan on the Zero 2 W (installer provisions arm64/amd64;
+   confirm the armv7/arm64 path actually landed it), or set `use_rustscan: False` to silence.
+4. **[P4] nmap port scan incomplete — 1×, self-recovered** — `scanning.py` (Jul 31 21:28) logged
+   `"nmap port scan did not complete this cycle … keeping existing port data"` once. Transient,
+   self-healing. Monitor only; no action unless it recurs.
+
+> Note — the **"start scan freezes the Pi"** symptom is **not** in these logs (a hang isn't logged).
+> Needs the systemd journal + `dmesg` (OOM check) pulled while reproducing — see the SSH log-pull steps.
+
 ## New capabilities (extend the offensive/recon surface — feeds P3-1 module contract)
 - **wpa-sec / Pwnagotchi network import** (from `LOCOSP/BjornWpaSecHarvester`): pull cracked Wi-Fi creds from wpa-sec.stanev.org, dedupe, inject via `nmcli`. Pre-populates known creds instead of blind brute-force. New standalone action; needs network + `nmcli`.
 - ~~**Scan all network interfaces**~~ (#133): ✅ **DONE** — `get_network()` → `get_networks()` returns one IPv4Network per interface subnet (all AF_INET addrs, deduped, loopback/link-local skipped). `scan()` loops every subnet and **accumulates** hosts into a single `update_netkb` write with the union of alive MACs — writing per-network would make each subnet mark the others' hosts dead. Dropped the dead (never-printed) `table` builder while there. Needs a multi-interface host to verify end-to-end.

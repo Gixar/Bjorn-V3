@@ -19,7 +19,6 @@ import importlib
 import os
 import time
 import logging
-import sys
 import threading
 from datetime import datetime, timedelta
 from actions.nmap_vuln_scanner import NmapVulnScanner
@@ -332,14 +331,16 @@ class Orchestrator:
                     self.shared_data.write_data(current_data)
                     idle_start_time = datetime.now()
                     idle_end_time = idle_start_time + timedelta(seconds=self.shared_data.scan_interval)
+                    # Log the idle notice ONCE, not once per second: the old per-second
+                    # logger.warning wrote ~180 lines per idle window to the rotating file log
+                    # (7000+ lines / ~800KB), which is log spam and made the WebUI log viewer
+                    # choke on the huge file. INFO, not WARNING — "no new targets" is normal.
+                    logger.info(f"Scanner found no new targets; idling {self.shared_data.scan_interval}s until next scan.")
+                    self.shared_data.bjornorch_status = "IDLE"
+                    self.shared_data.bjornstatustext2 = ""
                     while datetime.now() < idle_end_time:
                         if self.shared_data.orchestrator_should_exit:
                             break
-                        remaining_time = (idle_end_time - datetime.now()).seconds
-                        self.shared_data.bjornorch_status = "IDLE"
-                        self.shared_data.bjornstatustext2 = ""
-                        sys.stdout.write('\x1b[1A\x1b[2K')
-                        logger.warning(f"Scanner did not find any new targets. Next scan in: {remaining_time} seconds")
                         time.sleep(1)
                     self.failed_scans_count = 0
                     continue

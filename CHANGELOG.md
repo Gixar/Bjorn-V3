@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Docs
+- **Bettercap integration plan** — `docs/BETTERCAP_PLAN.md`: phased scope for the backlog Bettercap
+  item (managed-mode MVP — daemon + REST poller feeding `netkb`; monitor mode deferred behind a
+  second radio), including a dedicated web config panel, config-key table, touched-files list,
+  security notes, and acceptance criteria. Plan only, no code. Linked from `docs/BACKLOG.md`.
+
 ## [2.5.0-alpha] — 2026-08-02
 
 > Most changes are sandbox / `py_compile` / TestClient-checked, not hardware-verified — see the

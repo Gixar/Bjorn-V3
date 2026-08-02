@@ -2,9 +2,11 @@
 
 ## [Unreleased]
 
-> These changes are **merged and pushed to `main`** but **not yet part of a tagged release**
-> (the latest tag is `v2.4.2-alpha`). Most are sandbox / `py_compile` / TestClient-checked, not
-> hardware-verified — see the README's Pi-gated note for the split.
+## [2.5.0-alpha] — 2026-08-02
+
+> Most changes are sandbox / `py_compile` / TestClient-checked, not hardware-verified — see the
+> README's Pi-gated note for the split. Some items below (RustScan port discovery, `usb0`
+> addressing, live console) are confirmed on-Pi as of this tag.
 
 ### Added
 - **Opt-in RustScan port discovery** (backlog #12) — new `use_rustscan` config toggle (default
@@ -71,6 +73,11 @@
   `DHCPServer` that leases the host `172.20.2.10-30`), and NetworkManager is told to leave `usb0`
   unmanaged. cmdline/config.txt edits are now idempotent. Boot-file changes + kernel gadget
   bring-up mean this can only be confirmed on real hardware.
+- **Live console no longer freezes the page on Start** — `colorizeLogLine()` (`web/common.js`)
+  mixed a stateful global-regex `exec()` with reassigning the string inside the loop, so each
+  `.py` filename it wrapped got re-matched and the loop never terminated; over ~2000 log lines
+  polled every 1.5s, hitting Start locked the browser's main thread. Replaced with a single
+  stateless `String.replace(/\w+\.py/g, cb)`. *Confirmed on-Pi.*
 - **Stale `config_validation` test fixture** — `_good_config()` was missing `vuln_scan_sv`,
   `vuln_scan_vulners`, and `bruteforce_threads` (added to the validator earlier), so the suite
   failed; fixture updated (and now includes `use_rustscan`).

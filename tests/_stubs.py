@@ -65,6 +65,16 @@ def install():
     if "shared" not in sys.modules:
         shared = types.ModuleType("shared")
         shared.SharedData = type("SharedData", (), {})
+        # Module-level helpers the connectors import from `shared`. The credential-pool ones are
+        # pure/importable, so re-export the real functions; the CSV helpers live in shared.py (which
+        # pulls in PIL) so stub them — tests that exercise a connector's pure logic don't call them.
+        from credential_pool import credential_candidates, record_cracked_cred, known_cred_pairs
+        shared.credential_candidates = credential_candidates
+        shared.record_cracked_cred = record_cracked_cred
+        shared.known_cred_pairs = known_cred_pairs
+        shared.netkb_targets = lambda *a, **k: []
+        shared.append_csv_rows = lambda *a, **k: None
+        shared.dedupe_csv = lambda *a, **k: None
         sys.modules["shared"] = shared
 
     if "logger" not in sys.modules:

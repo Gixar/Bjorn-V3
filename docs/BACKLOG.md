@@ -58,7 +58,7 @@ collapsing to 4 distinct issues.
 > Needs the systemd journal + `dmesg` (OOM check) pulled while reproducing — see the SSH log-pull steps.
 
 ## New capabilities (extend the offensive/recon surface — feeds P3-1 module contract)
-- **wpa-sec / Pwnagotchi network import** (from `LOCOSP/BjornWpaSecHarvester`): pull cracked Wi-Fi creds from wpa-sec.stanev.org, dedupe, inject via `nmcli`. Pre-populates known creds instead of blind brute-force. New standalone action; needs network + `nmcli`.
+- ~~**wpa-sec / Pwnagotchi network import**~~ (from `LOCOSP/BjornWpaSecHarvester`): ✅ **DONE** (Wave 1 #4) — opt-in standalone action `WpaSecImport` fetches cracked Wi-Fi keys from wpa-sec.stanev.org (stdlib urllib) and injects them into NetworkManager as low-priority autoconnect profiles, deduped against `crackedpwd/wifi_wpasec.csv`. No-op unless `wpasec_api_key` set; throttled by `wpasec_interval`. Remote SSID/PSK sanitized at the trust boundary. Needs the Pi + internet to verify end-to-end.
 - ~~**Scan all network interfaces**~~ (#133): ✅ **DONE** — `get_network()` → `get_networks()` returns one IPv4Network per interface subnet (all AF_INET addrs, deduped, loopback/link-local skipped). `scan()` loops every subnet and **accumulates** hosts into a single `update_netkb` write with the union of alive MACs — writing per-network would make each subnet mark the others' hosts dead. Dropped the dead (never-printed) `table` builder while there. Needs a multi-interface host to verify end-to-end.
 - **SNMP enumeration** and **HTTP service fingerprinting**: new recon modules against the P3-1 `b_class/b_module/b_port/execute()` contract (HTTP fingerprint is already the PRD's P3-5 example).
 

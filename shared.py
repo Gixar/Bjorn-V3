@@ -146,6 +146,8 @@ class SharedData:
             "success_retry_delay": 900,
             "bruteforce_threads": 0,  # brute-force worker threads per connector; 0 = auto (core-aware, capped at 8)
             "credential_reuse": True,  # replay a cracked user:password across other hosts/protocols (tried first); shared pool in crackedpwd/known_creds.csv
+            "wpasec_api_key": "",      # wpa-sec.stanev.org API key (secret, user-supplied); empty = wpa-sec import disabled
+            "wpasec_interval": 3600,   # min seconds between wpa-sec fetches (throttle; 0 = every idle cycle)
             "ref_width" :122 ,
             "ref_height" : 250,
             "epd_type": "epd2in13_V4",

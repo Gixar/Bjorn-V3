@@ -3,6 +3,15 @@
 ## [Unreleased]
 
 ### Added
+- **wpa-sec Wi-Fi credential import** (backlog Wave 1 #4) — new opt-in standalone action
+  `WpaSecImport` pulls your cracked Wi-Fi keys from wpa-sec.stanev.org and injects them into
+  NetworkManager as autoconnect profiles, so Bjorn can roam onto networks it already has the key for
+  instead of attacking them. No-op unless `wpasec_api_key` is set; throttled to one fetch per
+  `wpasec_interval` seconds (default 3600). Fetch is stdlib `urllib` (no new dependency); results
+  are deduped against `crackedpwd/wifi_wpasec.csv`. The injected profiles use a negative
+  `autoconnect-priority` so they never outrank Bjorn's own connection. Remote data is treated as a
+  trust boundary — SSID/PSK with control chars are dropped (they could inject NM keyfile sections) —
+  and connection names are filesystem-sanitized. New `tests/test_wpasec_import.py`.
 - **Coins / stats overhaul** (backlog Wave 1 #3 — see `docs/COINS_STATS_PLAN.md`) — coins/level are
   now a **monotonic, persisted** score instead of a live recompute. The old `update_stats()` derived
   them as a flat linear function of the *current* counts every refresh, so the score could **drop**

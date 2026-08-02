@@ -18,6 +18,7 @@ _NONNEG_INT_KEYS = (
     "startup_delay", "scan_interval", "scan_vuln_interval",
     "failed_retry_delay", "success_retry_delay", "ref_width", "ref_height",
     "battery_shutdown_percent", "bruteforce_threads", "rustscan_batch_size",
+    "wpasec_interval",
 )
 
 

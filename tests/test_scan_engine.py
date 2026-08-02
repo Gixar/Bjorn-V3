@@ -29,6 +29,15 @@ def test_cmd_adds_batch_flag_when_set():
     assert cmd[2] == "10.0.0.5,10.0.0.6"  # -a takes comma-joined hosts
 
 
+def test_cmd_full_port_uses_range_not_portlist():
+    cmd = build_cmd("/usr/bin/rustscan", ["10.0.0.5"], [22, 80], 0, True)
+    assert "-r" in cmd and "1-65535" in cmd
+    assert "-p" not in cmd            # curated list dropped in full-port mode
+    # batch still honored alongside full-port
+    cmd2 = build_cmd("/usr/bin/rustscan", ["10.0.0.5"], [22], 500, True)
+    assert cmd2[-2:] == ["-b", "500"] and "-r" in cmd2
+
+
 def test_parses_ports_per_host():
     out = "10.0.0.5 -> [22,80,443]\n10.0.0.6 -> [8080]\n"
     assert parse(out, ["10.0.0.5", "10.0.0.6"]) == {

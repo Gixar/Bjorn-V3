@@ -379,18 +379,26 @@ class NetworkScanner:
             self.logger.debug(f"nmap port scan error detail: {str(e)[:300]}")
         return open_ports
 
-    def _rustscan_discovery(self, ip_list, ports_to_scan):
+    def _rustscan_discovery(self, ip_list, ports_to_scan, full_port=None):
         """Discovery-only RustScan pass over the same hosts/ports. Greppable mode (-g) prints
         'IP -> [p1,p2]' and skips RustScan's built-in nmap hand-off, so this is pure port
         discovery — service/version detail still comes from nmap later, same as the nmap path.
-        Returns {ip: [open ports]}, or None so discover_ports() falls back to nmap on any failure."""
+        full_port (None → read `rustscan_full_port` config): sweep all 65,535 ports instead of the
+        curated portlist. Returns {ip: [open ports]}, or None so discover_ports() falls back to
+        nmap on any failure."""
         bin_path = self._rustscan_bin()
         if not bin_path:
             return None
+        if full_port is None:
+            full_port = getattr(self.shared_data, "rustscan_full_port", False)
         batch = getattr(self.shared_data, "rustscan_batch_size", 0)
-        cmd = self._rustscan_cmd(bin_path, ip_list, ports_to_scan, batch)
+        cmd = self._rustscan_cmd(bin_path, ip_list, ports_to_scan, batch, full_port)
+        if full_port:
+            self.logger.info("rustscan full-port mode: scanning all 65,535 ports per host")
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            # full-port over several hosts is heavier; give it more headroom on a slow Pi.
+            proc = subprocess.run(cmd, capture_output=True, text=True,
+                                  timeout=600 if full_port else 300)
         except Exception as e:
             self.logger.warning(f"rustscan invocation failed: {e}")
             return None
@@ -400,14 +408,15 @@ class NetworkScanner:
         return self._parse_rustscan_greppable(proc.stdout, ip_list)
 
     @staticmethod
-    def _rustscan_cmd(bin_path, ip_list, ports_to_scan, batch_size=0):
+    def _rustscan_cmd(bin_path, ip_list, ports_to_scan, batch_size=0, full_port=False):
         """Build the RustScan argv. bin_path is the resolved binary (see _rustscan_bin). batch_size
         > 0 sets `-b <n>` (RustScan's ulimit-bound socket batch); 0 leaves RustScan's own adaptive
         default. On a Pi Zero 2 W a too-large batch silently drops ports (RustScan's documented
         failure mode), so this is the on-device tuning knob — start with the default, lower it if
-        the benchmark shows missed ports."""
-        port_arg = ','.join(str(p) for p in ports_to_scan)
-        cmd = [bin_path, "-a", ','.join(ip_list), "-p", port_arg, "-g", "--no-config"]
+        the benchmark shows missed ports. full_port scans the whole 1-65535 range (`-r`, RustScan's
+        strength) instead of the curated `-p` list; nmap still does service detail on the result."""
+        port_sel = ["-r", "1-65535"] if full_port else ["-p", ','.join(str(p) for p in ports_to_scan)]
+        cmd = [bin_path, "-a", ','.join(ip_list), *port_sel, "-g", "--no-config"]
         if batch_size and batch_size > 0:
             cmd += ["-b", str(batch_size)]
         return cmd
@@ -714,7 +723,10 @@ class NetworkScanner:
             return None
 
         results = {}  # engine -> {"seconds": float, "open_port_count": int} or {"skipped": reason}
-        for engine, fn in (("nmap", self._nmap_discovery), ("rustscan", self._rustscan_discovery)):
+        # rustscan pinned to the same curated port list as nmap (full_port=False) — an apples-to-
+        # apples engine comparison, regardless of the rustscan_full_port config setting.
+        for engine, fn in (("nmap", self._nmap_discovery),
+                           ("rustscan", lambda ips, ports: self._rustscan_discovery(ips, ports, full_port=False))):
             if engine == "rustscan" and not self._rustscan_bin():
                 results[engine] = {"skipped": "binary not installed"}
                 self.logger.warning("Benchmark: rustscan not installed — skipping its pass.")

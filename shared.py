@@ -163,6 +163,7 @@ class SharedData:
             "__title_network__": "Network",
             "use_rustscan": False,       # port discovery via RustScan (fast) instead of nmap -sT; falls back to nmap if the binary is missing
             "rustscan_batch_size": 0,    # RustScan -b socket batch; 0 = RustScan default. Lower on a Pi Zero 2 W if it drops ports
+            "rustscan_full_port": False, # RustScan sweeps all 65,535 ports (its strength) instead of the curated portlist; needs use_rustscan
             "nmap_scan_aggressivity": "-T2",
             "vuln_scan_sv": True,        # include nmap -sV (service/version detection) in the vuln scan
             "vuln_scan_vulners": True,   # run the vulners.nse CVE script (internet-dependent, heaviest step)

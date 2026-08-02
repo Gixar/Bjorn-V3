@@ -25,6 +25,13 @@
   M ports)`) so the log positively confirms which engine ran, not just the fallback warnings.
   *Confirmed on-Pi:* the benchmark measured **36× faster** than nmap (1.68s vs 60.6s over 9 hosts /
   41 ports) with **identical open-port coverage** — rustscan is a clear win for the discovery stage.
+- **RustScan full-port (65k) mode** (backlog) — new `rustscan_full_port` config toggle (default
+  `false`). When on (and `use_rustscan` is on), the discovery pass sweeps the whole `1-65535` range
+  (`rustscan -r`, its adaptive-async strength) instead of the curated `portlist`/`portstart-portend`
+  set; nmap still does service/version detail on whatever comes back, so it's still a discovery-stage
+  swap. Rustscan-only — nmap full-port on a Pi Zero would be far too slow — and the benchmark stays
+  pinned to the curated list for a fair engine comparison regardless of the toggle. Longer subprocess
+  timeout (600s) when on; renders as a switch on the web config page for free.
 - **Scan-engine benchmark ("test mode")** — `python actions/scanning.py --benchmark` discovers the
   live hosts once, then runs the *same* port scan through both nmap and RustScan back-to-back,
   times each, and appends the result (host/port counts, per-engine seconds, speedup) to

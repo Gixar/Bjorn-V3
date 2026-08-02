@@ -94,16 +94,10 @@ function colorizeLogLine(line) {
     if (line.includes("==>") || line.includes("<==")) return null;
     let modified = escHtml(line);
 
-    const regexFile = /(\w+\.py)/g;
-    let match;
-    while ((match = regexFile.exec(modified)) !== null) {
-        const fileName = match[1];
+    modified = modified.replace(/\w+\.py/g, (fileName) => {
         if (!_logFileColors.has(fileName)) _logFileColors.set(fileName, _logRandomColor());
-        modified = modified.replace(
-            fileName,
-            `<span style="color:${_logFileColors.get(fileName)}">${fileName}</span>`
-        );
-    }
+        return `<span style="color:${_logFileColors.get(fileName)}">${fileName}</span>`;
+    });
 
     modified = modified.replace(/\b(DEBUG|INFO|WARNING|ERROR|CRITICAL|SUCCESS)\b/g, (m) =>
         `<span class="${LOG_LEVEL_CLASSES[m]}">${m}</span>`

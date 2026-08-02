@@ -21,6 +21,10 @@
   it drops the official prebuilt static binary into `/usr/local/bin` for arm64 (64-bit Raspberry
   Pi OS) / amd64 — no Rust toolchain, no on-Pi compile — and is non-fatal (32-bit armv7 and any
   download failure just leave Bjorn on nmap). `--dry-run` reports whether rustscan is present.
+  Each scan now logs the chosen engine (`scanning.py`: `Port discovery engine: rustscan (N hosts,
+  M ports)`) so the log positively confirms which engine ran, not just the fallback warnings.
+  *Confirmed on-Pi:* the benchmark measured **36× faster** than nmap (1.68s vs 60.6s over 9 hosts /
+  41 ports) with **identical open-port coverage** — rustscan is a clear win for the discovery stage.
 - **Scan-engine benchmark ("test mode")** — `python actions/scanning.py --benchmark` discovers the
   live hosts once, then runs the *same* port scan through both nmap and RustScan back-to-back,
   times each, and appends the result (host/port counts, per-engine seconds, speedup) to

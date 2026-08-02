@@ -26,6 +26,7 @@ from PIL import Image, ImageFont
 from logger import Logger
 from epd_helper import EPDHelper
 from config_validation import validate_config
+import stats_engine
 
 
 logger = Logger(name="shared.py", level=logging.DEBUG) # Create a logger object 
@@ -742,9 +743,18 @@ class SharedData:
         os.replace(tmpfile, self.netkbfile)
 
     def update_stats(self):
-        """Update the stats based on formulas."""
-        self.coinnbr = int((self.networkkbnbr * 5 + self.crednbr * 5 + self.datanbr * 5 + self.zombiesnbr * 10+self.attacksnbr * 5+ self.vulnnbr * 2 ))
-        self.levelnbr = int((self.networkkbnbr * 0.1 + self.crednbr * 0.2 + self.datanbr * 0.1 + self.zombiesnbr * 0.5+ self.attacksnbr+ self.vulnnbr * 0.01 ))
+        """Coins/level are a monotonic, persisted high-water-mark score (see stats_engine /
+        docs/COINS_STATS_PLAN.md), not a live recompute — so the score never drops when a count
+        falls (netkb cleaned, hosts offline) and survives restarts. Called only from the display
+        thread (single writer)."""
+        counts = {
+            "hosts": self.networkkbnbr, "creds": self.crednbr, "data": self.datanbr,
+            "zombies": self.zombiesnbr, "attacks": self.attacksnbr, "vulns": self.vulnnbr,
+        }
+        result = stats_engine.update(os.path.join(self.datadir, "stats.json"), counts)
+        self.coinnbr = result["coins"]
+        self.levelnbr = result["level"]
+        self._stats_breakdown = result["breakdown"]  # exposed via utils.get_stats_snapshot
 
 
     def print(self, message):

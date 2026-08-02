@@ -122,6 +122,7 @@ class WebUtils:
             "vulnerabilities": getattr(sd, "vulnnbr", 0),
             "targets": getattr(sd, "targetnbr", 0),
             "open_ports": getattr(sd, "portnbr", 0),
+            "breakdown": getattr(sd, "_stats_breakdown", {}),  # per-category earned coins (Wave 1 #3)
             "orchestrator_status": getattr(sd, "bjornorch_status", "UNKNOWN"),
             "manual_mode": getattr(sd, "manual_mode", False),
             "wifi_connected": getattr(sd, "wifi_connected", False),

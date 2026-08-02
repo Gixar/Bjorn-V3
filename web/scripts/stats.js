@@ -54,7 +54,29 @@ function applySnapshot(data) {
         modeBadge.className = "status-badge badge-idle";
     }
 
+    renderBreakdown(data.breakdown);
     pushChartPoint(data);
+}
+
+const BREAKDOWN_LABELS = {
+    hosts: "Known hosts", creds: "Credentials", data: "Data stolen",
+    zombies: "Zombies", attacks: "Attacks", vulns: "Vulnerabilities",
+};
+
+function renderBreakdown(bd) {
+    const body = document.getElementById("stats-breakdown-body");
+    if (!body || !bd) return;
+    body.replaceChildren();  // build rows via textContent — never innerHTML
+    Object.keys(bd).forEach((k) => {
+        const r = bd[k] || {};
+        const tr = document.createElement("tr");
+        [BREAKDOWN_LABELS[k] || k, r.count || 0, r.weight || 0, r.coins || 0].forEach((val) => {
+            const td = document.createElement("td");
+            td.textContent = val;
+            tr.appendChild(td);
+        });
+        body.appendChild(tr);
+    });
 }
 
 function pushChartPoint(data) {

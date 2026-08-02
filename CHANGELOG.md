@@ -3,6 +3,18 @@
 ## [Unreleased]
 
 ### Added
+- **Coins / stats overhaul** (backlog Wave 1 #3 — see `docs/COINS_STATS_PLAN.md`) — coins/level are
+  now a **monotonic, persisted** score instead of a live recompute. The old `update_stats()` derived
+  them as a flat linear function of the *current* counts every refresh, so the score could **drop**
+  (netkb cleaned, hosts offline) and reset to 0 on restart. New dependency-free `stats_engine.py`
+  keeps a **high-water mark per category** (each only ever rises), computes `coins = Σ mark·weight`
+  with **rebalanced weights** (rare wins like a cracked cred pay far more than a host appearing), an
+  **RPG level curve** (`floor(sqrt(coins/25))`, rising thresholds), and persists to
+  `data/stats.json` (atomic write; first run seeds from current counts so nothing resets). The stats
+  dashboard gains a **coin-breakdown table** (per-category earned totals) via a new `breakdown`
+  field on `/api/stats`. New `tests/test_stats_engine.py`. *(Deviation from the plan: server-side
+  coin history was skipped — the dashboard already builds a live session trend chart, so persisting
+  a history ring nothing consumes would be YAGNI.)*
 - **Credential reuse / lateral chaining** (backlog Wave 1 #2) — a cred cracked on one host is now
   auto-replayed across every other host **and protocol**. All six brute-force connectors
   (SSH/FTP/Telnet/RDP/SMB/SQL) record each hit into a shared pool (`crackedpwd/known_creds.csv`) and,

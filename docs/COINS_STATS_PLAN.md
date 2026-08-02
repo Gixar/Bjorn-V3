@@ -1,6 +1,11 @@
 # Coins / stats overhaul — implementation plan
 
-Status: **planned, not started.** Scoped from the `docs/BACKLOG.md` "Coins / stats overhaul" item.
+Status: **implemented** (Phase 1 model + breakdown UI) in the Unreleased changelog. `stats_engine.py`
+holds the monotonic high-water-mark model, rebalanced weights, and level curve; `data/stats.json`
+persists it; the dashboard shows a coin breakdown. **Deviation:** server-side coin history (Phase 2
+trend) was skipped — the dashboard already builds a live session trend chart, so a persisted history
+ring nothing consumes is YAGNI. Original plan kept below for reference.
+
 Pure software — no hardware, no new dependency.
 
 ## Problem (current state)

@@ -97,6 +97,17 @@
             </div>
             <canvas id="stats-chart" height="90"></canvas>
         </div>
+
+        <div class="stats-chart-container">
+            <div class="stats-chart-header">
+                <span>Coin breakdown</span>
+                <span class="stats-chart-note">Earned totals per category — monotonic, persists across restarts.</span>
+            </div>
+            <table class="stats-breakdown" id="stats-breakdown">
+                <thead><tr><th>Category</th><th>Count</th><th>×&nbsp;weight</th><th>Coins</th></tr></thead>
+                <tbody id="stats-breakdown-body"></tbody>
+            </table>
+        </div>
     </main>
 </body>
 </html>

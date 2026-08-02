@@ -520,6 +520,8 @@ class NetworkScanner:
             if self.ip_data.ip_list:
                 ports_to_scan = sorted(set(list(range(self.portstart, self.portend)) + list(self.extra_ports)))
                 engine = self.outer_instance.selected_engine()
+                self.outer_instance.logger.info(f"Port discovery engine: {engine} "
+                                                f"({len(self.ip_data.ip_list)} hosts, {len(ports_to_scan)} ports)")
                 self.open_ports = self.outer_instance.discover_ports(self.ip_data.ip_list, ports_to_scan, engine)
 
             self.all_ports = sorted(list(set(port for ports in self.open_ports.values() for port in ports)))

@@ -18,9 +18,9 @@ Bjorn is a « Tamagotchi like » sophisticated, autonomous network scanning, 
 
 ## 🆕 What's New in v2 (this fork)
 
-This is a modernized fork of [infinition/Bjorn](https://github.com/infinition/Bjorn), currently at tag **`v2.4.2-alpha`**, with a further tranche of work already merged to `main` but **not yet tagged** (RustScan, USB-gadget fix — see [Latest](#latest-unreleased-this-fork) below). It keeps the full offensive tool unchanged and adds a "runs today + safe to change" baseline. Full detail is in [`CHANGELOG.md`](CHANGELOG.md); the roadmap is in [`docs/PRD.md`](docs/PRD.md) and community ideas/bugs in [`docs/BACKLOG.md`](docs/BACKLOG.md).
+This is a modernized fork of [infinition/Bjorn](https://github.com/infinition/Bjorn), currently at tag **`v2.5.0-alpha`** (RustScan port discovery, multi-subnet scan, in-WebUI Logs page, USB-gadget `usb0` fix, and the Pi-Zero performance passes — see [What's in 2.5.0](#latest-unreleased-this-fork) below). It keeps the full offensive tool unchanged and adds a "runs today + safe to change" baseline. Full detail is in [`CHANGELOG.md`](CHANGELOG.md); the roadmap is in [`docs/PRD.md`](docs/PRD.md) and community ideas/bugs in [`docs/BACKLOG.md`](docs/BACKLOG.md).
 
-> **Note:** `v2.4.2-alpha` is the latest tag. Much of the Pi-facing work — the scan-engine rewrite, RustScan, `auto` display detection, the FastAPI web rewrite, and the USB-gadget fix — has been sandbox / `py_compile` / TestClient-checked but **not yet verified on real hardware**. See the [Pi-gated note](#pi-gated) at the end of this section for the split.
+> **Note:** `v2.5.0-alpha` is the latest tag. The FastAPI web rewrite and the live console are now confirmed on a real Pi; some Pi-facing work — RustScan on-device tuning, `auto` display detection, and the USB-gadget fix — has been sandbox / `py_compile` / TestClient-checked but **not yet verified on real hardware**. See the [Pi-gated note](#pi-gated) at the end of this section for the split.
 
 **Baseline (2.0.0-alpha):**
 - **Runs on a non-Pi dev box** — set `"epd_type": "mock"` in `config/shared_config.json` to boot without the e-Paper HAT (testing only, not a portability target).
@@ -52,7 +52,7 @@ This is a modernized fork of [infinition/Bjorn](https://github.com/infinition/Bj
 - **Watchdog now actually fires** (2.4.1) — the PG-4 heartbeat-age check used unescaped `%s`/`%Y`, which systemd expanded as unit specifiers, so it never restarted a wedged loop. Escaped to `%%s`/`%%Y`.
 - **e-Paper log spam** (2.4.2) — the per-frame display refresh logged success ~3×/s (needless SD writes); now logs failures only, keeping the one-time init/load/clear messages.
 
-**Web server & live stats dashboard (unreleased — merged via sync; sandbox/TestClient-verified, not yet hardware-tested):**
+**Web server & live stats dashboard (2.5.0-alpha — FastAPI rewrite and live console now confirmed on-Pi):**
 
 - **webapp.py** rewritten on FastAPI + Uvicorn, replacing the stdlib http.server/socketserver implementation. Runs as a Uvicorn server on its own asyncio event loop inside a background thread — same in-process, same-thread-model relationship to shared_data as before (no IPC, nothing else in Bjorn.py had to change), but requests are no longer handled one-at-a-time on a single blocking socket.
 - **New /stats.html dashboard** — coins, level, known hosts, credentials cracked, data stolen, zombies, attacks, vulnerabilities, targets, and open ports (the numbers shared.py's update_stats() already computed but that previously only ever reached the e-Paper image) now update live via a GET /api/stats REST endpoint and a WebSocket /ws/stats push (interval configurable via stats_ws_interval in shared_config.json, default 2s), with a session trend chart and automatic fallback to polling if the WebSocket can't connect.
@@ -61,16 +61,16 @@ This is a modernized fork of [infinition/Bjorn](https://github.com/infinition/Bj
 - **All existing routes** (Wi-Fi scan/connect, backup/restore, manual attack execution, config save/load, log streaming, credentials/loot browsing, system reboot/shutdown) were ported 1:1 in behavior — verified with FastAPI's TestClient against every route plus the WebSocket, but not yet run on a real Pi, so treat this the same as the other Pi-gated items below until it's been through an actual boot and browser session.
 
 <a id="latest-unreleased-this-fork"></a>
-**Latest (merged to `main`, not yet tagged — mostly hardware-unverified):**
+**New in `v2.5.0-alpha`:**
 - **Optional RustScan port discovery** (backlog #12) — `use_rustscan` toggle (web config switch, off by default) swaps the discovery pass to [RustScan](https://github.com/RustScan/RustScan) when the binary is present; nmap still does service/version detail, and it auto-falls-back to nmap if RustScan is missing or fails, so a scan is never lost. The installer provisions the prebuilt binary on arm64/amd64; `rustscan_batch_size` tunes the socket batch for the Pi Zero 2 W. Compare both engines from the CLI (`python actions/scanning.py --benchmark`) or the web config **Benchmark button** — timings land in `data/scan_engine_benchmark.csv`.
 - **Scan all interface subnets** (#133) — scans every interface's subnet (eth0 + wlan0 + usb0 …), not just the default gateway's, merged into one netkb write.
 - **USB gadget `usb0` gets an IP** (#68, *needs on-Pi verification*) — the gadget setup was a three-way conflict (legacy `g_ether` racing the configfs gadget for the USB controller; three network managers fighting over `usb0`; no address handed to the connected host). Rewritten to one coherent stack — dwc2-only, `systemd-networkd` owning `usb0` with a static IP **and** a DHCP server for the host, NetworkManager set to leave it alone — so plugging the Pi into a laptop reaches the web UI at `http://172.20.2.1:8000/`.
 - **QoL** — in-WebUI **Logs page**; optional **static IP** (Address/CIDR + Gateway + DNS) in the Wi-Fi connect panel; **headless-VM install docs** (`docs/INSTALL_VM.md`, `epd_type: "mock"`).
 - **Performance passes (P1–P5, L3)** — config-tunable brute-force thread count (`bruteforce_threads`); `pandas` dropped from the hot import path (stdlib `csv`, lazy-imported where still needed); batched per-cycle `netkb.csv` writes; change-gated display recomputes; optional vuln-scan flags (`vuln_scan_sv`, `vuln_scan_vulners`).
-- **Correctness** — Bjorn no longer scans/attacks itself (own IPs blacklisted every scan); a manual `NmapVulnScanner` attack no longer 500s.
+- **Correctness** — Bjorn no longer scans/attacks itself (own IPs blacklisted every scan); a manual `NmapVulnScanner` attack no longer 500s; the live-console **Start** button no longer freezes the page (runaway log-colorize loop, *confirmed on-Pi*).
 
 <a id="pi-gated"></a>
-> **Pi-gated (not yet verified on hardware):** dependency version refresh, real e-Paper render, a full installer run, **the 2.2.0-alpha scan-engine rewrite**, the **2.3.0-alpha `auto` display detection**, the **FastAPI web rewrite**, **RustScan on-device tuning**, and the **#68 USB-gadget `usb0` fix** (all need a real Pi + LAN/host). See the CHANGELOG for the split between what's verified and what awaits the Pi.
+> **Pi-gated (not yet verified on hardware):** dependency version refresh, real e-Paper render, the **2.3.0-alpha `auto` display detection**, **RustScan on-device tuning**, and the **#68 USB-gadget `usb0` fix** (all need a real Pi + LAN/host). *Now confirmed on a real Pi:* a full installer run, the **2.2.0-alpha scan-engine rewrite**, and the **FastAPI web rewrite + live console**. See the CHANGELOG for the split between what's verified and what awaits the Pi.
 
 ## 📚 Table of Contents
 

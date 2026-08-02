@@ -74,6 +74,26 @@ collapsing to 4 distinct issues.
 - ~~**In-WebUI log viewer**~~ (from `BjornCocaine`): ✅ **DONE** — added `web/logs.html` + `web/scripts/logs.js` + a "Logs" nav entry (`common.js`) + `logs` in `_PAGES` (`webapp.py`). The colorize/escape renderer was extracted to `common.js` (`colorizeLogLine`/`renderLogsInto`) and shared with the home console. WebUI-only; re-check rendering on the Pi.
 - ~~**Static IP assignment**~~ (#26, done upstream): ✅ **DONE** — the Wi-Fi connect panel now takes optional Address/CIDR + Gateway + DNS fields (`config.html`/`config.js`); `utils.py::_static_ipv4` validates them with stdlib `ipaddress` (rejects malformed input / requires a prefix so nothing unsafe reaches the NM keyfile) and `update_nmconnection` writes `method=manual` when set, else DHCP as before. Default (blank) path unchanged. Needs on-Pi verification that NetworkManager applies the manual profile.
 - ~~**Proxmox / headless-VM deployment**~~ (#138): ✅ **DONE (docs)** — added `docs/INSTALL_VM.md` (set `epd_type: "mock"`, which installer steps are Pi-only). End-to-end verification on a real hypervisor still open.
+- **Coins / stats overhaul** — **M.** Today `shared.py::update_stats()` recomputes `coinnbr`/`levelnbr`
+  as a flat linear function of *current* counts (`networkkbnbr*5 + crednbr*5 + datanbr*5 +
+  zombiesnbr*10 + attacksnbr*5 + vulnnbr*2`) on every refresh, so the score is a live gauge that
+  **can drop** (netkb cleaned, hosts go offline) and rewards nothing durably; levels are a flat
+  multiplier with no progression. Overhaul across four fronts (all confirmed wanted):
+  1. **Earned & persistent score** — make coins **event-driven and monotonic**: award on the moment
+     an achievement happens (new host, cred cracked, file stolen, vuln found, zombie, attack) and
+     **persist** the running total across restarts (a small `data/stats.json`), instead of deriving
+     it from mutable live counts. Coins only ever go up.
+  2. **RPG level curve** — levels use **rising thresholds** (each level costs more coins than the
+     last, e.g. a simple geometric curve) instead of the flat multiplier, for real progression.
+  3. **Richer stats in the web UI** — expose the **breakdown + trend** on the stats dashboard
+     (per-category earned totals, recent-coin history, what earned the last coins), not just the
+     single totals shown today. Builds on the existing `/api/stats` + `web/stats.html`.
+  4. **Rebalanced weights** — retune the award table so rare achievements (cred cracked, file
+     stolen) pay more than common ones (a host merely appearing), decided alongside (1).
+  *Touches:* `shared.py` (award hooks at the achievement sites + persistence), `utils.py`/`webapp.py`
+  (stats snapshot + history), `web/stats.html`/`stats.js` (breakdown view), `display.py` (still reads
+  `coinnbr`/`levelnbr`, unchanged). Design decision needed on the award table + persistence shape
+  before coding; keep the change-gated (P5) recompute discipline so it stays cheap on a Pi Zero.
 
 ## AI / learning (overlaps §4a + P-AI — keep lazy)
 - **Anonymized mission-data export** (the `infinition/Bjorn-cortex` framing): our run-reports already do the redacted-export half. Adopting Cortex's `.csv.gz` shape would make us swarm-compatible later **without** committing to the heavy VPS/TensorFlow stack. YAGNI until there's a Cortex to feed — revisit only if we join a swarm.
@@ -160,6 +180,8 @@ fit ÷ effort. Effort tags: **S** ≈ 1 session, **M** ≈ 2–3 sessions, **L**
   do it once, share it); web toggle.
 - *Tracker detection:* match Apple/Google Find My manufacturer-data / service-UUID heuristics
   (OpenHaystack/AirGuard approach) — this heuristics table is most of the "M" over the "S".
+- *Web UI (required):* a dedicated panel — config (enable, scan interval, tracker-alert toggle)
+  **and** a results view listing discovered BLE devices/trackers — modeled on the Bettercap panel.
 - *Risks:* netkb schema change; BlueZ scan reliability; BT/Wi-Fi coexistence on the shared antenna.
 
 **#7 Passive Wi-Fi survey / wardriving — Effort: M *if built on Bettercap Phase 4*, else L.**
@@ -170,6 +192,8 @@ fit ÷ effort. Effort tags: **S** ≈ 1 session, **M** ≈ 2–3 sessions, **L**
   optional GPS tag. So this is largely an **extension of Bettercap Phase 4**, not standalone work.
 - *New/touched:* extend the Bettercap poller + a `wardrive.csv`; optional GPS (needs a GPS module —
   note **PG-6 GPS tagging was dropped** earlier, so GPS is its own deferred sub-item).
+- *Web UI (required):* a dedicated panel — config **and** a wardriving results view (AP/client
+  table with BSSID/signal/channel, optional map) — modeled on the Bettercap panel.
 - *Risks:* monitor-mode hardware instability (nexmon on Zero 2 W), second-radio requirement, GPS module.
 - *Recommendation:* schedule **after** Bettercap Phase 4 lands; building it standalone duplicates
   the whole monitor-mode/second-radio effort for little gain.

@@ -3,6 +3,11 @@
 ## [Unreleased]
 
 ### Docs
+- **Coins / stats overhaul plan** — `docs/COINS_STATS_PLAN.md`: phased scope for the backlog
+  coins/stats item — a monotonic high-water-mark accumulator (persisted to `data/stats.json`,
+  reuses the counts `display.py` already computes, no connector hooks), an RPG level curve, a
+  richer web-UI breakdown/trend, and rebalanced award weights. Plan only, no code. Linked from
+  `docs/BACKLOG.md`.
 - **Bettercap integration plan** — `docs/BETTERCAP_PLAN.md`: phased scope for the backlog Bettercap
   item (managed-mode MVP — daemon + REST poller feeding `netkb`; monitor mode deferred behind a
   second radio), including a dedicated web config panel, config-key table, touched-files list,

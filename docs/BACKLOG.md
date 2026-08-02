@@ -74,7 +74,7 @@ collapsing to 4 distinct issues.
 - ~~**In-WebUI log viewer**~~ (from `BjornCocaine`): ✅ **DONE** — added `web/logs.html` + `web/scripts/logs.js` + a "Logs" nav entry (`common.js`) + `logs` in `_PAGES` (`webapp.py`). The colorize/escape renderer was extracted to `common.js` (`colorizeLogLine`/`renderLogsInto`) and shared with the home console. WebUI-only; re-check rendering on the Pi.
 - ~~**Static IP assignment**~~ (#26, done upstream): ✅ **DONE** — the Wi-Fi connect panel now takes optional Address/CIDR + Gateway + DNS fields (`config.html`/`config.js`); `utils.py::_static_ipv4` validates them with stdlib `ipaddress` (rejects malformed input / requires a prefix so nothing unsafe reaches the NM keyfile) and `update_nmconnection` writes `method=manual` when set, else DHCP as before. Default (blank) path unchanged. Needs on-Pi verification that NetworkManager applies the manual profile.
 - ~~**Proxmox / headless-VM deployment**~~ (#138): ✅ **DONE (docs)** — added `docs/INSTALL_VM.md` (set `epd_type: "mock"`, which installer steps are Pi-only). End-to-end verification on a real hypervisor still open.
-- **Coins / stats overhaul** — **M.** Today `shared.py::update_stats()` recomputes `coinnbr`/`levelnbr`
+- **Coins / stats overhaul** — **M.** 📋 **scoped: see [`COINS_STATS_PLAN.md`](COINS_STATS_PLAN.md)** (monotonic high-water-mark model, persisted, level curve, richer web breakdown). Today `shared.py::update_stats()` recomputes `coinnbr`/`levelnbr`
   as a flat linear function of *current* counts (`networkkbnbr*5 + crednbr*5 + datanbr*5 +
   zombiesnbr*10 + attacksnbr*5 + vulnnbr*2`) on every refresh, so the score is a live gauge that
   **can drop** (netkb cleaned, hosts go offline) and rewards nothing durably; levels are a flat

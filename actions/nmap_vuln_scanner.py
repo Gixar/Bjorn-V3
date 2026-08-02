@@ -3,6 +3,8 @@
 # It scans for vulnerabilities on various ports and saves the results and progress.
 
 import os
+import re
+import json
 import subprocess
 import logging
 from datetime import datetime
@@ -28,6 +30,7 @@ class NmapVulnScanner:
         self.shared_data = shared_data
         self.scan_results = []
         self.summary_file = self.shared_data.vuln_summary_file
+        self._cve_signatures = None  # lazy-loaded offline CVE DB (config/cve_signatures.json)
         self.create_summary_file()
         logger.debug("NmapVulnScanner initialized.")
 
@@ -83,6 +86,13 @@ class NmapVulnScanner:
             combined_result += result.stdout
 
             vulnerabilities = self.parse_vulnerabilities(result.stdout)
+            # Offline CVE enrichment: match the -sV service versions against the bundled
+            # signature DB. No internet needed, so it complements the online vulners.nse and
+            # still flags known-vulnerable versions when vuln_scan_vulners is off.
+            if getattr(self.shared_data, "vuln_offline_cve", True):
+                offline = self.enrich_offline(result.stdout)
+                if offline:
+                    vulnerabilities = "; ".join(v for v in (vulnerabilities, offline) if v)
             self.update_summary_file(ip, hostname, mac, ",".join(ports), vulnerabilities)
         except Exception as e:
             logger.error(f"Error scanning {ip}: {e}")
@@ -121,6 +131,68 @@ class NmapVulnScanner:
                 else:
                     capture = False
         return "; ".join(vulnerabilities)
+
+    # --- Offline CVE enrichment (bundled config/cve_signatures.json) -------------------
+    def _load_cve_signatures(self):
+        """Load the bundled offline CVE signature DB. Missing/broken file → [] (feature no-ops)."""
+        path = os.path.join(self.shared_data.configdir, "cve_signatures.json")
+        try:
+            with open(path) as f:
+                return json.load(f).get("signatures", [])
+        except (FileNotFoundError, json.JSONDecodeError) as e:
+            logger.warning(f"Offline CVE signatures unavailable ({path}): {e}")
+            return []
+
+    def enrich_offline(self, scan_output):
+        """Match the service versions nmap -sV reported (via CPE) against the signature DB.
+        Returns a '; '-joined string of matched CVEs (empty if none / no signatures)."""
+        if self._cve_signatures is None:
+            self._cve_signatures = self._load_cve_signatures()
+        if not self._cve_signatures:
+            return ""
+        pairs = self._parse_service_versions(scan_output)
+        return "; ".join(sorted(self._match_signatures(pairs, self._cve_signatures)))
+
+    @staticmethod
+    def _parse_service_versions(scan_output):
+        """Extract (product, version) pairs from nmap -sV output via the structured CPE lines
+        (cpe:/a:vendor:product:version). product lowercased; deduped; best-effort (services with
+        no CPE are skipped — good enough, extend to service-line parsing only if hit rate is low)."""
+        pairs, seen = [], set()
+        for m in re.finditer(r'cpe:/[aoh]:[^:\s]+:([^:\s]+):([^:\s]+)', scan_output):
+            key = (m.group(1).lower(), m.group(2))
+            if key not in seen:
+                seen.add(key)
+                pairs.append(key)
+        return pairs
+
+    @staticmethod
+    def _match_signatures(pairs, signatures):
+        """Set of 'CVE-… (product version) [severity]' strings for every (product, version) that
+        matches a signature. Pure/testable."""
+        findings = set()
+        for product, version in pairs:
+            for sig in signatures:
+                if sig.get("product", "").lower() == product and \
+                        NmapVulnScanner._version_matches(version, sig):
+                    findings.add(f"{sig['cve']} ({product} {version}) [{sig.get('severity', '?')}]")
+        return findings
+
+    @staticmethod
+    def _version_matches(version, sig):
+        if "version" in sig:
+            return version == sig["version"]
+        if "version_contains" in sig:
+            return sig["version_contains"] in version
+        if "version_lt" in sig:
+            # ponytail: naive numeric-tuple compare (8.4p1 -> (8,4,1)); fine for the seed CVEs.
+            # Swap for packaging.version if real range matching is ever needed.
+            return NmapVulnScanner._ver_tuple(version) < NmapVulnScanner._ver_tuple(sig["version_lt"])
+        return False
+
+    @staticmethod
+    def _ver_tuple(v):
+        return tuple(int(n) for n in re.findall(r'\d+', v))
 
     def save_results(self, mac_address, ip, scan_result):
         """

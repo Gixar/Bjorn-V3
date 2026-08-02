@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Added
+- **Offline CVE enrichment** (backlog Wave 1 #1) — `NmapVulnScanner` now matches the service
+  versions `nmap -sV` reports (parsed from the CPE lines) against a bundled offline signature DB
+  (`config/cve_signatures.json`) and folds any matches into the same vulnerabilities set the online
+  `vulners.nse` feeds — so it flows to the vuln summary / count / display for free, and flags
+  known-vulnerable versions **with no internet** (works even when `vuln_scan_vulners` is off). New
+  `vuln_offline_cve` config toggle (default `true`). The DB seeds a handful of high-signal,
+  version-detectable CVEs (vsftpd 2.3.4, UnrealIRCd 3.2.8.1, ProFTPD 1.3.5, SambaCry, OpenSSH
+  <7.7, Apache 2.4.49) and is a plain JSON list meant to be extended. Matching supports exact /
+  contains / naive `version_lt`; new `tests/test_cve_enrichment.py`.
+
 ### Docs
 - **Coins / stats overhaul plan** — `docs/COINS_STATS_PLAN.md`: phased scope for the backlog
   coins/stats item — a monotonic high-water-mark accumulator (persisted to `data/stats.json`,

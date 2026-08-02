@@ -167,6 +167,7 @@ class SharedData:
             "nmap_scan_aggressivity": "-T2",
             "vuln_scan_sv": True,        # include nmap -sV (service/version detection) in the vuln scan
             "vuln_scan_vulners": True,   # run the vulners.nse CVE script (internet-dependent, heaviest step)
+            "vuln_offline_cve": True,    # match -sV service versions against the bundled offline CVE DB (config/cve_signatures.json); no internet
             "portstart": 1,
             "portend": 2,
             

@@ -15,7 +15,8 @@ def _good_config():
         "failed_retry_delay": 600, "success_retry_delay": 900, "ref_width": 122, "ref_height": 250,
         "epd_type": "epd2in13_V4", "portlist": [22, 80, 443],
         "battery_monitor_enabled": False, "battery_shutdown_percent": 10,
-        "vuln_scan_sv": True, "vuln_scan_vulners": True, "bruteforce_threads": 0,
+        "vuln_scan_sv": True, "vuln_scan_vulners": True, "vuln_offline_cve": True,
+        "bruteforce_threads": 0,
         "use_rustscan": False, "rustscan_batch_size": 0, "rustscan_full_port": False,
     }
 

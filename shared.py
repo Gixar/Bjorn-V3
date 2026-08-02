@@ -144,6 +144,7 @@ class SharedData:
             "failed_retry_delay": 600,
             "success_retry_delay": 900,
             "bruteforce_threads": 0,  # brute-force worker threads per connector; 0 = auto (core-aware, capped at 8)
+            "credential_reuse": True,  # replay a cracked user:password across other hosts/protocols (tried first); shared pool in crackedpwd/known_creds.csv
             "ref_width" :122 ,
             "ref_height" : 250,
             "epd_type": "epd2in13_V4",
@@ -797,3 +798,9 @@ def dedupe_csv(path):
             unique.append(row)
     with open(path, "w", newline='') as f:
         csv.writer(f).writerows(unique)
+
+
+# Credential reuse / lateral chaining (backlog Wave 1 #2). The pool helpers live in the
+# dependency-free credential_pool module (unit-testable without SharedData); re-exported here so
+# the connectors keep importing them from `shared`.
+from credential_pool import known_cred_pairs, record_cracked_cred, credential_candidates  # noqa: E402,F401

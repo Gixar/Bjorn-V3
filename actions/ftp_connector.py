@@ -6,7 +6,7 @@ from rich.console import Console
 from rich.progress import Progress, BarColumn, TextColumn, SpinnerColumn
 from ftplib import FTP
 from queue import Queue
-from shared import SharedData, netkb_targets, append_csv_rows, dedupe_csv
+from shared import SharedData, netkb_targets, append_csv_rows, dedupe_csv, credential_candidates, record_cracked_cred
 from logger import Logger
 
 logger = Logger(name="ftp_connector.py", level=logging.DEBUG)
@@ -97,6 +97,7 @@ class FTPConnector:
             if self.ftp_connect(adresse_ip, user, password):
                 with self.lock:
                     self.results.append([mac_address, adresse_ip, hostname, user, password, port])
+                    record_cracked_cred(self.shared_data, user, password)
                     logger.success(f"Found credentials for IP: {adresse_ip} | User: {user}")
                     self.save_results()
                     self.removeduplicates()
@@ -114,14 +115,14 @@ class FTPConnector:
         mac_address = match['MAC Address']
         hostname = match['Hostnames']
 
-        total_tasks = len(self.users) * len(self.passwords) + 1  # Include one for the anonymous attempt
-        
-        for user in self.users:
-            for password in self.passwords:
-                if self.shared_data.orchestrator_should_exit:
-                    logger.info("Orchestrator exit signal received, stopping bruteforce task addition.")
-                    return False, []
-                self.queue.put((adresse_ip, user, password, mac_address, hostname, port))
+        candidates = credential_candidates(self.shared_data, self.users, self.passwords)
+        total_tasks = len(candidates) + 1  # Include one for the anonymous attempt
+
+        for user, password in candidates:
+            if self.shared_data.orchestrator_should_exit:
+                logger.info("Orchestrator exit signal received, stopping bruteforce task addition.")
+                return False, []
+            self.queue.put((adresse_ip, user, password, mac_address, hostname, port))
 
         success_flag = [False]
         threads = []

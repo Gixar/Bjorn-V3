@@ -3,6 +3,14 @@
 ## [Unreleased]
 
 ### Added
+- **Credential reuse / lateral chaining** (backlog Wave 1 #2) — a cred cracked on one host is now
+  auto-replayed across every other host **and protocol**. All six brute-force connectors
+  (SSH/FTP/Telnet/RDP/SMB/SQL) record each hit into a shared pool (`crackedpwd/known_creds.csv`) and,
+  on their next host, try the pool pairs **first** before the full wordlist product. The candidate
+  list is recomputed per attack (connectors are long-lived singletons), so reuse kicks in within the
+  same scan cycle. New dependency-free `credential_pool.py` (unit-testable without `SharedData`,
+  re-exported from `shared`), new `credential_reuse` config toggle (default `true`), and
+  `tests/test_credential_reuse.py`.
 - **Offline CVE enrichment** (backlog Wave 1 #1) — `NmapVulnScanner` now matches the service
   versions `nmap -sV` reports (parsed from the CPE lines) against a bundled offline signature DB
   (`config/cve_signatures.json`) and folds any matches into the same vulnerabilities set the online

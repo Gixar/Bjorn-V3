@@ -99,6 +99,81 @@ netkb writes + `TimeoutStopSec`; opt-in `battery.py` PiSugar monitor + low-charg
 
 - **PG-5 — plugin system** (lifecycle + UI + web hooks): widen the P3-1 module contract from attack-modules-only to features generally (folded into P3-1 scope, not separate work).
 
+## Adjacent-project feature ideas (survey — Flipper/Pwnagotchi/bettercap/Kismet/Responder/nuclei)
+
+Ideation pass mining adjacent cybersec projects for capabilities that fit Bjorn's shape (Pi Zero,
+the `netkb.csv` pipeline, the `b_class` action-module contract, the network it already joins via
+`nmcli`). Same offensive class as the existing tool — authorized-testing use assumed. Ranked by
+fit ÷ effort. Effort tags: **S** ≈ 1 session, **M** ≈ 2–3 sessions, **L** ≈ multi-PR.
+
+1. **Offline CVE enrichment** *(searchsploit / nuclei-cves)* — **S.** Map the service versions
+   `nmap -sV` already gathers to a bundled offline CVE DB; flag vulnerable hosts in `netkb.csv`.
+   Extends `NmapVulnScanner`; no new hardware, no scan-time internet. Highest fit ÷ effort.
+2. **Responder-style LLMNR/NBT-NS/mDNS poisoning** *(Responder / Impacket)* — **M.** Passive
+   NetNTLM-hash capture on the joined LAN → loot file for offline cracking. See effort detail below.
+3. **nuclei-style templated web checks** *(ProjectDiscovery nuclei)* — **M.** Templated vuln checks
+   against discovered HTTP services; builds directly on the **HTTP fingerprinting** item above
+   (fingerprint → fire matching YAML templates, extensible without code).
+4. **Credential reuse / auto-lateral chaining** *(CrackMapExec pattern)* — **S–M.** When a
+   brute-force cracks a cred, auto-replay it across every other host/protocol in `netkb` (reuse /
+   spray). Pure logic on top of the existing 6 connectors + netkb; compounds every crack.
+5. **PCAP capture + offline exfil** *(tcpdump / bettercap sniff)* — **M.** Rotating capture on the
+   joined network, delivered via the planned Telegram/report pipeline. Extends the Bettercap
+   managed-mode **sniff** capability already scoped in [`BETTERCAP_PLAN.md`](BETTERCAP_PLAN.md).
+6. **BLE recon + tracker detection** *(Flipper/Marauder BLE, OpenHaystack/AirGuard)* — **S–M.**
+   Enumerate nearby BLE devices, detect Apple/Google trackers, feed into netkb. Scanning needs **no
+   monitor mode**. See effort detail below.
+7. **Passive Wi-Fi survey / wardriving** *(Kismet / Pwnagotchi)* — **M** (on top of Bettercap
+   Phase 4) / **L** standalone. Log nearby APs+clients (BSSID/signal/channel, optional GPS) to a
+   wardriving map. Needs monitor mode → shares the second-radio gate. See effort detail below.
+8. **Evil Twin / rogue AP + captive portal** *(WiFi Pineapple / hostapd+dnsmasq)* — **L.** Lookalike
+   AP + credential-harvesting portal. Needs an AP-capable radio; overlaps bettercap. Later project.
+9. **HID / BadUSB payload delivery** *(Flipper BadUSB / P4wnP1 / Rubber Ducky)* — **M.** Bjorn is
+   already a USB gadget (`usb0`) — add HID-keyboard emulation to type payloads on the plugged host.
+   ⚠️ BadUSB was **deliberately dropped** earlier (commit `f914191`) — this is a reversal to
+   reconsider, not a fresh idea.
+10. **Defensive "canary" mode** *(OpenCanary / Thinkst)* — **M.** Blue-team pivot: fake services as
+    a tripwire that alerts on touches. Reuses the web/report stack; a legally-safer second personality.
+
+### Effort detail — #2, #6, #7
+
+**#2 Responder LLMNR/NBT-NS/mDNS poisoning — Effort: M (~2 sessions).**
+- *Hardware:* none — runs on the LAN Bjorn already joined (same model as current scanning). Root required.
+- *Approach (lazy):* run the existing **Responder** tool (Python, GPL) as an external managed
+  process — same "subprocess vs reimplement" pattern used for nmap/nmcli — and parse its output
+  DB/logs for captured hashes rather than reimplementing the LLMNR/NBT-NS/mDNS listeners.
+- *New/touched:* `responder_client.py` (spawn + parse) or a standalone action; loot schema for
+  NetNTLM hashes (new `data/output/` file); `install_bjorn.sh` provisions Responder; a web toggle.
+- *Risks:* **port conflicts** — Responder wants 53/80/139/445, which can clash with the Pi's own
+  services; needs to bind the right interface; it's **noisy/detectable**; runs continuously (not
+  per-cycle), so it needs its own start/stop lifecycle like the Bettercap poller.
+- *Bulk of the work:* process lifecycle + output parsing + loot integration, not the capture itself.
+
+**#6 BLE recon + tracker detection — Effort: S–M (~1.5–2 sessions).**
+- *Hardware:* built-in — Zero 2 W has BLE (Zero W BT 4.1). **Scanning needs no monitor mode**, so
+  it's far lower-risk than any Wi-Fi-monitor idea.
+- *Approach (lazy):* passive scan via BlueZ — either `bleak` (asyncio) or shell out to
+  `bluetoothctl scan`/`btmgmt` (subprocess pattern). A data-source thread (like the Bettercap
+  poller), not a per-target action.
+- *New/touched:* `ble_scanner.py`; **netkb schema** needs a `device_type`/`source` column for
+  non-IP wireless entries (the *same* schema gap flagged in the Bettercap Phase-4 / ESP32 items —
+  do it once, share it); web toggle.
+- *Tracker detection:* match Apple/Google Find My manufacturer-data / service-UUID heuristics
+  (OpenHaystack/AirGuard approach) — this heuristics table is most of the "M" over the "S".
+- *Risks:* netkb schema change; BlueZ scan reliability; BT/Wi-Fi coexistence on the shared antenna.
+
+**#7 Passive Wi-Fi survey / wardriving — Effort: M *if built on Bettercap Phase 4*, else L.**
+- *Hardware:* **needs monitor mode → a second radio, never `wlan0`** (same gate, same nexmon
+  caveats as Bettercap Phase 4). This radio requirement is the dominant cost.
+- *Approach (lazy):* **don't build a separate monitor stack** — bettercap already does `wifi.recon`.
+  Wardriving = subscribe the Bettercap poller to AP/client events and log them to a wardriving CSV +
+  optional GPS tag. So this is largely an **extension of Bettercap Phase 4**, not standalone work.
+- *New/touched:* extend the Bettercap poller + a `wardrive.csv`; optional GPS (needs a GPS module —
+  note **PG-6 GPS tagging was dropped** earlier, so GPS is its own deferred sub-item).
+- *Risks:* monitor-mode hardware instability (nexmon on Zero 2 W), second-radio requirement, GPS module.
+- *Recommendation:* schedule **after** Bettercap Phase 4 lands; building it standalone duplicates
+  the whole monitor-mode/second-radio effort for little gain.
+
 ## Reference forks
 - `HackCocaine/BjornCocaine` — screen-agnostic WebUI-first, LOGS button, multi-Pi.
 - `LOCOSP/BjornWpaSecHarvester` — wpa-sec/Pwnagotchi import.

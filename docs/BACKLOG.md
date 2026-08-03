@@ -9,6 +9,36 @@ Already fixed this cycle (see `CHANGELOG.md`): #16 port hopping, #147 installer 
 #152 EPD option-count prompt. Already covered by the v2 baseline: run-without-display (#11 →
 `epd_type: "mock"`), dependency modernization (P1-1/P1-2).
 
+## Wave 0 verification — on-Pi results (2026-08-02, v2.5.0-alpha, Pi Zero armv7l)
+
+Clean reinstall of 2.5.0-alpha, checked against a real LAN (source: install/verify log pull).
+
+**✅ Confirmed working on hardware:**
+- **RustScan on 32-bit armv7 + full-port mode** — `ps` shows `rustscan -a … -r 1-65535 -g --no-config`
+  running (binary provisioned on armv7l); both full-port (`-r 1-65535`) and curated-list (41 ports)
+  paths observed.
+- **Engine log line** — `scanning.py.log`: `Port discovery engine: rustscan (8 hosts, 41 ports)`.
+- **P1 idle spam** — `journalctl -u bjorn | grep -ci idle` = **0**; one "idling 180s" per window.
+- **Self-scan guard** — `Excluding own IPs from scan: ['192.168.1.35']` each scan.
+- **Coins/stats overhaul** — `data/stats.json` = `{hwm:{hosts:10,attacks:17,…}, coins:95, level:1}`;
+  monotonic model + math correct (10×1 + 17×5 = 95; `floor(√(95/25))` = 1), persisted to disk.
+- **wpa-sec import** — no-op path confirmed: `wpasec_api_key not set; skipping` (correct).
+- **Manual NmapVulnScanner attack** — runs, no 500 (the `bc535da` special-case holds).
+- Clean baseline: service active, SPI OK, no journal/app/install errors.
+
+**⚠️ New issues found this pass (tracked in the bugs table below):**
+- Manual attack with **NetworkScanner** → 500 `Action class NetworkScanner not found`.
+- **usb0 has no IP** even when UP (`NO-CARRIER`, state `DOWN`, no `inet`) — #68 still unproven.
+- **`epd_test.py --all` all-fail with `GPIO busy`** because `bjorn.service` holds the pins.
+
+**⏳ Unconfirmed (need a suitable target):**
+- **CVE enrichment** — the only open host is a ZTE router whose services nmap can't CPE-identify
+  ("2 services unrecognized"), so the CPE-only matcher had nothing to match (correct behavior, but
+  unproven). → consider a `-sV` service-line fallback for CPE-less consumer gear.
+- **Credential reuse** — no crackable SSH/FTP/… host on the LAN, so no crack occurred to replay.
+- **wpa-sec inject** — needs an API key + previously-cracked networks.
+- **#68 usb0** — retest with a host physically plugged into the USB port.
+
 ## Bugs still open (need the WebUI/Pi to reproduce + verify)
 | Ref | Issue | Likely fix / pointer |
 |---|---|---|
@@ -18,7 +48,9 @@ Already fixed this cycle (see `CHANGELOG.md`): #16 port hopping, #147 installer 
 | #155 | Web server not showing | Overlaps #16 (port hopping) — re-test after the SO_REUSEADDR fix; if still failing, check the systemd unit + firewall. |
 | #122 | Installed but no Display *or* WebUI (most-commented) | Multi-cause: partly #16 (port), partly EPD init failing on the panel. Re-test after the port fix; if the display is still dead, check `epd_type` + wiring. Pi-only. |
 | #113 | Waveshare **V4 unreadable** display | Affects the **default** `epd_type: "epd2in13_V4"` — reported as unreadable/garbled since May 2025. Likely a refresh-mode / LUT or rotation issue in the vendor driver. Needs the actual V4 panel to diagnose. |
-| #68 | `usb0` IP not assigned | **Fix written — needs on-Pi verification.** `configure_usb_gadget` was rewritten to one coherent stack: dwc2-only (dropped the `g_ether` that raced the configfs gadget for the UDC), `systemd-networkd` owns `usb0` via a `.network` file (static `172.20.2.1/24` + built-in DHCP server so the *host* gets `172.20.2.10-30`), NetworkManager set to leave `usb0` unmanaged, and the conflicting ifupdown/imperative-`ifconfig` bits removed. Verify on hardware (plug into a host → usb0 addressed, host leased, `http://172.20.2.1:8000/` loads). Pi-only. |
+| #68 | `usb0` IP not assigned | **Fix written — on-Pi check (2026-08-02) inconclusive/failing.** `ip addr show usb0` returned `NO-CARRIER … state DOWN` with **no `inet`** — the static `172.20.2.1/24` was not present. Nothing was plugged into the USB port at the time (NO-CARRIER), so it's not conclusive, but a static address should appear regardless of carrier → the `systemd-networkd` `.network` may need `ConfigureWithoutCarrier=yes` (or isn't being applied). **Next:** plug a host into the USB port and re-check; if still no `inet`, add `ConfigureWithoutCarrier=yes` to `/etc/systemd/network/10-usb0.network`. The rewrite: dwc2-only (dropped `g_ether`), networkd owns `usb0` (static + built-in DHCP `172.20.2.10-30`), NM leaves it unmanaged. Pi-only. |
+| **NEW** | Manual attack with **NetworkScanner** → 500 | On-Pi (2026-08-02): triggering a manual **NetworkScanner** attack on `192.168.1.15:53` logged `ERROR - Error executing manual attack: Action class NetworkScanner not found`. Same class of bug as the old `NmapVulnScanner` 500 (`bc535da`): `NetworkScanner` isn't in `self.actions` (it's loaded separately as `self.network_scanner`), so the manual-attack handler can't find it. **Fix:** either special-case it like `NmapVulnScanner`, or drop non-connector actions (NetworkScanner, standalone log actions) from the manual-attack dropdown so they can't be selected. Low effort. |
+| **NEW** | `epd_test.py --all` fails with `GPIO busy` while the service runs | On-Pi (2026-08-02): every driver failed `lgpio.error: 'GPIO busy'` because `bjorn.service` was running and holding the RST pin (`gpiozero.LED(RST_PIN)`). Not a driver fault — a usability gap. **Fix:** `scripts/epd_test.py` should detect the `GPIO busy` error and print "stop bjorn.service first (`sudo systemctl stop bjorn`) then re-run", and `TROUBLESHOOTING.md` should say the same. (The panel itself works: `epd2in13_V3` renders fine under the running service.) |
 
 ## From runtime logs (`bk_log`, Jul 31 – Aug 1 2026 — priority order)
 
@@ -126,9 +158,11 @@ the `netkb.csv` pipeline, the `b_class` action-module contract, the network it a
 `nmcli`). Same offensive class as the existing tool — authorized-testing use assumed. Ranked by
 fit ÷ effort. Effort tags: **S** ≈ 1 session, **M** ≈ 2–3 sessions, **L** ≈ multi-PR.
 
-1. **Offline CVE enrichment** *(searchsploit / nuclei-cves)* — **S.** Map the service versions
-   `nmap -sV` already gathers to a bundled offline CVE DB; flag vulnerable hosts in `netkb.csv`.
-   Extends `NmapVulnScanner`; no new hardware, no scan-time internet. Highest fit ÷ effort.
+1. ~~**Offline CVE enrichment**~~ *(searchsploit / nuclei-cves)* — ✅ **DONE (Wave 1 #1)**; parses
+   `nmap -sV` CPE lines against the bundled `config/cve_signatures.json`. **On-Pi follow-up:** the
+   only test host (a ZTE router) returned *no* CPE ("2 services unrecognized"), so nothing matched.
+   Consider a **`-sV` service-line fallback** (parse `product version` from the plain service line
+   when no CPE is emitted) — CPE-less consumer gear is common, and CPE-only limits real-world hits.
 2. **Responder-style LLMNR/NBT-NS/mDNS poisoning** *(Responder / Impacket)* — **M.** Passive
    NetNTLM-hash capture on the joined LAN → loot file for offline cracking. See effort detail below.
 3. **nuclei-style templated web checks** *(ProjectDiscovery nuclei)* — **M.** Templated vuln checks

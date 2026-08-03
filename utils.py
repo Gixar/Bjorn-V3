@@ -181,7 +181,14 @@ class WebUtils:
                 reader = csv.DictReader(file)
                 data = [row for row in reader if row['Alive'] == '1']
 
-            actions = reader.fieldnames[5:]  # Actions are all fields after 'Ports'
+            # Only offer actions the manual-attack handler can actually run per host: the
+            # port-based connectors plus the special-cased NmapVulnScanner. Excludes NetworkScanner,
+            # IDLE, and the standalone log actions, which otherwise 500'd with
+            # "Action class <name> not found" when picked from the dropdown.
+            self.load_actions()
+            attackable = {a.action_name for a in self.actions if getattr(a, "port", None) not in (0, None)}
+            attackable.add("NmapVulnScanner")
+            actions = [a for a in reader.fieldnames[5:] if a in attackable]  # fields after 'Ports'
             response_data = {
                 'ips': [row['IPs'] for row in data],
                 'ports': {row['IPs']: row['Ports'].split(';') for row in data},

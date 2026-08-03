@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Fixed
+- **Manual attack no longer offers un-runnable actions (NetworkScanner 500)** — the manual-attack
+  dropdown (`/netkb_data_json`) listed *every* netkb action column, so picking **NetworkScanner**
+  (or IDLE / a standalone log action) hit `execute_manual_attack`'s "Action class … not found" path
+  and errored. `serve_netkb_data_json` now filters to actions the handler can actually run per host:
+  the port-based connectors plus the special-cased `NmapVulnScanner`, derived from the loaded action
+  metadata (`port not in (0, None)`) rather than a hardcoded denylist. Found during Wave 0 on-Pi
+  verification.
+
 ### Added
 - **wpa-sec Wi-Fi credential import** (backlog Wave 1 #4) — new opt-in standalone action
   `WpaSecImport` pulls your cracked Wi-Fi keys from wpa-sec.stanev.org and injects them into

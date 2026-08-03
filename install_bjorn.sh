@@ -234,6 +234,7 @@ install_dependencies() {
         "git"
         "libopenjp2-7"
         "nmap"
+        "snmp"
         "libopenblas-dev"
         "bluez-tools"
         "bluez"

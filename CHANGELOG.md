@@ -20,6 +20,13 @@
   verification.
 
 ### Added
+- **SNMP enumeration** (backlog Wave 2) — new standalone action `SNMPEnum`
+  (`actions/snmp_enum.py`). SNMP is UDP/161 (invisible to the TCP scanner), so instead of being
+  port-gated it iterates the alive hosts in netkb itself and probes 161 with the configured
+  community strings via `snmpget` (net-snmp), recording sysDescr + sysName to
+  `data/output/scan_results/snmp_enum.csv`. No-op (logged) when `snmpget` is absent — same graceful
+  external-tool pattern as RustScan. New `snmp_communities` config (default `["public","private"]`);
+  installer now provisions the `snmp` apt package. New `tests/test_snmp_enum.py`.
 - **nuclei-style templated web checks** (backlog Wave 2) — new `WebTemplateScan` action
   (`actions/web_template_scan.py`), a **child of `HTTPFingerprint`** (runs after a host's web
   services are fingerprinted). For each open web port it GETs each bundled template's path and

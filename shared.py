@@ -161,6 +161,7 @@ class SharedData:
             "portlist": [20, 21, 22, 23, 25, 53, 69, 80, 110, 111, 135, 137, 139, 143, 161, 162, 389, 443, 445, 512, 513, 514, 587, 636, 993, 995, 1080, 1433, 1521, 2049, 3306, 3389, 5000, 5001, 5432, 5900, 8080, 8443, 9090, 10000],
             "mac_scan_blacklist": [],
             "ip_scan_blacklist": [],
+            "snmp_communities": ["public", "private"],  # SNMP community strings tried by SNMPEnum (snmpget)
             "steal_file_names": ["ssh.csv","hack.txt"],
             "steal_file_extensions": [".bjorn",".hack",".flag"],
             

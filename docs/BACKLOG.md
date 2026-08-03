@@ -167,9 +167,12 @@ fit ÷ effort. Effort tags: **S** ≈ 1 session, **M** ≈ 2–3 sessions, **L**
    to confirm an end-to-end match on-Pi.
 2. **Responder-style LLMNR/NBT-NS/mDNS poisoning** *(Responder / Impacket)* — **M.** Passive
    NetNTLM-hash capture on the joined LAN → loot file for offline cracking. See effort detail below.
-3. **nuclei-style templated web checks** *(ProjectDiscovery nuclei)* — **M.** Templated vuln checks
-   against discovered HTTP services; builds directly on the now-shipped **HTTP fingerprinting**
-   (consume `http_fingerprints.csv` → fire matching YAML templates, extensible without code).
+3. ~~**nuclei-style templated web checks**~~ *(ProjectDiscovery nuclei)* — ✅ **DONE (Wave 2)** —
+   `WebTemplateScan` action, a child of `HTTPFingerprint`, fires bundled JSON templates
+   (`config/web_templates.json`) at each web port; hits → `web_template_findings.csv`. Matchers:
+   `status` + `body_contains`. JSON not YAML (stdlib, no pyyaml dep). Needs the Pi to confirm
+   end-to-end. *(ponytail: no tech-gating on the fingerprint yet; add a `match_server` template gate
+   if request volume bites.)*
 4. **Credential reuse / auto-lateral chaining** *(CrackMapExec pattern)* — **S–M.** When a
    brute-force cracks a cred, auto-replay it across every other host/protocol in `netkb` (reuse /
    spray). Pure logic on top of the existing 6 connectors + netkb; compounds every crack.

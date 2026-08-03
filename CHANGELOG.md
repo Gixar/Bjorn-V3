@@ -20,6 +20,14 @@
   verification.
 
 ### Added
+- **nuclei-style templated web checks** (backlog Wave 2) — new `WebTemplateScan` action
+  (`actions/web_template_scan.py`), a **child of `HTTPFingerprint`** (runs after a host's web
+  services are fingerprinted). For each open web port it GETs each bundled template's path and
+  reports a hit when the matchers pass (`status` any-of **and** `body_contains` any-of); findings go
+  to `data/output/scan_results/web_template_findings.csv`. Templates live in
+  `config/web_templates.json` — plain JSON (stdlib, **no pyyaml dep**), extensible without code;
+  seeded with high-signal exposures (.git/config, .env, phpinfo, Apache server-status, .DS_Store,
+  backup.sql). Stdlib `urllib`; self-signed certs accepted. New `tests/test_web_template_scan.py`.
 - **HTTP(S) service fingerprinting** (backlog Wave 2, PRD P3-5) — new per-host recon action
   `HTTPFingerprint` (`actions/http_fingerprint.py`): for a live host with a web port open, it GETs
   each open web port (80/443/8080/8443/8000/8888/9090, TLS auto-detected) and records the status,

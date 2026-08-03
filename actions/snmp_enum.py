@@ -13,6 +13,7 @@ import logging
 import subprocess
 from shared import SharedData
 from logger import Logger
+from csv_safe import sanitize_row
 
 logger = Logger(name="snmp_enum.py", level=logging.INFO)
 
@@ -101,7 +102,7 @@ class SNMPEnum:
             w = csv.writer(f)
             if new_file:
                 w.writerow(["IP", "Hostname", "Community", "sysDescr", "sysName"])
-            w.writerow([ip, hostname, community, descr, name])
+            w.writerow(sanitize_row([ip, hostname, community, descr, name]))
 
 
 if __name__ == "__main__":

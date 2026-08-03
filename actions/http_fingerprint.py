@@ -19,6 +19,7 @@ import urllib.error
 import urllib.request
 from shared import SharedData
 from logger import Logger
+from csv_safe import sanitize_row
 
 logger = Logger(name="http_fingerprint.py", level=logging.INFO)
 
@@ -100,7 +101,7 @@ class HTTPFingerprint:
                 csv.writer(f).writerow(
                     ["IP", "Hostname", "Port", "Status", "Server", "X-Powered-By", "Title", "URL"])
         with open(self.outfile, "a", newline="") as f:
-            csv.writer(f).writerows(rows)
+            csv.writer(f).writerows(sanitize_row(r) for r in rows)
 
 
 if __name__ == "__main__":

@@ -17,6 +17,7 @@ import urllib.error
 import urllib.request
 from shared import SharedData
 from logger import Logger
+from csv_safe import sanitize_row
 from actions.http_fingerprint import HTTPFingerprint
 
 logger = Logger(name="web_template_scan.py", level=logging.INFO)
@@ -105,7 +106,7 @@ class WebTemplateScan:
                 csv.writer(f).writerow(
                     ["IP", "Hostname", "Port", "TemplateID", "Severity", "Name", "URL"])
         with open(self.outfile, "a", newline="") as f:
-            csv.writer(f).writerows(rows)
+            csv.writer(f).writerows(sanitize_row(r) for r in rows)
 
 
 if __name__ == "__main__":

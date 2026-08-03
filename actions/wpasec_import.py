@@ -15,6 +15,7 @@ import subprocess
 import urllib.request
 from shared import SharedData
 from logger import Logger
+from csv_safe import sanitize_row
 
 logger = Logger(name="wpasec_import.py", level=logging.INFO)
 
@@ -167,7 +168,7 @@ method=auto
             w = csv.writer(f)
             if new_file:
                 w.writerow(["SSID", "Password"])
-            w.writerow([ssid, psk])
+            w.writerow(sanitize_row([ssid, psk]))
 
 
 if __name__ == "__main__":

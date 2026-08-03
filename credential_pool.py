@@ -8,6 +8,7 @@
 import os
 import csv
 import threading
+from csv_safe import sanitize_row
 
 _known_creds_lock = threading.Lock()
 
@@ -46,7 +47,7 @@ def record_cracked_cred(shared_data, user, password):
             w = csv.writer(f)
             if new_file:
                 w.writerow(["User", "Password"])
-            w.writerow([user, password])
+            w.writerow(sanitize_row([user, password]))
 
 
 def credential_candidates(shared_data, users, passwords):

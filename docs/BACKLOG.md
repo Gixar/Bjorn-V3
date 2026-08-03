@@ -159,10 +159,11 @@ the `netkb.csv` pipeline, the `b_class` action-module contract, the network it a
 fit ÷ effort. Effort tags: **S** ≈ 1 session, **M** ≈ 2–3 sessions, **L** ≈ multi-PR.
 
 1. ~~**Offline CVE enrichment**~~ *(searchsploit / nuclei-cves)* — ✅ **DONE (Wave 1 #1)**; parses
-   `nmap -sV` CPE lines against the bundled `config/cve_signatures.json`. **On-Pi follow-up:** the
-   only test host (a ZTE router) returned *no* CPE ("2 services unrecognized"), so nothing matched.
-   Consider a **`-sV` service-line fallback** (parse `product version` from the plain service line
-   when no CPE is emitted) — CPE-less consumer gear is common, and CPE-only limits real-world hits.
+   `nmap -sV` CPE lines against the bundled `config/cve_signatures.json`, **plus a service-line
+   fallback** (added after Wave 0) that reads `product version` from the plain `-sV` line for
+   CPE-less consumer gear (e.g. the ZTE router that returned "2 services unrecognized"). Garbage
+   products match no signature, so the fallback only adds hits. Still needs a real vulnerable host
+   to confirm an end-to-end match on-Pi.
 2. **Responder-style LLMNR/NBT-NS/mDNS poisoning** *(Responder / Impacket)* — **M.** Passive
    NetNTLM-hash capture on the joined LAN → loot file for offline cracking. See effort detail below.
 3. **nuclei-style templated web checks** *(ProjectDiscovery nuclei)* — **M.** Templated vuln checks

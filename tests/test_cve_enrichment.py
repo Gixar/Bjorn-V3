@@ -57,6 +57,20 @@ def test_contains_match():
     assert match([("proftpd", "1.3.5rc3")], SIGS) == {"CVE-2015-3306 (proftpd 1.3.5rc3) [critical]"}
 
 
+def test_service_line_fallback_without_cpe():
+    # consumer gear nmap can't CPE-identify still yields (product, version) from the -sV line
+    out = "21/tcp open  ftp     vsftpd 2.3.4\n"   # note: no cpe:/ line at all
+    assert ("vsftpd", "2.3.4") in parse(out)
+    assert match(parse(out), SIGS) == {"CVE-2011-2523 (vsftpd 2.3.4) [critical]"}
+
+
+def test_service_line_garbage_is_no_false_positive():
+    # a router with an un-CPE'd banner: first two tokens are junk, must match nothing
+    out = "80/tcp open  http    ZTE web server 1.0 ZTE corp 2015.\n"
+    assert ("zte", "web") in parse(out)   # parsed, but...
+    assert match(parse(out), SIGS) == set()  # ...matches no signature
+
+
 def test_end_to_end_sample_no_apache_sig():
     # Apache 2.4.52 has no signature here -> only vsftpd + openssh flagged
     findings = match(parse(SAMPLE), SIGS)

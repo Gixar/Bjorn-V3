@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Changed
+- **Offline CVE enrichment now also reads un-CPE'd services** — `_parse_service_versions` gained a
+  `-sV` service-line fallback: when nmap can't emit a CPE (common on consumer gear — a Wave 0 test
+  router returned "2 services unrecognized"), it takes the first two tokens of the version detail
+  (`PORT open SERVICE <product> <version>`) as `(product, version)`. Garbage products simply match
+  no signature, so it only adds hits, never false positives. Catches the single-token products in
+  the seed DB (vsftpd/openssh/proftpd/unrealircd) even without a CPE.
+
 ### Fixed
 - **Manual attack no longer offers un-runnable actions (NetworkScanner 500)** — the manual-attack
   dropdown (`/netkb_data_json`) listed *every* netkb action column, so picking **NetworkScanner**

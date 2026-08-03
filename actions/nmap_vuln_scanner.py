@@ -155,15 +155,25 @@ class NmapVulnScanner:
 
     @staticmethod
     def _parse_service_versions(scan_output):
-        """Extract (product, version) pairs from nmap -sV output via the structured CPE lines
-        (cpe:/a:vendor:product:version). product lowercased; deduped; best-effort (services with
-        no CPE are skipped — good enough, extend to service-line parsing only if hit rate is low)."""
+        """Extract (product, version) pairs from nmap -sV output. Primary source is the structured
+        CPE lines (cpe:/a:vendor:product:version). Fallback for services nmap couldn't CPE-identify
+        (common on consumer gear like routers): take the first two tokens of the -sV version detail
+        (`PORT open SERVICE <product> <version> …`) as (product, version). product lowercased,
+        deduped. Garbage products from the fallback simply match no signature, so it only adds hits,
+        never false positives."""
         pairs, seen = [], set()
-        for m in re.finditer(r'cpe:/[aoh]:[^:\s]+:([^:\s]+):([^:\s]+)', scan_output):
-            key = (m.group(1).lower(), m.group(2))
+
+        def add(product, version):
+            key = (product.lower(), version)
             if key not in seen:
                 seen.add(key)
                 pairs.append(key)
+
+        for m in re.finditer(r'cpe:/[aoh]:[^:\s]+:([^:\s]+):([^:\s]+)', scan_output):
+            add(m.group(1), m.group(2))
+        # service-line fallback (multiline: ^ at each line start)
+        for m in re.finditer(r'(?m)^\d+/\w+\s+open\s+\S+\s+(\S+)\s+(\S+)', scan_output):
+            add(m.group(1), m.group(2))
         return pairs
 
     @staticmethod

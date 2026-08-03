@@ -82,6 +82,7 @@ _PAGES = {
     "bjorn", "loot", "credentials",
     "stats",  # new — live stats dashboard
     "logs",   # new — dedicated log viewer
+    "telegram",  # new — Telegram reporting config + test/send
 }
 
 
@@ -113,6 +114,16 @@ def load_config():
 @app.get("/restore_default_config")
 def restore_default_config():
     return web_utils.restore_default_config()
+
+
+@app.post("/telegram_test")
+def telegram_test():
+    return web_utils.telegram_test()
+
+
+@app.post("/telegram_send")
+def telegram_send():
+    return web_utils.telegram_send()
 
 
 @app.post("/save_config")

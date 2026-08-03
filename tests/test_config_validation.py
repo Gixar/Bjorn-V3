@@ -17,6 +17,7 @@ def _good_config():
         "battery_monitor_enabled": False, "battery_shutdown_percent": 10,
         "vuln_scan_sv": True, "vuln_scan_vulners": True, "vuln_offline_cve": True,
         "bruteforce_threads": 0, "credential_reuse": True, "wpasec_interval": 3600,
+        "telegram_enabled": False, "telegram_include_creds": True, "telegram_min_interval": 300,
         "use_rustscan": False, "rustscan_batch_size": 0, "rustscan_full_port": False,
     }
 

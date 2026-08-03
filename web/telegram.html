@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bjorn Cyberviking — Telegram</title>
+    <link rel="icon" href="web/images/favicon.ico" type="image/x-icon">
+    <link rel="stylesheet" href="web/css/styles.css">
+    <link rel="manifest" href="manifest.json">
+    <link rel="apple-touch-icon" sizes="192x192" href="web/images/icon-192x192.png">
+    <script src="web/scripts/common.js" defer></script>
+    <script src="web/scripts/telegram.js" defer></script>
+</head>
+<body>
+    <nav id="app-nav" class="topnav"></nav>
+
+    <main class="page">
+        <div class="card">
+            <div class="card-header">
+                <div>
+                    <h2 class="card-title">Telegram</h2>
+                    <p class="card-subtitle">Auto-sends the raw target dataset (JSON) to your bot whenever it changes.</p>
+                </div>
+            </div>
+
+            <div class="tg-form">
+                <label class="tg-check"><input type="checkbox" id="tg-enabled"> Enable auto-send</label>
+
+                <label class="tg-field">Bot token
+                    <span class="tg-pw">
+                        <input type="password" id="tg-token" autocomplete="off" placeholder="123456:ABC-DEF...">
+                        <button type="button" class="btn btn-sm btn-ghost" onclick="tgToggleReveal()">reveal</button>
+                    </span>
+                </label>
+
+                <label class="tg-field">Chat ID
+                    <input type="text" id="tg-chat" autocomplete="off" placeholder="-1001234567890">
+                </label>
+
+                <label class="tg-field">Min interval between sends (seconds)
+                    <input type="number" id="tg-interval" min="0" value="300">
+                </label>
+
+                <label class="tg-check"><input type="checkbox" id="tg-creds"> Include cracked credentials in the dataset
+                    <span class="card-subtitle"> — sends secrets over a third-party hop</span>
+                </label>
+            </div>
+
+            <div class="log-toolbar">
+                <button type="button" class="btn" onclick="tgSave()">Save</button>
+                <button type="button" class="btn btn-ghost" onclick="tgTest()">Send test message</button>
+                <button type="button" class="btn btn-ghost" onclick="tgSendNow()">Send data now</button>
+            </div>
+            <p class="card-subtitle" id="tg-status"></p>
+        </div>
+    </main>
+</body>
+</html>

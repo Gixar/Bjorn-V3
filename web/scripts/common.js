@@ -8,6 +8,10 @@ const LOGS_SVG = `<svg width="28" height="28" viewBox="0 0 24 24" fill="none" st
   <path d="M4 6h16M4 12h16M4 18h10" stroke-linecap="round"/>
 </svg>`;
 
+const TELEGRAM_SVG = `<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+  <path d="M21 4L3 11l6 2 2 6 3-4 4 3 3-14z" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>`;
+
 const BJORN_NAV = [
     { href: "/index.html", label: "Home", icon: "/web/images/console_icon.png", match: ["/", "/index.html"] },
     { href: "/stats.html", label: "Stats", svg: STATS_SVG, match: ["/stats.html"] },
@@ -18,6 +22,7 @@ const BJORN_NAV = [
     { href: "/config.html", label: "Config", icon: "/web/images/config_icon.png", match: ["/config.html"] },
     { href: "/bjorn.html", label: "Screen", icon: "/web/images/bjorn_icon.png", match: ["/bjorn.html"] },
     { href: "/logs.html", label: "Logs", svg: LOGS_SVG, match: ["/logs.html"] },
+    { href: "/telegram.html", label: "Telegram", svg: TELEGRAM_SVG, match: ["/telegram.html"] },
 ];
 
 function currentPath() {

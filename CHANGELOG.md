@@ -20,6 +20,19 @@
   verification.
 
 ### Added
+- **Telegram raw-data reporting** (backlog Wave 2, Telegram-only v1) — Bjorn can now auto-deliver its
+  **raw target dataset** (netkb + HTTP fingerprints + web-template findings + SNMP + vulns +
+  optionally cracked creds, as a JSON document) to a Telegram bot, so an AI agent can compile a
+  report later. New standalone action `TelegramReport` sends **only when the data has changed** since
+  the last send (sha256 delta) and a `telegram_min_interval` rate floor has elapsed — no fixed-timer
+  spam. New dependency-free `telegram_client.py` (stdlib `urllib`; `sendMessage` plain-text +
+  `sendDocument` multipart; `compile_targets`/`send_targets` shared with the web handler). New
+  **`/telegram` web page** (nav entry) to configure the bot (enable, token, chat id, min interval,
+  include-creds toggle — saved via the existing `/save_config` merge) and **Send test** /
+  **Send data now** buttons (`POST /telegram_test`, `POST /telegram_send`). Config keys
+  `telegram_enabled` (default false), `telegram_bot_token`, `telegram_chat_id`,
+  `telegram_min_interval` (300), `telegram_include_creds` (true). New `tests/test_telegram.py`.
+  *(Email/SMTP delivery deferred to a later pass.)*
 - **SNMP enumeration** (backlog Wave 2) — new standalone action `SNMPEnum`
   (`actions/snmp_enum.py`). SNMP is UDP/161 (invisible to the TCP scanner), so instead of being
   port-gated it iterates the alive hosts in netkb itself and probes 161 with the configured

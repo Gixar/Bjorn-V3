@@ -162,6 +162,11 @@ class SharedData:
             "mac_scan_blacklist": [],
             "ip_scan_blacklist": [],
             "snmp_communities": ["public", "private"],  # SNMP community strings tried by SNMPEnum (snmpget)
+            "telegram_enabled": False,        # auto-send raw target data to Telegram when it changes
+            "telegram_bot_token": "",         # Telegram bot token (secret, user-supplied)
+            "telegram_chat_id": "",           # Telegram chat/channel id to deliver to
+            "telegram_min_interval": 300,     # rate floor (seconds) between auto-sends
+            "telegram_include_creds": True,   # include cracked credentials in the sent dataset (third-party hop)
             "steal_file_names": ["ssh.csv","hack.txt"],
             "steal_file_extensions": [".bjorn",".hack",".flag"],
             

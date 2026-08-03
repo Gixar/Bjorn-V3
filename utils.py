@@ -28,6 +28,7 @@ from datetime import datetime, timezone
 from logger import Logger
 from starlette.responses import JSONResponse, HTMLResponse, PlainTextResponse, Response, FileResponse
 from actions.nmap_vuln_scanner import NmapVulnScanner
+import telegram_client
 
 
 logger = Logger(name="utils.py", level=logging.DEBUG)
@@ -128,6 +129,23 @@ class WebUtils:
             "wifi_connected": getattr(sd, "wifi_connected", False),
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
+
+    # ------------------------------------------------------------------
+    # Telegram reporting — POST /telegram_test, POST /telegram_send
+    # ------------------------------------------------------------------
+    def telegram_test(self):
+        sd = self.shared_data
+        token = (getattr(sd, "telegram_bot_token", "") or "").strip()
+        chat = (getattr(sd, "telegram_chat_id", "") or "").strip()
+        if not token or not chat:
+            return _err("Bot token / chat id not set")
+        ok, detail = telegram_client.send_message(token, chat, "Bjorn test message ✅")
+        return _ok(message="Test message sent.") if ok else _err(f"Telegram error: {detail}")
+
+    def telegram_send(self):
+        """Force-compile the raw target dataset and send it now (ignores the delta check)."""
+        ok, detail, _sent = telegram_client.send_targets(self.shared_data, force=True)
+        return _ok(message=f"Target data sent ({detail}).") if ok else _err(f"Send failed: {detail}")
 
     # ------------------------------------------------------------------
     # Scan-engine benchmark (nmap vs RustScan) — POST /run_benchmark, GET /benchmark_results

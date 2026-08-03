@@ -289,6 +289,12 @@ fit ÷ effort. Effort tags: **S** ≈ 1 session, **M** ≈ 2–3 sessions, **L**
   not be viable as a client into a third-party NAP. Installer would need a new
   prerequisite/setup block alongside the existing Wi-Fi (`nmcli`) handling.
 
+  - ✅ **DONE (Wave 2 — Telegram v1; email still deferred)** — `TelegramReport` standalone action +
+  `telegram_client.py` + a `/telegram` web page. Auto-sends the **raw target dataset** (netkb +
+  fingerprints + web findings + SNMP + vulns + optional creds, as a JSON document) to a bot **only
+  when the data changed** (sha256 delta) past a `telegram_min_interval` floor. Web page configures
+  the bot and has Send-test / Send-now buttons. Config: `telegram_enabled/bot_token/chat_id/
+  min_interval/include_creds`. **Still open:** email/SMTP fallback channel. Original note kept below.
   - **Auto-report collected data via Telegram (or email) when internet is available** —
   extend the existing redacted run_reports pipeline (2.0.0-alpha) with an online
   delivery step: render a small Markdown summary (host/port/vuln counts, action

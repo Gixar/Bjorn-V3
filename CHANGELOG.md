@@ -20,6 +20,14 @@
   verification.
 
 ### Added
+- **HTTP(S) service fingerprinting** (backlog Wave 2, PRD P3-5) — new per-host recon action
+  `HTTPFingerprint` (`actions/http_fingerprint.py`): for a live host with a web port open, it GETs
+  each open web port (80/443/8080/8443/8000/8888/9090, TLS auto-detected) and records the status,
+  `Server` / `X-Powered-By` headers, and page `<title>` to
+  `data/output/scan_results/http_fingerprints.csv` — a map of the LAN's web tech and the feed for
+  the planned nuclei-style checks. Stdlib `urllib` only (no new dependency); self-signed certs are
+  accepted (fingerprinting, not trusting — same posture as nmap/`curl -k`). Registered on `b_port=80`
+  and fingerprints *all* of the host's web ports per run. New `tests/test_http_fingerprint.py`.
 - **wpa-sec Wi-Fi credential import** (backlog Wave 1 #4) — new opt-in standalone action
   `WpaSecImport` pulls your cracked Wi-Fi keys from wpa-sec.stanev.org and injects them into
   NetworkManager as autoconnect profiles, so Bjorn can roam onto networks it already has the key for

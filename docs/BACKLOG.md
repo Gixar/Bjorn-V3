@@ -92,7 +92,8 @@ collapsing to 4 distinct issues.
 ## New capabilities (extend the offensive/recon surface — feeds P3-1 module contract)
 - ~~**wpa-sec / Pwnagotchi network import**~~ (from `LOCOSP/BjornWpaSecHarvester`): ✅ **DONE** (Wave 1 #4) — opt-in standalone action `WpaSecImport` fetches cracked Wi-Fi keys from wpa-sec.stanev.org (stdlib urllib) and injects them into NetworkManager as low-priority autoconnect profiles, deduped against `crackedpwd/wifi_wpasec.csv`. No-op unless `wpasec_api_key` set; throttled by `wpasec_interval`. Remote SSID/PSK sanitized at the trust boundary. Needs the Pi + internet to verify end-to-end.
 - ~~**Scan all network interfaces**~~ (#133): ✅ **DONE** — `get_network()` → `get_networks()` returns one IPv4Network per interface subnet (all AF_INET addrs, deduped, loopback/link-local skipped). `scan()` loops every subnet and **accumulates** hosts into a single `update_netkb` write with the union of alive MACs — writing per-network would make each subnet mark the others' hosts dead. Dropped the dead (never-printed) `table` builder while there. Needs a multi-interface host to verify end-to-end.
-- **SNMP enumeration** and **HTTP service fingerprinting**: new recon modules against the P3-1 `b_class/b_module/b_port/execute()` contract (HTTP fingerprint is already the PRD's P3-5 example).
+- **SNMP enumeration**: new recon module against the P3-1 `b_class/b_module/b_port/execute()` contract (still open).
+- ~~**HTTP service fingerprinting**~~ (PRD P3-5): ✅ **DONE (Wave 2)** — `HTTPFingerprint` action (`actions/http_fingerprint.py`) GETs each open web port, records status / `Server` / `X-Powered-By` / `<title>` to `data/output/scan_results/http_fingerprints.csv`. Stdlib `urllib`; `b_port=80`, fingerprints all web ports per host. Feeds the nuclei item below. *(ponytail: `b_port=80` misses 443-only hosts; add an https sibling if that gap matters.)* Needs the Pi to confirm end-to-end.
 
 ## Hardware / display
 - **Waveshare 2.13" B/C tri-color** (#166) — **deferred (YAGNI, single panel for now).** Only the
@@ -167,8 +168,8 @@ fit ÷ effort. Effort tags: **S** ≈ 1 session, **M** ≈ 2–3 sessions, **L**
 2. **Responder-style LLMNR/NBT-NS/mDNS poisoning** *(Responder / Impacket)* — **M.** Passive
    NetNTLM-hash capture on the joined LAN → loot file for offline cracking. See effort detail below.
 3. **nuclei-style templated web checks** *(ProjectDiscovery nuclei)* — **M.** Templated vuln checks
-   against discovered HTTP services; builds directly on the **HTTP fingerprinting** item above
-   (fingerprint → fire matching YAML templates, extensible without code).
+   against discovered HTTP services; builds directly on the now-shipped **HTTP fingerprinting**
+   (consume `http_fingerprints.csv` → fire matching YAML templates, extensible without code).
 4. **Credential reuse / auto-lateral chaining** *(CrackMapExec pattern)* — **S–M.** When a
    brute-force cracks a cred, auto-replay it across every other host/protocol in `netkb` (reuse /
    spray). Pure logic on top of the existing 6 connectors + netkb; compounds every crack.

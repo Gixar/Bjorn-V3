@@ -45,6 +45,8 @@
   /ble_data`, device names rendered with `textContent`). No-op unless `ble_scan_enabled` and
   `bluetoothctl` present; throttled by `ble_scan_interval`. New config keys `ble_scan_enabled`
   (default false), `ble_scan_duration` (10), `ble_scan_interval` (300). New `tests/test_ble_scan.py`.
+  BLE devices are also folded into the Telegram raw-data payload (`compile_targets`), so a BLE change
+  triggers a delta-send like the other recon data.
   *(ponytail: name-based tracker heuristic; robust FindMy manufacturer-data detection is a follow-up.)*
 - **Telegram raw-data reporting** (backlog Wave 2, Telegram-only v1) — Bjorn can now auto-deliver its
   **raw target dataset** (netkb + HTTP fingerprints + web-template findings + SNMP + vulns +

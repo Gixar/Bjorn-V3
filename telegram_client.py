@@ -90,6 +90,7 @@ def compile_targets(shared_data, include_creds=True):
         "http_fingerprints": _read_csv(os.path.join(sr, "http_fingerprints.csv")),
         "web_findings": _read_csv(os.path.join(sr, "web_template_findings.csv")),
         "snmp": _read_csv(os.path.join(sr, "snmp_enum.csv")),
+        "ble": _read_csv(os.path.join(sr, "ble_devices.csv")),
         "vulnerabilities": _read_csv(shared_data.vuln_summary_file),
     }
     if include_creds:

@@ -179,9 +179,13 @@ fit ÷ effort. Effort tags: **S** ≈ 1 session, **M** ≈ 2–3 sessions, **L**
 5. **PCAP capture + offline exfil** *(tcpdump / bettercap sniff)* — **M.** Rotating capture on the
    joined network, delivered via the planned Telegram/report pipeline. Extends the Bettercap
    managed-mode **sniff** capability already scoped in [`BETTERCAP_PLAN.md`](BETTERCAP_PLAN.md).
-6. **BLE recon + tracker detection** *(Flipper/Marauder BLE, OpenHaystack/AirGuard)* — **S–M.**
-   Enumerate nearby BLE devices, detect Apple/Google trackers, feed into netkb. Scanning needs **no
-   monitor mode**. See effort detail below.
+6. ~~**BLE recon + tracker detection**~~ *(Flipper/Marauder BLE, OpenHaystack/AirGuard)* —
+   ✅ **DONE (Wave 2)** — opt-in `BLEScan` standalone action does a timed `bluetoothctl` discovery →
+   `ble_devices.csv` (MAC, name, tracker flag, first/last seen), with a `/ble` web page (config +
+   results table). **Decision:** kept in its own file, **not netkb** — non-IP wireless entries don't
+   fit the netkb IP+Ports schema; the unified `device_type` column stays a future foundation item for
+   wardriving/ESP32. **Follow-up:** name-based tracker heuristic only; robust FindMy detection needs
+   BLE manufacturer data (`bluetoothctl info <mac>`). Needs the Pi + nearby BLE devices to confirm.
 7. **Passive Wi-Fi survey / wardriving** *(Kismet / Pwnagotchi)* — **M** (on top of Bettercap
    Phase 4) / **L** standalone. Log nearby APs+clients (BSSID/signal/channel, optional GPS) to a
    wardriving map. Needs monitor mode → shares the second-radio gate. See effort detail below.

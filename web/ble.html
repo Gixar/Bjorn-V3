@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bjorn Cyberviking — BLE</title>
+    <link rel="icon" href="web/images/favicon.ico" type="image/x-icon">
+    <link rel="stylesheet" href="web/css/styles.css">
+    <link rel="manifest" href="manifest.json">
+    <link rel="apple-touch-icon" sizes="192x192" href="web/images/icon-192x192.png">
+    <script src="web/scripts/common.js" defer></script>
+    <script src="web/scripts/ble.js" defer></script>
+</head>
+<body>
+    <nav id="app-nav" class="topnav"></nav>
+
+    <main class="page">
+        <div class="card">
+            <div class="card-header">
+                <div>
+                    <h2 class="card-title">BLE recon</h2>
+                    <p class="card-subtitle">Scan nearby Bluetooth/BLE devices; flags likely trackers.</p>
+                </div>
+            </div>
+
+            <div class="tg-form">
+                <label class="tg-check"><input type="checkbox" id="ble-enabled"> Enable BLE scanning</label>
+                <label class="tg-field">Scan duration (seconds)
+                    <input type="number" id="ble-duration" min="3" value="10">
+                </label>
+                <label class="tg-field">Min interval between scans (seconds)
+                    <input type="number" id="ble-interval" min="0" value="300">
+                </label>
+            </div>
+            <div class="log-toolbar">
+                <button type="button" class="btn" onclick="bleSave()">Save</button>
+                <button type="button" class="btn btn-ghost" onclick="bleRefresh()">Refresh results</button>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header">
+                <div>
+                    <h2 class="card-title">Discovered devices</h2>
+                    <p class="card-subtitle" id="ble-count">—</p>
+                </div>
+            </div>
+            <table class="stats-breakdown" id="ble-table">
+                <thead><tr><th>MAC</th><th>Name</th><th>Tracker</th><th>First seen</th><th>Last seen</th></tr></thead>
+                <tbody id="ble-body"></tbody>
+            </table>
+        </div>
+    </main>
+</body>
+</html>

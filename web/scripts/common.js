@@ -12,6 +12,10 @@ const TELEGRAM_SVG = `<svg width="28" height="28" viewBox="0 0 24 24" fill="none
   <path d="M21 4L3 11l6 2 2 6 3-4 4 3 3-14z" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>`;
 
+const BLE_SVG = `<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+  <path d="M7 8l10 8-5 4V4l5 4L7 16" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>`;
+
 const BJORN_NAV = [
     { href: "/index.html", label: "Home", icon: "/web/images/console_icon.png", match: ["/", "/index.html"] },
     { href: "/stats.html", label: "Stats", svg: STATS_SVG, match: ["/stats.html"] },
@@ -23,6 +27,7 @@ const BJORN_NAV = [
     { href: "/bjorn.html", label: "Screen", icon: "/web/images/bjorn_icon.png", match: ["/bjorn.html"] },
     { href: "/logs.html", label: "Logs", svg: LOGS_SVG, match: ["/logs.html"] },
     { href: "/telegram.html", label: "Telegram", svg: TELEGRAM_SVG, match: ["/telegram.html"] },
+    { href: "/ble.html", label: "BLE", svg: BLE_SVG, match: ["/ble.html"] },
 ];
 
 function currentPath() {

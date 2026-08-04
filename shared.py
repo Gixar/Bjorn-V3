@@ -162,6 +162,9 @@ class SharedData:
             "mac_scan_blacklist": [],
             "ip_scan_blacklist": [],
             "snmp_communities": ["public", "private"],  # SNMP community strings tried by SNMPEnum (snmpget)
+            "ble_scan_enabled": False,        # opt-in BLE recon via bluetoothctl (uses the BT radio)
+            "ble_scan_duration": 10,          # seconds per BLE discovery scan
+            "ble_scan_interval": 300,         # min seconds between BLE scans
             "telegram_enabled": False,        # auto-send raw target data to Telegram when it changes
             "telegram_bot_token": "",         # Telegram bot token (secret, user-supplied)
             "telegram_chat_id": "",           # Telegram chat/channel id to deliver to

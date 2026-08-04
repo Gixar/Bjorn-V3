@@ -12,13 +12,15 @@ KNOWN_EPD_TYPES = {
 _BOOL_KEYS = ("manual_mode", "websrv", "debug_mode", "scan_vuln_running",
               "battery_monitor_enabled", "vuln_scan_sv", "vuln_scan_vulners",
               "vuln_offline_cve", "use_rustscan", "rustscan_full_port",
-              "credential_reuse", "telegram_enabled", "telegram_include_creds")
+              "credential_reuse", "telegram_enabled", "telegram_include_creds",
+              "ble_scan_enabled")
 # These must be non-negative integers (JSON bools are excluded — bool is an int subclass).
 _NONNEG_INT_KEYS = (
     "startup_delay", "scan_interval", "scan_vuln_interval",
     "failed_retry_delay", "success_retry_delay", "ref_width", "ref_height",
     "battery_shutdown_percent", "bruteforce_threads", "rustscan_batch_size",
     "wpasec_interval", "telegram_min_interval",
+    "ble_scan_duration", "ble_scan_interval",
 )
 
 

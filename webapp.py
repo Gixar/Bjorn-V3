@@ -83,6 +83,7 @@ _PAGES = {
     "stats",  # new — live stats dashboard
     "logs",   # new — dedicated log viewer
     "telegram",  # new — Telegram reporting config + test/send
+    "ble",       # new — BLE recon config + results
 }
 
 
@@ -114,6 +115,11 @@ def load_config():
 @app.get("/restore_default_config")
 def restore_default_config():
     return web_utils.restore_default_config()
+
+
+@app.get("/ble_data")
+def ble_data():
+    return web_utils.serve_ble_data()
 
 
 @app.post("/telegram_test")

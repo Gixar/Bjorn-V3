@@ -34,6 +34,18 @@
   verification.
 
 ### Added
+- **BLE recon** (backlog Wave 2 #6) — new opt-in standalone action `BLEScan`
+  (`actions/ble_scan.py`): a timed BLE/Bluetooth discovery via `bluetoothctl` (bluez, already
+  installed) records nearby devices to `data/output/scan_results/ble_devices.csv` and flags likely
+  trackers (AirTag/Tile/SmartTag/Chipolo…). Kept in its **own file, not `netkb.csv`** — non-IP
+  wireless entries don't fit the netkb IP+Ports schema, so a self-contained file avoids
+  destabilizing the core pipeline (the unified `device_type` column stays a future foundation item
+  for when wardriving/ESP32 also need it). New **`/ble` web page** (nav entry) to configure
+  (enable / scan duration / interval, saved via `/save_config`) and a live results table (`GET
+  /ble_data`, device names rendered with `textContent`). No-op unless `ble_scan_enabled` and
+  `bluetoothctl` present; throttled by `ble_scan_interval`. New config keys `ble_scan_enabled`
+  (default false), `ble_scan_duration` (10), `ble_scan_interval` (300). New `tests/test_ble_scan.py`.
+  *(ponytail: name-based tracker heuristic; robust FindMy manufacturer-data detection is a follow-up.)*
 - **Telegram raw-data reporting** (backlog Wave 2, Telegram-only v1) — Bjorn can now auto-deliver its
   **raw target dataset** (netkb + HTTP fingerprints + web-template findings + SNMP + vulns +
   optionally cracked creds, as a JSON document) to a Telegram bot, so an AI agent can compile a

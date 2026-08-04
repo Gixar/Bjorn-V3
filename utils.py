@@ -131,6 +131,18 @@ class WebUtils:
         }
 
     # ------------------------------------------------------------------
+    # BLE recon results — GET /ble_data
+    # ------------------------------------------------------------------
+    def serve_ble_data(self):
+        path = os.path.join(self.shared_data.scan_results_dir, "ble_devices.csv")
+        try:
+            with open(path, newline="", encoding="utf-8") as f:
+                rows = list(csv.DictReader(f))
+        except FileNotFoundError:
+            rows = []
+        return JSONResponse({"devices": rows})
+
+    # ------------------------------------------------------------------
     # Telegram reporting — POST /telegram_test, POST /telegram_send
     # ------------------------------------------------------------------
     def telegram_test(self):

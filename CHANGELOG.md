@@ -11,6 +11,13 @@
   the seed DB (vsftpd/openssh/proftpd/unrealircd) even without a CPE.
 
 ### Fixed
+- **usb0 now gets its static IP without a host plugged in (#68)** — on-Pi verification showed
+  `usb0` UP but `NO-CARRIER`/`DOWN` with no `inet`: systemd-networkd was waiting for carrier before
+  configuring the interface, so the static `172.20.2.1` never appeared until a cable was connected.
+  Added `ConfigureWithoutCarrier=yes` (+ `IgnoreCarrierLoss=yes`) to
+  `/etc/systemd/network/10-usb0.network` in the installer, so the address and DHCP server come up
+  immediately. Live fix on an existing install: add both lines under `[Network]` in that file, then
+  `sudo networkctl reload && sudo networkctl reconfigure usb0`.
 - **Manual attack no longer offers un-runnable actions (NetworkScanner 500)** — the manual-attack
   dropdown (`/netkb_data_json`) listed *every* netkb action column, so picking **NetworkScanner**
   (or IDLE / a standalone log action) hit `execute_manual_attack`'s "Action class … not found" path

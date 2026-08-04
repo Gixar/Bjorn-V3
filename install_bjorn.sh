@@ -636,6 +636,10 @@ Name=usb0
 [Network]
 Address=172.20.2.1/24
 DHCPServer=yes
+# Assign the static address + start the DHCP server even with no host plugged in (the gadget
+# reports NO-CARRIER until a cable is connected). Without this, usb0 sits DOWN with no inet (#68).
+ConfigureWithoutCarrier=yes
+IgnoreCarrierLoss=yes
 
 [DHCPServer]
 PoolOffset=10

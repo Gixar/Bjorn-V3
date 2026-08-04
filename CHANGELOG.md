@@ -11,6 +11,13 @@
   the seed DB (vsftpd/openssh/proftpd/unrealircd) even without a CPE.
 
 ### Fixed
+- **`epd_test.py` explains the `GPIO busy` failure instead of dumping a bare traceback** — during
+  Wave 0, `epd_test.py --all` failed *every* driver with `lgpio.error: 'GPIO busy'` because
+  `bjorn.service` was running and holding the RST pin, with no hint why. It now checks
+  `systemctl is-active bjorn.service` up front and prints "stop bjorn.service first
+  (`sudo systemctl stop bjorn`)", and on any `busy` error prints the same hint before the traceback.
+  `TROUBLESHOOTING.md` updated to lead with stopping the service. (The panel itself is fine — V3
+  renders under the running service.)
 - **usb0 now gets its static IP without a host plugged in (#68)** — on-Pi verification showed
   `usb0` UP but `NO-CARRIER`/`DOWN` with no `inet`: systemd-networkd was waiting for carrier before
   configuring the interface, so the static `172.20.2.1` never appeared until a cable was connected.

@@ -8,6 +8,9 @@
 Reports SPI status, then for each driver: load -> init -> draw a visible test pattern ->
 clear, printing exactly which step fails (with traceback). Use it to find the driver that
 matches your HAT when the display stays blank.
+
+NOTE: stop the running service first — it holds the e-Paper GPIO pins, otherwise every driver
+fails with 'GPIO busy':  sudo systemctl stop bjorn   (restart after:  sudo systemctl start bjorn)
 """
 import glob
 import json
@@ -30,6 +33,21 @@ def config_epd_type():
             return json.load(f).get("epd_type")
     except Exception:
         return None
+
+
+_GPIO_BUSY_HINT = (
+    "\n*** GPIO busy — bjorn.service is running and holding the e-Paper pins.\n"
+    "    Stop it first, then re-run:  sudo systemctl stop bjorn\n"
+    "    (restart it after testing:   sudo systemctl start bjorn)\n"
+)
+
+
+def _service_active():
+    """True if bjorn.service is running (and thus holding the display GPIO pins)."""
+    try:
+        return subprocess.run(["systemctl", "is-active", "--quiet", "bjorn.service"]).returncode == 0
+    except Exception:
+        return False
 
 
 def check_spi():
@@ -83,6 +101,8 @@ def test_one(epd_type):
         return True
     except Exception:
         print(f"RESULT: driver '{epd_type}' FAILED:")
+        if "busy" in traceback.format_exc().lower():
+            print(_GPIO_BUSY_HINT)
         traceback.print_exc()
         return False
 
@@ -90,10 +110,14 @@ def test_one(epd_type):
 def main():
     args = sys.argv[1:]
     check_spi()
+    # Proactive heads-up (parent only — children set EPD_TEST_CHILD to avoid repeating it 5x).
+    if _service_active() and not os.environ.get("EPD_TEST_CHILD"):
+        print(_GPIO_BUSY_HINT)
     if args == ["--all"]:
         # Fresh process per driver so GPIO/SPI pins are released between attempts.
+        child_env = {**os.environ, "EPD_TEST_CHILD": "1"}
         for v in CANDIDATES:
-            subprocess.run([sys.executable, os.path.abspath(__file__), v])
+            subprocess.run([sys.executable, os.path.abspath(__file__), v], env=child_env)
         return
     if args:
         test_one(args[0])

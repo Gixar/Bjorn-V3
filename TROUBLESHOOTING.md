@@ -44,7 +44,10 @@ Where Bjorn leaves things (the doctor prints this too):
 | Installer logs | `/var/log/bjorn_install/*.log` |
 | Service journal | `journalctl -u bjorn.service` |
 
-For a blank e-Paper specifically: `sudo python3 /home/bjorn/Bjorn/scripts/epd_test.py --all`.
+For a blank e-Paper specifically: **stop the service first** (it holds the display GPIO pins,
+otherwise every driver fails with `GPIO busy`), then probe each driver:
+`sudo systemctl stop bjorn && sudo python3 /home/bjorn/Bjorn/scripts/epd_test.py --all`
+(restart with `sudo systemctl start bjorn` when done).
 
 ## 🛠️ Troubleshooting Steps
 

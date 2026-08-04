@@ -39,6 +39,36 @@ Clean reinstall of 2.5.0-alpha, checked against a real LAN (source: install/veri
 - **wpa-sec inject** — needs an API key + previously-cracked networks.
 - **#68 usb0** — retest with a host physically plugged into the USB port.
 
+## Wave 2 verification — on-Pi results (2026-08-03, fresh 2.5.0-alpha install)
+
+Full reinstall of the latest code, checked against the LAN.
+
+**✅ Confirmed on hardware:**
+- **Installer provisions `snmp`** (5 pkgs) and all 6 new actions register
+  (HTTPFingerprint, WebTemplateScan, SNMPEnum, WpaSecImport, BLEScan, TelegramReport).
+- **HTTP fingerprinting** — `http_fingerprints.csv` captured **both :80 and :443** of the ZTE
+  router (Server header, status 200) — HTTPS with a self-signed cert works.
+- **nuclei WebTemplateScan** — ran as a child of HTTPFingerprint; no findings on that host (nothing
+  exposed) = correct, no false positives.
+- **SNMP enum** — ran successfully; `snmpget` present; no SNMP host answered (empty, correct).
+- **#68 usb0** — `ip addr show usb0` now shows `inet 172.20.2.1/24` **even with NO-CARRIER**; the
+  `ConfigureWithoutCarrier=yes` fix works.
+- **epd_test GPIO-busy fix** — with the service stopped (per the new hint) all 5 drivers init'd
+  without error.
+- Clean baseline: service active, no journal/app/install errors, memory healthy.
+
+**⏳ Unconfirmed (no error, needs conditions):**
+- **BLE recon** — enabled + initialized, but didn't get a standalone-action turn in the short
+  window; let it run longer, then check `ble_devices.csv` / `/ble`.
+- **Telegram** — not configured (no bot token) — needs a token to test send/delta.
+- **CVE end-to-end** / **credential reuse** — still need a vulnerable / crackable host.
+
+**⚠️ Noticed:**
+- `Exception in thread Thread-1:` printed during `epd_test.py` after the epd2in13 / epd2in13_V3 runs
+  (non-fatal — each finished with "ran without error"); full traceback was cut off. Investigate if it
+  recurs.
+- `'web_increment '` config key still has a trailing space (long-known cosmetic bug).
+
 ## Bugs still open (need the WebUI/Pi to reproduce + verify)
 | Ref | Issue | Likely fix / pointer |
 |---|---|---|
@@ -48,7 +78,7 @@ Clean reinstall of 2.5.0-alpha, checked against a real LAN (source: install/veri
 | #155 | Web server not showing | Overlaps #16 (port hopping) — re-test after the SO_REUSEADDR fix; if still failing, check the systemd unit + firewall. |
 | #122 | Installed but no Display *or* WebUI (most-commented) | Multi-cause: partly #16 (port), partly EPD init failing on the panel. Re-test after the port fix; if the display is still dead, check `epd_type` + wiring. Pi-only. |
 | #113 | Waveshare **V4 unreadable** display | Affects the **default** `epd_type: "epd2in13_V4"` — reported as unreadable/garbled since May 2025. Likely a refresh-mode / LUT or rotation issue in the vendor driver. Needs the actual V4 panel to diagnose. |
-| #68 | `usb0` IP not assigned | **Root-caused + fixed (2026-08-03), needs a reinstall/live-fix to confirm.** On-Pi `ip addr show usb0` showed `NO-CARRIER … state DOWN` with **no `inet`** — systemd-networkd waits for carrier before configuring the interface, so the static `172.20.2.1` never appeared with nothing plugged in. Added `ConfigureWithoutCarrier=yes` + `IgnoreCarrierLoss=yes` to the `[Network]` block of `/etc/systemd/network/10-usb0.network` in the installer. **Verify:** reinstall (or add those two lines + `sudo networkctl reload && sudo networkctl reconfigure usb0`) → `usb0` shows `inet 172.20.2.1`; then plug into a host → host leases `172.20.2.10-30`, `http://172.20.2.1:8000/` loads. Pi-only. |
+| ~~#68~~ | ~~`usb0` IP not assigned~~ | ✅ **FIXED + confirmed on-Pi (2026-08-03).** After a reinstall with `ConfigureWithoutCarrier=yes` + `IgnoreCarrierLoss=yes` in `/etc/systemd/network/10-usb0.network`, `ip addr show usb0` shows `inet 172.20.2.1/24` even with `NO-CARRIER` (nothing plugged in). Remaining: plug into a host to confirm the DHCP lease + `http://172.20.2.1:8000/`. |
 | ~~**NEW**~~ | ~~Manual attack with **NetworkScanner** → 500~~ | ✅ **FIXED** — `serve_netkb_data_json` now filters the manual-attack dropdown to actions the handler can run per host (port-based connectors + special-cased `NmapVulnScanner`, via `port not in (0, None)`), so NetworkScanner / IDLE / standalone log actions are no longer offered and can't trigger the "class not found" error. |
 | ~~**NEW**~~ | ~~`epd_test.py --all` fails with `GPIO busy` while the service runs~~ | ✅ **FIXED** — `scripts/epd_test.py` now checks `systemctl is-active bjorn.service` up front and prints a "stop bjorn.service first" hint, and repeats it on any `busy` error before the traceback; `TROUBLESHOOTING.md` leads with stopping the service. |
 

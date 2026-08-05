@@ -1,7 +1,8 @@
-// telegram.js — Telegram config + test/send (config saves via the shared /save_config merge)
+// telegram.js — report delivery config (Telegram + SMTP fallback) + test/send.
+// Config saves via the shared /save_config merge.
 
-function tgToggleReveal() {
-    const el = document.getElementById("tg-token");
+function tgToggleReveal(id) {
+    const el = document.getElementById(id);
     if (el) el.type = el.type === "password" ? "text" : "password";
 }
 
@@ -12,6 +13,12 @@ function tgFillFromConfig(cfg) {
     document.getElementById("tg-chat").value = cfg.telegram_chat_id || "";
     document.getElementById("tg-interval").value =
         cfg.telegram_min_interval !== undefined ? cfg.telegram_min_interval : 300;
+    document.getElementById("smtp-enabled").checked = !!cfg.smtp_enabled;
+    document.getElementById("smtp-host").value = cfg.smtp_host || "";
+    document.getElementById("smtp-port").value = cfg.smtp_port !== undefined ? cfg.smtp_port : 587;
+    document.getElementById("smtp-user").value = cfg.smtp_user || "";
+    document.getElementById("smtp-password").value = cfg.smtp_password || "";
+    document.getElementById("smtp-to").value = cfg.smtp_to || "";
 }
 
 function tgGather() {
@@ -21,6 +28,12 @@ function tgGather() {
         telegram_bot_token: document.getElementById("tg-token").value.trim(),
         telegram_chat_id: document.getElementById("tg-chat").value.trim(),
         telegram_min_interval: parseInt(document.getElementById("tg-interval").value, 10) || 0,
+        smtp_enabled: document.getElementById("smtp-enabled").checked,
+        smtp_host: document.getElementById("smtp-host").value.trim(),
+        smtp_port: parseInt(document.getElementById("smtp-port").value, 10) || 587,
+        smtp_user: document.getElementById("smtp-user").value.trim(),
+        smtp_password: document.getElementById("smtp-password").value,
+        smtp_to: document.getElementById("smtp-to").value.trim(),
     };
 }
 

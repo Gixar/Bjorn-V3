@@ -1102,3 +1102,78 @@ td:first-child, th:first-child {
     gap: 10px;
     justify-content: center;
 }
+
+/* ==========================================================================
+   Help page + per-page manuals (prose blocks)
+   ========================================================================== */
+.config-moved-note {
+    grid-column: 1 / -1;
+    margin: 4px 0 0;
+    padding: 10px 12px;
+    border: 1px dashed var(--border-strong);
+    border-radius: var(--radius-sm);
+    color: var(--muted);
+    font-size: 13px;
+}
+
+/* Collapsed by default: the manual is there when wanted, out of the way when not. */
+.manual {
+    margin-top: 14px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface-2);
+}
+.manual > summary {
+    cursor: pointer;
+    padding: 10px 14px;
+    font-weight: 600;
+    color: var(--accent);
+    list-style: none;
+}
+.manual > summary::-webkit-details-marker { display: none; }
+.manual > summary::before { content: "▸ "; }
+.manual[open] > summary::before { content: "▾ "; }
+.manual > summary:hover { background: var(--surface-3); }
+
+.prose { padding: 4px 16px 14px; font-size: 14px; color: var(--text); }
+.prose h3 {
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--accent);
+    margin: 18px 0 8px;
+}
+.prose h3:first-child { margin-top: 6px; }
+.prose p, .prose li { color: var(--text); }
+.prose ol, .prose ul { padding-left: 22px; margin: 8px 0; }
+.prose li { margin-bottom: 6px; }
+.prose code {
+    font-family: var(--mono);
+    font-size: 0.9em;
+    background: var(--surface-3);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 5px;
+}
+.prose table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 10px 0;
+    font-size: 13px;
+}
+.prose th, .prose td {
+    text-align: left;
+    padding: 7px 10px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+}
+.prose th { color: var(--muted); font-weight: 600; white-space: nowrap; }
+.prose .note {
+    border-left: 3px solid var(--info);
+    background: var(--surface-3);
+    padding: 10px 12px;
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+    margin: 12px 0;
+}
+.prose .warn { border-left-color: var(--danger); }
+.prose .warn strong { color: var(--danger); }

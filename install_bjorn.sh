@@ -235,6 +235,8 @@ install_dependencies() {
         "libopenjp2-7"
         "nmap"
         "snmp"
+        "aircrack-ng"  # airodump-ng, for the opt-in Wi-Fi AP recon (needs a monitor-mode radio)
+        "iw"           # monitor-mode switching + interface capability probing
         "libopenblas-dev"
         "bluez-tools"
         "bluez"

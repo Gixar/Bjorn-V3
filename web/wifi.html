@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bjorn Cyberviking — Wi-Fi</title>
+    <link rel="icon" href="web/images/favicon.ico" type="image/x-icon">
+    <link rel="stylesheet" href="web/css/styles.css">
+    <link rel="manifest" href="manifest.json">
+    <link rel="apple-touch-icon" sizes="192x192" href="web/images/icon-192x192.png">
+    <script src="web/scripts/common.js" defer></script>
+    <script src="web/scripts/wifi.js" defer></script>
+</head>
+<body>
+    <nav id="app-nav" class="topnav"></nav>
+
+    <main class="page">
+        <div class="card">
+            <div class="card-header">
+                <div>
+                    <h2 class="card-title">Wi-Fi recon</h2>
+                    <p class="card-subtitle">Passive 802.11 survey via airodump-ng — logs nearby access points and their clients.</p>
+                </div>
+            </div>
+
+            <p>
+                Puts a <strong>second</strong> radio into monitor mode and listens to raw 802.11
+                traffic for a fixed window, recording every access point it hears and which client
+                devices are talking to each one. Purely passive — nothing is transmitted, no network
+                is joined. Results land in <code>wifi_aps.csv</code> and <code>wifi_clients.csv</code>.
+            </p>
+
+            <details class="manual">
+                <summary>Manual — the second-radio rule, setup, and reading the results</summary>
+                <div class="prose">
+                    <div class="note warn">
+                        <strong>This needs a USB dongle.</strong> A radio cannot be in monitor mode
+                        and connected to a network at the same time. Putting Bjorn's own uplink into
+                        monitor mode would kill the web UI, reporting and IP scanning at once — from
+                        inside the process that would have had to tell you about it. The interface
+                        carrying the default route is therefore refused, and shown greyed out in the
+                        dropdown rather than hidden. The check is on the routing table, not the name,
+                        so it stays correct when a dongle enumerates as <code>wlan0</code>.
+                    </div>
+
+                    <h3>Setting it up</h3>
+                    <ol>
+                        <li>Plug in a monitor-mode-capable USB Wi-Fi adapter and reload this page —
+                            the dropdown is populated from the interfaces present right now.</li>
+                        <li>Pick the dongle. If only one entry is listed and it is greyed out, that
+                            is the uplink and the dongle has not enumerated.</li>
+                        <li>Press <strong>Test monitor mode</strong> first. It checks the guard and
+                            asks the radio whether it supports monitor mode, without capturing
+                            anything.</li>
+                        <li>Only once the test passes, tick <strong>Enable Wi-Fi scanning</strong>
+                            and <em>Save</em>. Results appear after the next idle window.</li>
+                    </ol>
+
+                    <h3>The settings</h3>
+                    <table>
+                        <tr><th>Capture duration</th><td>Seconds per capture. airodump hops channels throughout, so a short capture simply misses APs on channels it did not reach — 30 s is a floor, 60 s+ finds noticeably more.</td></tr>
+                        <tr><th>Min interval</th><td>Floor between captures. The radio is held for the whole capture, so a short interval means a nearly always-busy dongle.</td></tr>
+                    </table>
+
+                    <h3>Reading the tables</h3>
+                    <table>
+                        <tr><th>Privacy / Cipher / Auth</th><td>The AP's encryption. <code>OPN</code> is an open network; <code>WEP</code> is broken; <code>WPA2</code>/<code>WPA3</code> are current.</td></tr>
+                        <tr><th>Power</th><td>Signal strength in dBm — closer to zero is nearer. Roughly, above −60 is in the room, below −80 is through walls or outside.</td></tr>
+                        <tr><th>Clients → BSSID</th><td>Which AP that client is associated with. <code>(not associated)</code> means the device is searching rather than connected.</td></tr>
+                        <tr><th>Probed ESSIDs</th><td>Networks an unassociated device is actively calling out for. These are names it has connected to before — often a home or workplace SSID, which makes them a useful fingerprint of where a device has been.</td></tr>
+                    </table>
+
+                    <div class="note">
+                        Rows merge by BSSID and station MAC across captures and keep their original
+                        first-seen, so the tables build a picture of the area over time rather than
+                        showing only the last capture. Many phones randomize their MAC while probing,
+                        so one device can appear as several client rows.
+                    </div>
+                </div>
+            </details>
+
+            <div class="tg-form">
+                <label class="tg-check"><input type="checkbox" id="wifi-enabled"> Enable Wi-Fi scanning</label>
+
+                <label class="tg-field">Monitor-mode interface
+                    <select id="wifi-iface"></select>
+                </label>
+                <p class="card-subtitle" id="wifi-iface-note">
+                    Requires a second radio. The interface carrying Bjorn's own connection is rejected —
+                    monitor mode on it would drop the web UI, reporting and scanning.
+                </p>
+
+                <label class="tg-field">Capture duration (seconds)
+                    <input type="number" id="wifi-duration" min="10" value="30">
+                </label>
+                <label class="tg-field">Min interval between scans (seconds)
+                    <input type="number" id="wifi-interval" min="0" value="900">
+                </label>
+            </div>
+            <div class="log-toolbar">
+                <button type="button" class="btn" onclick="wifiSave()">Save</button>
+                <button type="button" class="btn btn-ghost" onclick="wifiTestMonitor()">Test monitor mode</button>
+                <button type="button" class="btn btn-ghost" onclick="wifiRefresh()">Refresh results</button>
+            </div>
+            <p class="card-subtitle" id="wifi-status"></p>
+        </div>
+
+        <div class="card">
+            <div class="card-header">
+                <div>
+                    <h2 class="card-title">Access points</h2>
+                    <p class="card-subtitle" id="wifi-ap-count">—</p>
+                </div>
+            </div>
+            <table class="stats-breakdown" id="wifi-ap-table">
+                <thead><tr><th>BSSID</th><th>ESSID</th><th>Ch</th><th>Privacy</th><th>Cipher</th><th>Auth</th><th>Power</th><th>Beacons</th><th>Last seen</th></tr></thead>
+                <tbody id="wifi-ap-body"></tbody>
+            </table>
+        </div>
+
+        <div class="card">
+            <div class="card-header">
+                <div>
+                    <h2 class="card-title">Clients</h2>
+                    <p class="card-subtitle" id="wifi-client-count">—</p>
+                </div>
+            </div>
+            <table class="stats-breakdown" id="wifi-client-table">
+                <thead><tr><th>Station</th><th>Associated BSSID</th><th>Power</th><th>Packets</th><th>Probed ESSIDs</th><th>Last seen</th></tr></thead>
+                <tbody id="wifi-client-body"></tbody>
+            </table>
+        </div>
+    </main>
+</body>
+</html>

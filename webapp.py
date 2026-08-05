@@ -84,6 +84,8 @@ _PAGES = {
     "logs",   # new — dedicated log viewer
     "telegram",  # new — Telegram reporting config + test/send
     "ble",       # new — BLE recon config + results
+    "wifi",      # new — Wi-Fi (airodump-ng) recon config + results
+    "help",      # new — usage + configuration manual (static, no API)
 }
 
 
@@ -120,6 +122,22 @@ def restore_default_config():
 @app.get("/ble_data")
 def ble_data():
     return web_utils.serve_ble_data()
+
+
+@app.get("/wifi_data")
+def wifi_data():
+    return web_utils.serve_wifi_data()
+
+
+@app.get("/wifi_ifaces")
+def wifi_ifaces():
+    return web_utils.wifi_ifaces()
+
+
+@app.post("/wifi_monitor_test")
+async def wifi_monitor_test(request: Request):
+    body = await request.json()
+    return web_utils.wifi_monitor_test((body.get("iface") or "").strip())
 
 
 @app.post("/telegram_test")

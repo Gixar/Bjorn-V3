@@ -2,7 +2,6 @@
     "__title_Bjorn__": "Settings",
     "manual_mode": false,
     "websrv": true,
-    "web_increment ": false,
     "debug_mode": false,
     "scan_vuln_running": false,
     "retry_success_actions": false,

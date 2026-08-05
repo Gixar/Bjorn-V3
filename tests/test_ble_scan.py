@@ -37,6 +37,44 @@ def test_tracker_heuristic():
     assert BLEScan._is_tracker("") is False
 
 
+info = BLEScan._tracker_from_info
+
+
+def test_tracker_from_service_uuid():
+    out = ("Device AA:BB:CC:DD:EE:FF (random)\n"
+           "\tAlias: AA-BB-CC-DD-EE-FF\n"
+           "\tUUID: Vendor specific           (0000fd44-0000-1000-8000-00805f9b34fb)\n")
+    assert info(out) == "Apple Find My"
+    assert info(out.replace("0000fd44", "0000feed")) == "Tile"
+    assert info(out.replace("0000fd44", "0000fd5a")) == "Samsung SmartTag"
+
+
+def test_tracker_from_apple_offline_finding_manufacturer_data():
+    inline = ("Device AA:BB:CC:DD:EE:FF (random)\n"
+              "\tManufacturerData Key: 0x004c\n"
+              "\tManufacturerData Value: 0x12 0x19 0x00\n")
+    assert info(inline) == "Apple Find My"
+    split = ("Device AA:BB:CC:DD:EE:FF (random)\n"
+             "\tManufacturerData Key: 0x004c\n"
+             "\tManufacturerData Value:\n"
+             "  12 19 00 aa bb\n")
+    assert info(split) == "Apple Find My"
+
+
+def test_ordinary_apple_device_is_not_a_tracker():
+    # 0x004c with a non-offline-finding payload type (0x10 = nearby/handoff) — a phone, not a tag.
+    out = ("Device AA:BB:CC:DD:EE:FF (random)\n"
+           "\tManufacturerData Key: 0x004c\n"
+           "\tManufacturerData Value: 0x10 0x05 0x0a\n")
+    assert info(out) == ""
+
+
+def test_unremarkable_device_and_ansi_noise():
+    assert info("") == ""
+    assert info("\tUUID: Battery Service (0000180f-0000-1000-8000-00805f9b34fb)\n") == ""
+    assert info("\t\x1b[0;94mUUID\x1b[0m: (0000feec-0000-1000-8000-00805f9b34fb)\n") == "Tile"
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

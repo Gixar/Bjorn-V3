@@ -23,13 +23,79 @@
                 </div>
             </div>
 
+            <p>
+                Bundles everything Bjorn has collected — hosts and ports, HTTP fingerprints, web
+                findings, SNMP, vulnerabilities, BLE devices, Wi-Fi APs and clients, and optionally
+                cracked credentials — into one JSON document and delivers it whenever the contents
+                actually change. Telegram is tried first; if it is unconfigured or blocked, email
+                takes over. This is how you get results off a device you are not standing next to.
+            </p>
+
+            <details class="manual">
+                <summary>Manual — getting a bot, the email fallback, and when it sends</summary>
+                <div class="prose">
+                    <h3>Setting up the Telegram bot</h3>
+                    <ol>
+                        <li>In Telegram, message <code>@BotFather</code> and send
+                            <code>/newbot</code>. It replies with a token that looks like
+                            <code>123456789:AAE...</code> — paste that into <strong>Bot token</strong>.</li>
+                        <li>Send your new bot any message (a bot cannot start a conversation with
+                            you), or add it to the group or channel you want reports in.</li>
+                        <li>Get the chat id: open
+                            <code>https://api.telegram.org/bot&lt;token&gt;/getUpdates</code> in a
+                            browser and read <code>chat.id</code> from the result. Personal chats are
+                            positive numbers; groups and channels are negative, usually starting
+                            <code>-100</code>. Paste it into <strong>Chat ID</strong>.</li>
+                        <li>Tick <strong>Enable auto-send</strong>, press <em>Save</em>, then
+                            <em>Send test message</em>.</li>
+                    </ol>
+
+                    <h3>Email fallback (SMTP)</h3>
+                    <p>
+                        Worth configuring even if Telegram works: the networks this device roams onto
+                        — hotel, café, corporate — often block one channel or the other, and the two
+                        fail in different places. Email is tried only when Telegram is unconfigured
+                        or its send fails.
+                    </p>
+                    <table>
+                        <tr><th>Host / Port</th><td>Port <strong>465</strong> connects with implicit SSL; anything else (typically <strong>587</strong>) upgrades with STARTTLS when the server offers it.</td></tr>
+                        <tr><th>Username / From</th><td>Also used as the sender address.</td></tr>
+                        <tr><th>Password</th><td>For Gmail, Outlook and most large providers this must be an <em>app-specific password</em>, not your account password. Stored in plain text in <code>shared_config.json</code> — use a throwaway mailbox.</td></tr>
+                        <tr><th>Recipients</th><td>Comma-separated.</td></tr>
+                    </table>
+
+                    <h3>When it actually sends</h3>
+                    <p>
+                        Two gates, both of which must pass. First a content check: the dataset is
+                        hashed, and an unchanged hash means nothing is sent — so a quiet network
+                        produces no traffic at all. Second a rate floor,
+                        <strong>Min interval</strong>, below which it will not send even if the data
+                        did change. Sending happens during an idle window, so the real gap between
+                        reports is at least the interval and often longer.
+                    </p>
+                    <p>
+                        <em>Send data now</em> ignores both gates and delivers immediately — use it to
+                        confirm the whole path end to end. <em>Send test message</em> only proves the
+                        channel works, and goes down whichever channel is configured.
+                    </p>
+
+                    <div class="note warn">
+                        <strong>Credentials.</strong> <em>Include cracked credentials</em> puts every
+                        password Bjorn has cracked into the document and hands it to a third party —
+                        Telegram's servers, or your mail provider and every hop in between. Leave it
+                        off unless you specifically need the credentials off-device, and never point
+                        it at a channel with other people in it.
+                    </div>
+                </div>
+            </details>
+
             <div class="tg-form">
                 <label class="tg-check"><input type="checkbox" id="tg-enabled"> Enable auto-send</label>
 
                 <label class="tg-field">Bot token
                     <span class="tg-pw">
                         <input type="password" id="tg-token" autocomplete="off" placeholder="123456:ABC-DEF...">
-                        <button type="button" class="btn btn-sm btn-ghost" onclick="tgToggleReveal()">reveal</button>
+                        <button type="button" class="btn btn-sm btn-ghost" onclick="tgToggleReveal('tg-token')">reveal</button>
                     </span>
                 </label>
 
@@ -43,6 +109,34 @@
 
                 <label class="tg-check"><input type="checkbox" id="tg-creds"> Include cracked credentials in the dataset
                     <span class="card-subtitle"> — sends secrets over a third-party hop</span>
+                </label>
+
+                <h3 class="card-title">Email fallback (SMTP)</h3>
+                <p class="card-subtitle">Used when Telegram is unconfigured or blocked on the joined network.</p>
+
+                <label class="tg-check"><input type="checkbox" id="smtp-enabled"> Enable SMTP fallback</label>
+
+                <label class="tg-field">SMTP host
+                    <input type="text" id="smtp-host" autocomplete="off" placeholder="smtp.example.com">
+                </label>
+
+                <label class="tg-field">Port
+                    <input type="number" id="smtp-port" min="0" value="587">
+                </label>
+
+                <label class="tg-field">Username / From
+                    <input type="text" id="smtp-user" autocomplete="off" placeholder="bjorn@example.com">
+                </label>
+
+                <label class="tg-field">Password
+                    <span class="tg-pw">
+                        <input type="password" id="smtp-password" autocomplete="off">
+                        <button type="button" class="btn btn-sm btn-ghost" onclick="tgToggleReveal('smtp-password')">reveal</button>
+                    </span>
+                </label>
+
+                <label class="tg-field">Recipient(s), comma-separated
+                    <input type="text" id="smtp-to" autocomplete="off" placeholder="you@example.com">
                 </label>
             </div>
 

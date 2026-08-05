@@ -30,7 +30,7 @@ function bleRenderDevices(devices) {
     body.replaceChildren();  // textContent cells — device names are untrusted
     devices.forEach((d) => {
         const tr = document.createElement("tr");
-        [d.MAC, d.Name, d.Tracker === "yes" ? "⚠ tracker" : "", d.FirstSeen, d.LastSeen]
+        [d.MAC, d.Name, d.Tracker === "yes" ? "⚠ tracker" : "", d.TrackerType, d.FirstSeen, d.LastSeen]
             .forEach((val) => {
                 const td = document.createElement("td");
                 td.textContent = val || "";

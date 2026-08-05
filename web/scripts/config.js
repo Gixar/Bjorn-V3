@@ -1,5 +1,20 @@
 /* config.js — configuration form + Wi-Fi panel */
 
+// Keys owned by a dedicated page, hidden from this generic form so each module is configured in
+// one place — next to its own results, test buttons and manual. Prefix match, so a new key on an
+// existing module needs no change here. /save_config merges key-by-key, so hidden keys survive
+// a save from this page untouched.
+const PAGE_OWNED_KEYS = [
+    { prefix: "ble_scan_", href: "/ble.html", label: "BLE" },
+    { prefix: "wifi_scan_", href: "/wifi.html", label: "Wi-Fi" },
+    { prefix: "telegram_", href: "/telegram.html", label: "Telegram" },
+    { prefix: "smtp_", href: "/telegram.html", label: "Telegram" },
+];
+
+function pageOwner(key) {
+    return PAGE_OWNED_KEYS.find((o) => key.startsWith(o.prefix));
+}
+
 function generateConfigForm(config) {
     const formElement = document.querySelector(".config-form");
     if (!formElement) return;
@@ -12,7 +27,9 @@ function generateConfigForm(config) {
     rightColumn.classList.add("right-column");
 
     for (const [key, value] of Object.entries(config)) {
-        if (key.startsWith("__title_")) {
+        if (pageOwner(key)) {
+            continue;
+        } else if (key.startsWith("__title_")) {
             rightColumn.innerHTML += `<div class="section-title">${value}</div>`;
         } else if (typeof value === "boolean") {
             const checked = value ? "checked" : "";
@@ -48,6 +65,17 @@ function generateConfigForm(config) {
 
     formElement.appendChild(leftColumn);
     formElement.appendChild(rightColumn);
+
+    // Say where the hidden keys went — a setting that silently vanished reads as a bug.
+    const seen = [];
+    PAGE_OWNED_KEYS.forEach((o) => {
+        if (!seen.some((s) => s.href === o.href)) seen.push(o);
+    });
+    formElement.innerHTML +=
+        `<p class="config-moved-note">Module settings live on their own page, next to their results
+         and their manual: ` +
+        seen.map((o) => `<a href="${o.href}">${o.label}</a>`).join(" · ") +
+        `. New here? See the <a href="/help.html">Help</a> page.</p>`;
     formElement.innerHTML += '<div style="height: 40px; grid-column: 1 / -1;"></div>';
 }
 

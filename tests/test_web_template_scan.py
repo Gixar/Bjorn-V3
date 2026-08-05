@@ -37,6 +37,25 @@ def test_no_matchers_is_vacuously_true():
     assert m({}, 200, "") is True
 
 
+g = WebTemplateScan._server_gate
+
+
+def test_server_gate_fires_when_ungated_or_server_unknown():
+    assert g(None, "nginx/1.24") is True       # template has no match_server
+    assert g([], "nginx/1.24") is True
+    assert g(["apache"], "") is True           # Server unknown -> fail open, still probe
+
+
+def test_server_gate_matches_case_insensitively():
+    assert g(["apache"], "Apache/2.4.62 (Debian)") is True
+    assert g(["Apache"], "apache") is True
+
+
+def test_server_gate_blocks_mismatched_tech():
+    assert g(["apache"], "nginx/1.24") is False
+    assert g(["apache", "httpd"], "Microsoft-IIS/10.0") is False
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

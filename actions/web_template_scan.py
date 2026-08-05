@@ -5,8 +5,9 @@ template's path against every web port and report a hit when the matchers pass. 
 data/output/scan_results/web_template_findings.csv. Templates live in config/web_templates.json —
 plain JSON (stdlib, no pyyaml dep), extensible without code.
 
-ponytail: fires every template at every web port (no tech-gating on the fingerprint yet); add a
-`match_server` gate to the template format if the request volume becomes a problem on a Pi Zero.
+Templates may declare an optional `match_server` list — the template is only fired at a port whose
+fingerprinted `Server` header contains one of those strings (case-insensitive), so tech-specific
+checks don't cost a request on every host. No `match_server` (or an unknown Server) = fire anyway.
 """
 import os
 import ssl
@@ -45,11 +46,15 @@ class WebTemplateScan:
             return 'failed'
 
         hostname = row.get("Hostnames", "")
+        servers = self._servers_by_port(ip)
         findings = []
         for web_port, tls in targets:
             ctx = self._tls_context() if tls else None
             base = f"{'https' if tls else 'http'}://{ip}:{web_port}"
+            server = servers.get(str(web_port), "")
             for tpl in self._templates:
+                if not self._server_gate(tpl.get("match_server"), server):
+                    continue
                 status, body = self._get(base + tpl.get("path", "/"), ctx)
                 if status is None:
                     continue
@@ -70,6 +75,30 @@ class WebTemplateScan:
         except (FileNotFoundError, json.JSONDecodeError) as e:
             logger.warning(f"Web templates unavailable ({path}): {e}")
             return []
+
+    def _servers_by_port(self, ip):
+        """{port: Server header} for this host, from the parent action's fingerprint CSV. The file
+        is append-only, so a later row for the same port wins. {} when it's missing/unreadable —
+        callers then fire every template (fail open: a missed check is worse than a spare request)."""
+        path = os.path.join(self.shared_data.scan_results_dir, "http_fingerprints.csv")
+        servers = {}
+        try:
+            with open(path, newline="") as f:
+                for r in csv.DictReader(f):
+                    if r.get("IP") == ip:
+                        servers[str(r.get("Port", ""))] = r.get("Server", "") or ""
+        except (FileNotFoundError, OSError):
+            pass
+        return servers
+
+    @staticmethod
+    def _server_gate(match_server, server):
+        """True when the template may fire: no `match_server`, no known Server header, or one of
+        the listed strings appears in it (case-insensitive). Pure/testable."""
+        if not match_server or not server:
+            return True
+        low = server.lower()
+        return any(str(s).lower() in low for s in match_server)
 
     @staticmethod
     def _matches(matchers, status, body):

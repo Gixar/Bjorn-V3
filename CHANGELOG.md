@@ -2,7 +2,78 @@
 
 ## [Unreleased]
 
+### Added
+- **`/help` page — how to use and configure the device** — a static page (no API, no new endpoint
+  beyond the route) covering what Bjorn does, a five-step first run, how the scan → act → idle cycle
+  decides what runs when, what every page is for, the optional modules and what hardware each needs,
+  a settings reference for the keys that actually change behavior, where files are written, and a
+  troubleshooting table leading with `scripts/bjorn_doctor.sh`. Linked from the nav and from the
+  Config page.
+- **Per-page descriptions and manuals for BLE, Telegram and Wi-Fi** — each module page now opens
+  with a plain description of what the module does, plus a collapsed `<details>` manual: setup steps
+  (including how to get a Telegram bot token and chat id), what each setting actually controls, and
+  how to read the results table — what a randomized MAC, a probed ESSID or a name-only tracker match
+  means. The two hazards are called out where the buttons are, not only in the docs: Wi-Fi's
+  second-radio requirement, and the third-party hop that "include cracked credentials" creates.
+  Native `<details>`, no JS.
+- **Wi-Fi AP/client recon via airodump-ng** (backlog Wave 4) — new opt-in standalone action
+  `WiFiScan` (`actions/wifi_scan.py`): puts a **second** radio into monitor mode, runs a timed
+  `airodump-ng` capture and records nearby access points and their clients to
+  `data/output/scan_results/wifi_aps.csv` / `wifi_clients.csv`. Own files, not `netkb.csv` — same
+  call as BLE, since 802.11-layer discoveries have no IP or ports. Rows merge by BSSID / station MAC
+  and keep their original `FirstSeen`. New `/wifi` page (config + AP and client tables + a "test
+  monitor mode" button), both CSVs join the Telegram/SMTP dataset, and the installer provisions
+  `aircrack-ng` + `iw`. Config: `wifi_scan_enabled`, `wifi_scan_iface`, `wifi_scan_duration` (30s),
+  `wifi_scan_interval` (900s).
+
+  Chosen over bettercap's `wifi.recon` for the first pass: airodump writes a plain CSV, which is the
+  "external process + parse its output" pattern already used for nmap/nmcli/snmpget/bluetoothctl,
+  whereas a bettercap-backed version needs a daemon, a REST client and auth hardening before it
+  parses anything. Bettercap stays scoped in `BETTERCAP_PLAN.md`.
+- **Monitor-mode lifecycle guard** (`monitor_mode.py`) — every acquisition funnels through
+  `acquire()`, which **refuses any interface carrying the default route**. Monitor and managed mode
+  are mutually exclusive on one radio, so monitor-moding Bjorn's own uplink would kill the web UI,
+  reporting and IP scanning from inside the process that would have to report it. The guard keys on
+  the **routing table, not the interface name** — names aren't stable across USB dongles and
+  reboots, so a `wlan0` check would silently pass the day the dongle enumerates first. Deliberately
+  avoids `airmon-ng start`, whose ubiquitous companion `airmon-ng check kill` kills NetworkManager
+  and wpa_supplicant; plain `iw` sets the same mode without touching any other interface. The `/wifi`
+  dropdown labels the uplink as unusable rather than hiding it.
+- **SMTP fallback delivery channel for reports** (backlog Wave 3) — `telegram_client.py` gained
+  `send_email()` (stdlib `smtplib`/`EmailMessage`; port 465 = implicit SSL, anything else = STARTTLS
+  when the server offers it) and a `_deliver()` that sends via Telegram and falls back to SMTP when
+  Telegram is unconfigured or fails — the case the backlog called out: public/hotel/corporate Wi-Fi
+  that blocks one channel or the other. New config keys `smtp_enabled`, `smtp_host`, `smtp_port`
+  (587), `smtp_user`, `smtp_password`, `smtp_to` (comma-separated), validated in
+  `config_validation.py` and editable on the `/telegram` page. `TelegramReport` now runs when
+  *either* channel is enabled, and "Send test message" tests whichever is configured. The delta
+  (sha256) + rate-floor logic is unchanged and shared by both channels.
+- **BLE tracker detection from the advertisement, not just the name** (backlog Wave 3) — `BLEScan`
+  is now two-stage: the name heuristic first, then — only for devices the name didn't flag —
+  `bluetoothctl info <mac>`, matched against finder-network service UUIDs (Apple Find My `fd44`,
+  Samsung SmartTag `fd5a`, Tile `feed`/`feec`) and Apple manufacturer data `0x004c` whose payload
+  type is `0x12` (offline finding). Google Fast Pair (`fe2c`) is deliberately excluded — ordinary
+  headphones advertise it. New `TrackerType` column in `ble_devices.csv` and a "Detected via" column
+  on `/ble`, so a flag shows its evidence. Devices rename freely; the advertisement doesn't.
+- **`match_server` tech gate for web templates** (backlog Wave 3) — templates in
+  `config/web_templates.json` take an optional `match_server` list; `WebTemplateScan` reads the
+  parent action's `http_fingerprints.csv` for the host's `Server` header and skips templates whose
+  tech doesn't match (case-insensitive), so tech-specific checks stop costing a request per host on
+  a Pi Zero. Fails **open** — no `match_server`, or no known Server header, still fires the template
+  (a missed finding is worse than a spare request). `apache-status` is gated to `["apache"]`.
+
 ### Changed
+- **Module settings moved off the Config page onto their own pages** — `config.js` now hides any key
+  owned by a dedicated page (`ble_scan_*`, `wifi_scan_*`, `telegram_*`, `smtp_*`) from the generic
+  auto-generated form, so each module is configured in one place, next to its own results, test
+  button and manual, instead of being split between a labelled page and a flat list of raw key names.
+  Matched by **prefix**, so a new key on an existing module needs no change here; `/save_config`
+  merges key-by-key, so a save from either page leaves the other's keys untouched. The form ends with
+  a note linking to each module page — a setting that silently vanished would read as a bug. This
+  also retires a real trap: `wifi_scan_iface` was a free-text field on Config, next to the `/wifi`
+  dropdown that exists specifically to stop you selecting Bjorn's own uplink.
+  `tests/test_web_pages.py` fails if a key is hidden from Config without the owning page's script
+  setting it, or if a nav link points at a page missing from `webapp._PAGES`.
 - **Offline CVE enrichment now also reads un-CPE'd services** — `_parse_service_versions` gained a
   `-sV` service-line fallback: when nmap can't emit a CPE (common on consumer gear — a Wave 0 test
   router returned "2 services unrecognized"), it takes the first two tokens of the version detail
@@ -11,6 +82,37 @@
   the seed DB (vsftpd/openssh/proftpd/unrealircd) even without a CPE.
 
 ### Fixed
+- **New config keys were invisible in the web UI until an unrelated save** — `SharedData.load_config()`
+  merged the defaults over the saved `shared_config.json` **in memory only**, so the file on disk kept
+  whatever key set it was last written with. Everything that reads the *file* rather than the live
+  object — the `/load_config` form, `save_configuration()` — therefore saw a config missing every key
+  added since, and a setting introduced by an upgrade only appeared once some other save happened to
+  rewrite the file. `load_config()` now writes the merged config back when the file is missing default
+  keys: one write per upgrade, not per boot (a complete file is left alone — this runs at every start
+  and an SD card doesn't need the churn). Writing it back also restores the canonical key order, so the
+  config form's `__title_` section markers keep grouping their keys. Covered by
+  `test_config_validation.py`., and no longer run only once** — found while
+  adding a 5th standalone action. Two compounding faults in `orchestrator.py`:
+  1. The idle loop `break`ed on the first action returning success. Every standalone action returns
+     `'success'` when it is **disabled or throttled** (`ble_scan.py:60,64,68`, `snmp_enum.py:42`,
+     `wpasec_import.py:43,48`, `telegram_report.py:32`), so a single switched-off action consumed
+     the whole idle window and starved every action registered after it.
+  2. Success was written to the netkb `STANDALONE` row and gated by `retry_success_actions`, which
+     defaults to `False` — correct for a *host* action ("don't re-attack a box you already
+     cracked"), but applied to a recurring job it meant each standalone action ran **exactly once
+     per netkb lifetime**. Their own interval keys (`ble_scan_interval`, `wpasec_interval`,
+     `telegram_min_interval`) never got a second turn in which to take effect.
+
+  The loop is now `run_standalone_actions()`: every action gets a turn each idle window, and the
+  success-retry gate no longer applies to standalone actions — they self-throttle. The *failed*
+  retry delay is kept, so a genuinely broken action still backs off. This is very likely the real
+  cause of the Wave 2 note "BLE recon — enabled + initialized, but didn't get a standalone-action
+  turn", which was blamed on the short observation window. Also revives `WpaSecImport`, `SNMPEnum`
+  and `TelegramReport`, all one-shot until now.
+- **Removed the dead `'web_increment '` config key** — the long-known trailing-space key was never
+  read anywhere in the codebase, so it was a dead default rather than a typo'd rename: dropped from
+  `shared.py::get_default_config` and `config/shared_config.json`. Existing installs keep the stale
+  key in their saved JSON, where it stays inert.
 - **`epd_test.py` explains the `GPIO busy` failure instead of dumping a bare traceback** — during
   Wave 0, `epd_test.py --all` failed *every* driver with `lgpio.error: 'GPIO busy'` because
   `bjorn.service` was running and holding the RST pin, with no hint why. It now checks

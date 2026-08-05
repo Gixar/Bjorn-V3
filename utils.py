@@ -26,6 +26,7 @@ import importlib
 import logging
 from datetime import datetime, timezone
 from logger import Logger
+import monitor_mode
 from starlette.responses import JSONResponse, HTMLResponse, PlainTextResponse, Response, FileResponse
 from actions.nmap_vuln_scanner import NmapVulnScanner
 import telegram_client
@@ -143,21 +144,47 @@ class WebUtils:
         return JSONResponse({"devices": rows})
 
     # ------------------------------------------------------------------
-    # Telegram reporting — POST /telegram_test, POST /telegram_send
+    # Wi-Fi recon (airodump-ng) — GET /wifi_data, GET /wifi_ifaces, POST /wifi_monitor_test
+    # ------------------------------------------------------------------
+    def serve_wifi_data(self):
+        def _rows(name):
+            try:
+                with open(os.path.join(self.shared_data.scan_results_dir, name),
+                          newline="", encoding="utf-8") as f:
+                    return list(csv.DictReader(f))
+            except FileNotFoundError:
+                return []
+        return JSONResponse({"aps": _rows("wifi_aps.csv"), "clients": _rows("wifi_clients.csv")})
+
+    def wifi_ifaces(self):
+        """Wireless interfaces for the config dropdown, flagging the uplink so the user can't pick
+        it by mistake (monitor_mode.acquire refuses it anyway — this just explains why)."""
+        uplink = monitor_mode.default_route_iface()
+        return JSONResponse({"interfaces": [{"name": n, "uplink": n == uplink}
+                                            for n in monitor_mode.wireless_ifaces()],
+                             "uplink": uplink})
+
+    def wifi_monitor_test(self, iface):
+        """'Test monitor mode' button: check the guard and the radio's capability without capturing."""
+        problem = monitor_mode.check_usable(iface)
+        if problem:
+            return _err(problem)
+        if not monitor_mode.supports_monitor(iface):
+            return _err(f"{iface} does not report monitor mode support")
+        return _ok(message=f"{iface} supports monitor mode and is safe to use.")
+
+    # ------------------------------------------------------------------
+    # Report delivery (Telegram, SMTP fallback) — POST /telegram_test, POST /telegram_send
     # ------------------------------------------------------------------
     def telegram_test(self):
-        sd = self.shared_data
-        token = (getattr(sd, "telegram_bot_token", "") or "").strip()
-        chat = (getattr(sd, "telegram_chat_id", "") or "").strip()
-        if not token or not chat:
-            return _err("Bot token / chat id not set")
-        ok, detail = telegram_client.send_message(token, chat, "Bjorn test message ✅")
-        return _ok(message="Test message sent.") if ok else _err(f"Telegram error: {detail}")
+        """Test message down whichever channel is configured (Telegram first, then SMTP)."""
+        ok, detail = telegram_client.send_test(self.shared_data)
+        return _ok(message=f"Test message {detail}.") if ok else _err(detail)
 
     def telegram_send(self):
         """Force-compile the raw target dataset and send it now (ignores the delta check)."""
         ok, detail, _sent = telegram_client.send_targets(self.shared_data, force=True)
-        return _ok(message=f"Target data sent ({detail}).") if ok else _err(f"Send failed: {detail}")
+        return _ok(message=f"Target data {detail}.") if ok else _err(f"Send failed: {detail}")
 
     # ------------------------------------------------------------------
     # Scan-engine benchmark (nmap vs RustScan) — POST /run_benchmark, GET /benchmark_results

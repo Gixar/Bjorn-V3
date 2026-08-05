@@ -1,10 +1,10 @@
-"""telegram_report.py - auto-deliver the raw target dataset to Telegram (backlog Wave 2).
+"""telegram_report.py - auto-deliver the raw target dataset off-device (backlog Wave 2/3).
 
 A standalone action: each cycle it compiles the target data (netkb + findings) and sends it as a
-JSON document to the configured bot — but only when the data has actually changed since the last
-send (delta detection) and the min-interval rate floor has elapsed. No-op unless telegram_enabled
-and a bot token + chat id are set. All the work lives in telegram_client.send_targets(), shared with
-the web "Send now" handler.
+JSON document to the configured Telegram bot — falling back to SMTP when Telegram is unset or
+blocked — but only when the data has actually changed since the last send (delta detection) and the
+min-interval rate floor has elapsed. No-op unless telegram_enabled or smtp_enabled. All the work
+lives in telegram_client.send_targets(), shared with the web "Send now" handler.
 """
 import logging
 from shared import SharedData
@@ -27,13 +27,14 @@ class TelegramReport:
 
     def execute(self):
         try:
-            if not getattr(self.shared_data, "telegram_enabled", False):
+            if not (getattr(self.shared_data, "telegram_enabled", False)
+                    or getattr(self.shared_data, "smtp_enabled", False)):
                 return 'success'
             ok, detail, sent = telegram_client.send_targets(self.shared_data, force=False)
             if sent and ok:
-                logger.success(f"Telegram: target data sent ({detail}).")
+                logger.success(f"Target data delivered ({detail}).")
             elif not ok:
-                logger.warning(f"Telegram send skipped/failed: {detail}")
+                logger.warning(f"Report send skipped/failed: {detail}")
             return 'success'
         except Exception as e:
             logger.error(f"Error in Telegram report: {e}")

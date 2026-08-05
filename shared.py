@@ -118,7 +118,6 @@ class SharedData:
             "__title_Bjorn__": "Settings",
             "manual_mode": False,
             "websrv": True,
-            "web_increment ": False,
             "debug_mode": False,
             "scan_vuln_running": False,
             "retry_success_actions": False,
@@ -165,11 +164,21 @@ class SharedData:
             "ble_scan_enabled": False,        # opt-in BLE recon via bluetoothctl (uses the BT radio)
             "ble_scan_duration": 10,          # seconds per BLE discovery scan
             "ble_scan_interval": 300,         # min seconds between BLE scans
+            "wifi_scan_enabled": False,       # opt-in 802.11 AP/client recon via airodump-ng
+            "wifi_scan_iface": "",            # monitor-mode radio — MUST NOT be Bjorn's uplink (use a USB dongle)
+            "wifi_scan_duration": 30,         # seconds per airodump-ng capture
+            "wifi_scan_interval": 900,        # min seconds between Wi-Fi scans
             "telegram_enabled": False,        # auto-send raw target data to Telegram when it changes
             "telegram_bot_token": "",         # Telegram bot token (secret, user-supplied)
             "telegram_chat_id": "",           # Telegram chat/channel id to deliver to
             "telegram_min_interval": 300,     # rate floor (seconds) between auto-sends
             "telegram_include_creds": True,   # include cracked credentials in the sent dataset (third-party hop)
+            "smtp_enabled": False,            # SMTP fallback channel, used when Telegram is unset or fails
+            "smtp_host": "",                  # SMTP server hostname
+            "smtp_port": 587,                 # 465 = implicit SSL, anything else = STARTTLS when offered
+            "smtp_user": "",                  # SMTP login / From address
+            "smtp_password": "",              # SMTP password (secret, user-supplied)
+            "smtp_to": "",                    # recipient(s), comma-separated
             "steal_file_names": ["ssh.csv","hack.txt"],
             "steal_file_extensions": [".bjorn",".hack",".flag"],
             
@@ -496,10 +505,22 @@ class SharedData:
             if os.path.exists(self.shared_config_json):
                 with open(self.shared_config_json, 'r') as f:
                     config = json.load(f)
-                    self.config.update(config)
-                    validate_config(self.config)  # fail fast on a bad config before setup runs
-                    for key, value in self.config.items():
-                        setattr(self, key, value)
+                self.config.update(config)
+                validate_config(self.config)  # fail fast on a bad config before setup runs
+                for key, value in self.config.items():
+                    setattr(self, key, value)
+                # Persist any default keys the saved file predates. The merge above has always
+                # been in-memory only, so everything that reads the *file* — the web /load_config
+                # form, save_configuration() — saw an incomplete config: a key added by an upgrade
+                # stayed invisible in the UI until some unrelated save happened to rewrite the
+                # file. Writing it back also restores the canonical key order (self.config starts
+                # as a copy of the defaults), keeping the form's section titles grouped.
+                # One write per upgrade, not per boot.
+                missing = [k for k in self.config if k not in config]
+                if missing:
+                    logger.info(f"Config file missing {len(missing)} default key(s) {missing}; "
+                                "writing the merged configuration back.")
+                    self.save_config()
             else:
                 logger.warning("Configuration file not found, creating new one with default values...")
                 self.save_config()

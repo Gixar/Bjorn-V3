@@ -52,6 +52,16 @@ def install():
         netifaces.ifaddresses = lambda _iface: {}
         sys.modules["netifaces"] = netifaces
 
+    if "PIL" not in sys.modules:
+        # Only needs to satisfy `from PIL import Image, ImageFont` at import time — tests that
+        # import shared.py for its config/CSV logic never draw anything.
+        pil = types.ModuleType("PIL")
+        for name in ("Image", "ImageFont", "ImageDraw"):
+            sub = types.ModuleType(f"PIL.{name}")
+            setattr(pil, name, sub)
+            sys.modules[f"PIL.{name}"] = sub
+        sys.modules["PIL"] = pil
+
     if "getmac" not in sys.modules:
         getmac = types.ModuleType("getmac")
         getmac.get_mac_address = lambda *a, **k: None

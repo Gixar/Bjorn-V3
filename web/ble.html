@@ -23,6 +23,52 @@
                 </div>
             </div>
 
+            <p>
+                Uses the Pi's own Bluetooth radio to run a timed passive discovery every so often,
+                and records everything it hears into <code>ble_devices.csv</code> — address, name,
+                and whether the device looks like a finder-network tracker (Apple Find My, Samsung
+                SmartTag, Tile). No extra hardware, no monitor mode, nothing transmitted at a target.
+            </p>
+
+            <details class="manual">
+                <summary>Manual — setup, tuning, and reading the results</summary>
+                <div class="prose">
+                    <h3>Setting it up</h3>
+                    <ol>
+                        <li>Tick <strong>Enable BLE scanning</strong> and press <em>Save</em>.</li>
+                        <li>Wait one idle window — Bjorn runs standalone modules like this one
+                            between scan passes, not on demand.</li>
+                        <li>Press <em>Refresh results</em>. An empty table after a few minutes with
+                            phones nearby usually means the Bluetooth radio is down: check
+                            <code>bluetoothctl show</code> on the Pi.</li>
+                    </ol>
+
+                    <h3>The settings</h3>
+                    <table>
+                        <tr><th>Scan duration</th><td>How long each discovery listens. Longer catches more devices — trackers beacon slowly — at the cost of holding the radio. 10–30 s is the useful range.</td></tr>
+                        <tr><th>Min interval</th><td>Floor between scans, in seconds. This is a minimum, not a schedule: a scan happens on the first idle window after the interval has elapsed, so the real gap is at least this long and often longer.</td></tr>
+                    </table>
+
+                    <h3>Reading the table</h3>
+                    <table>
+                        <tr><th>Tracker</th><td>Flagged as a likely finder-network tag rather than an ordinary device.</td></tr>
+                        <tr><th>Detected via</th><td>The evidence. <code>name</code> means the advertised name matched a known product — weak, since names can be changed. A service UUID or manufacturer-data match is the strong signal: it comes from the advertisement itself, which the owner cannot rename.</td></tr>
+                        <tr><th>First / last seen</th><td>Rows are merged by address across scans, so first-seen is preserved. A tracker whose last-seen keeps advancing across many scans is following you; one seen once was just passing.</td></tr>
+                    </table>
+
+                    <div class="note">
+                        Google Fast Pair is deliberately <em>not</em> treated as a tracker signature —
+                        ordinary headphones advertise it, so it would flag half a train carriage.
+                    </div>
+
+                    <div class="note">
+                        Addresses shown may be randomized: both iOS and Android rotate their BLE
+                        address periodically, so the same phone can appear as several rows over time.
+                        Trackers in lost mode rotate too, but far more slowly.
+                    </div>
+                </div>
+            </details>
+
             <div class="tg-form">
                 <label class="tg-check"><input type="checkbox" id="ble-enabled"> Enable BLE scanning</label>
                 <label class="tg-field">Scan duration (seconds)
@@ -46,7 +92,7 @@
                 </div>
             </div>
             <table class="stats-breakdown" id="ble-table">
-                <thead><tr><th>MAC</th><th>Name</th><th>Tracker</th><th>First seen</th><th>Last seen</th></tr></thead>
+                <thead><tr><th>MAC</th><th>Name</th><th>Tracker</th><th>Detected via</th><th>First seen</th><th>Last seen</th></tr></thead>
                 <tbody id="ble-body"></tbody>
             </table>
         </div>

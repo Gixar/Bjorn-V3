@@ -16,6 +16,17 @@ const BLE_SVG = `<svg width="28" height="28" viewBox="0 0 24 24" fill="none" str
   <path d="M7 8l10 8-5 4V4l5 4L7 16" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>`;
 
+const WIFI_SVG = `<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+  <path d="M2 8.5a16 16 0 0 1 20 0M5 12a11 11 0 0 1 14 0M8.5 15.5a6 6 0 0 1 7 0" stroke-linecap="round"/>
+  <circle cx="12" cy="19" r="1.2" fill="currentColor" stroke="none"/>
+</svg>`;
+
+const HELP_SVG = `<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+  <circle cx="12" cy="12" r="9"/>
+  <path d="M9.5 9a2.5 2.5 0 1 1 3.2 2.4c-.6.2-1.2.8-1.2 1.6v.5" stroke-linecap="round"/>
+  <circle cx="12" cy="17" r="1" fill="currentColor" stroke="none"/>
+</svg>`;
+
 const BJORN_NAV = [
     { href: "/index.html", label: "Home", icon: "/web/images/console_icon.png", match: ["/", "/index.html"] },
     { href: "/stats.html", label: "Stats", svg: STATS_SVG, match: ["/stats.html"] },
@@ -28,6 +39,8 @@ const BJORN_NAV = [
     { href: "/logs.html", label: "Logs", svg: LOGS_SVG, match: ["/logs.html"] },
     { href: "/telegram.html", label: "Telegram", svg: TELEGRAM_SVG, match: ["/telegram.html"] },
     { href: "/ble.html", label: "BLE", svg: BLE_SVG, match: ["/ble.html"] },
+    { href: "/wifi.html", label: "Wi-Fi", svg: WIFI_SVG, match: ["/wifi.html"] },
+    { href: "/help.html", label: "Help", svg: HELP_SVG, match: ["/help.html"] },
 ];
 
 function currentPath() {

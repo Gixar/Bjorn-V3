@@ -6,8 +6,10 @@ trackers (AirTag/Tile/SmartTag...). Its own file, NOT netkb.csv — wireless (no
 the netkb IP+Ports schema, and a self-contained file avoids destabilizing the core pipeline. No-op
 unless `ble_scan_enabled` and `bluetoothctl` is present; throttled by `ble_scan_interval`.
 
-ponytail: name-based tracker heuristic only. Robust FindMy detection needs the BLE manufacturer data
-(0x004C Apple / service UUIDs) via `bluetoothctl info <mac>` per device — a follow-up if needed.
+Tracker detection is two-stage: a cheap name heuristic, then — for devices the name didn't flag —
+`bluetoothctl info <mac>`, matching the advertised service UUIDs / manufacturer data against the
+known tracker signatures below (the OpenHaystack/AirGuard approach). Devices rename freely; the
+advertisement doesn't.
 """
 import os
 import re
@@ -31,6 +33,18 @@ b_parent = None
 
 TRACKER_HINTS = ("airtag", "tile", "smarttag", "smart tag", "chipolo", "find my", "findmy")
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+# 16-bit BLE service UUIDs (as they appear in the 128-bit form bluetoothctl prints) that identify a
+# tracker network. Only signatures specific to *finder* networks — Fast Pair (0xFE2C) is deliberately
+# absent, plain headphones advertise it too.
+TRACKER_UUIDS = {
+    "0000fd44": "Apple Find My",
+    "0000fd5a": "Samsung SmartTag",
+    "0000feed": "Tile",
+    "0000feec": "Tile",
+}
+APPLE_MFR_KEY = "0x004c"
+APPLE_OFFLINE_FINDING = "12"  # Apple mfr-data payload type for an offline-finding (Find My) beacon
 
 
 class BLEScan:
@@ -57,7 +71,7 @@ class BLEScan:
             duration = max(3, int(getattr(self.shared_data, "ble_scan_duration", 10)))
             devices = self._scan(binp, duration)
             if devices:
-                new_trackers = self._record(devices)
+                new_trackers = self._record(devices, binp)
                 msg = f"BLE scan: {len(devices)} device(s)"
                 if new_trackers:
                     msg += f", {new_trackers} flagged as tracker(s)"
@@ -91,6 +105,43 @@ class BLEScan:
         n = (name or "").lower()
         return any(h in n for h in TRACKER_HINTS)
 
+    @staticmethod
+    def _tracker_from_info(output):
+        """Tracker label from a `bluetoothctl info <mac>` dump, or "" if it looks like an ordinary
+        device. Matches a known finder-network service UUID, or Apple manufacturer data whose first
+        payload byte is the offline-finding type. Pure/testable."""
+        lines = [_ANSI.sub("", raw).strip() for raw in output.splitlines()]
+        for line in lines:
+            low = line.lower()
+            for uuid, label in TRACKER_UUIDS.items():
+                if uuid in low:
+                    return label
+        for i, line in enumerate(lines):
+            low = line.lower()
+            if not ("manufacturerdata key" in low and APPLE_MFR_KEY in low):
+                continue
+            # The value follows within the next couple of lines, either inline
+            # ("Value: 0x12 0x19 …") or on its own line under a bare "Value:" label.
+            for nxt in lines[i + 1:i + 3]:
+                if "manufacturerdata value" not in nxt.lower():
+                    continue
+                payload = nxt.split(":", 1)[-1].strip() or (
+                    lines[i + 2].strip() if i + 2 < len(lines) else "")
+                tokens = payload.lower().replace("0x", "").split()
+                if tokens and tokens[0] == APPLE_OFFLINE_FINDING:
+                    return "Apple Find My"
+                break
+        return ""
+
+    def _device_info(self, binp, mac):
+        """Raw `bluetoothctl info <mac>` output; "" if the call fails (device gone, BlueZ busy)."""
+        try:
+            return subprocess.run([binp, "info", mac], capture_output=True, text=True,
+                                  timeout=8).stdout
+        except (subprocess.SubprocessError, OSError) as e:
+            logger.debug(f"bluetoothctl info {mac} failed: {e}")
+            return ""
+
     def _load(self):
         by_mac = {}
         try:
@@ -102,24 +153,27 @@ class BLEScan:
             pass
         return by_mac
 
-    def _record(self, devices):
+    def _record(self, devices, binp=None):
         by_mac = self._load()
         now = datetime.now(timezone.utc).isoformat()
         new_trackers = 0
         for mac, name in devices:
             prev = by_mac.get(mac, {})
             name = name or prev.get("Name", "")
-            is_tracker = self._is_tracker(name)
-            if is_tracker and prev.get("Tracker") != "yes":
+            kind = "name match" if self._is_tracker(name) else ""
+            if not kind and binp:  # only pay for the extra call when the name says nothing
+                kind = self._tracker_from_info(self._device_info(binp, mac))
+            if kind and prev.get("Tracker") != "yes":
                 new_trackers += 1
-            by_mac[mac] = {"MAC": mac, "Name": name, "Tracker": "yes" if is_tracker else "",
+            by_mac[mac] = {"MAC": mac, "Name": name, "Tracker": "yes" if kind else "",
+                           "TrackerType": kind,
                            "FirstSeen": prev.get("FirstSeen", now), "LastSeen": now}
         self._write(by_mac)
         return new_trackers
 
     def _write(self, by_mac):
         os.makedirs(os.path.dirname(self.outfile), exist_ok=True)
-        cols = ["MAC", "Name", "Tracker", "FirstSeen", "LastSeen"]
+        cols = ["MAC", "Name", "Tracker", "TrackerType", "FirstSeen", "LastSeen"]
         with open(self.outfile, "w", newline="") as f:
             w = csv.writer(f)
             w.writerow(cols)

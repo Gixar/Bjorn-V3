@@ -1,10 +1,10 @@
 {
-  "_comment": "nuclei-style templated web checks (backlog Wave 2). Each template GETs `path` on a discovered web service and reports a hit when the matchers pass: `status` (any of the listed codes) AND `body_contains` (any of the listed substrings). Extend freely -- this is JSON (stdlib, no pyyaml dep) rather than nuclei's YAML, but the same idea. High-signal, low-false-positive exposures only.",
+  "_comment": "nuclei-style templated web checks (backlog Wave 2). Each template GETs `path` on a discovered web service and reports a hit when the matchers pass: `status` (any of the listed codes) AND `body_contains` (any of the listed substrings). Optional `match_server` limits the template to ports whose fingerprinted Server header contains one of the listed strings (case-insensitive) -- omit it to fire everywhere. Extend freely -- this is JSON (stdlib, no pyyaml dep) rather than nuclei's YAML, but the same idea. High-signal, low-false-positive exposures only.",
   "templates": [
     {"id": "git-config", "name": "Exposed .git/config", "severity": "medium", "path": "/.git/config", "matchers": {"status": [200], "body_contains": ["[core]", "repositoryformatversion"]}},
     {"id": "env-file", "name": "Exposed .env", "severity": "high", "path": "/.env", "matchers": {"status": [200], "body_contains": ["APP_", "DB_", "SECRET", "_KEY="]}},
     {"id": "phpinfo", "name": "phpinfo() exposed", "severity": "medium", "path": "/phpinfo.php", "matchers": {"status": [200], "body_contains": ["PHP Version", "phpinfo()"]}},
-    {"id": "apache-status", "name": "Apache server-status exposed", "severity": "low", "path": "/server-status", "matchers": {"status": [200], "body_contains": ["Apache Server Status"]}},
+    {"id": "apache-status", "name": "Apache server-status exposed", "severity": "low", "path": "/server-status", "match_server": ["apache"], "matchers": {"status": [200], "body_contains": ["Apache Server Status"]}},
     {"id": "ds-store", "name": "Exposed .DS_Store", "severity": "low", "path": "/.DS_Store", "matchers": {"status": [200], "body_contains": ["Bud1"]}},
     {"id": "backup-sql", "name": "Exposed database backup", "severity": "high", "path": "/backup.sql", "matchers": {"status": [200], "body_contains": ["INSERT INTO", "CREATE TABLE"]}}
   ]

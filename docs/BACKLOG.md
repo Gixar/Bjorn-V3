@@ -9,6 +9,117 @@ Already fixed this cycle (see `CHANGELOG.md`): #16 port hopping, #147 installer 
 #152 EPD option-count prompt. Already covered by the v2 baseline: run-without-display (#11 →
 `epd_type: "mock"`), dependency modernization (P1-1/P1-2).
 
+## Re-review 2026-08-03 — everything still open, ranked by priority ÷ time
+
+Full pass over this file against the code on `main` (2.5.0-alpha). Two entries were **stale** and
+have been corrected in place: credential reuse (#4 below) shipped in `7f854cf`, and the
+HTTPFingerprint "misses 443-only hosts" note was disproven by Wave 2 (both :80 and :443 captured).
+
+**Tier 1 — shipped in this pass (Wave 3, all no-hardware):**
+
+| # | Item | Time |
+|---|---|---|
+| 1 | Dead `web_increment ` config key (trailing space) — nothing ever read it → deleted | ~0 |
+| 2 | `match_server` tech-gating for web templates — cuts wasted requests on a Pi Zero | S |
+| 3 | BLE tracker detection from manufacturer data / service UUIDs (was name-only) | S |
+| 4 | SMTP fallback delivery channel — last open piece of the reporting item | S |
+
+**Tier 2 — next, medium:**
+
+| # | Item | Time | Why this order |
+|---|---|---|---|
+| 5 | ~~netkb `device_type` column~~ | — | **Dropped as a prerequisite (Wave 4).** BLE, and now Wi-Fi, both landed cleanly in their own CSVs. Two precedents say the separate-file shape is right; unifying into netkb stays YAGNI until something actually needs one query across IP + wireless entries. |
+| 6 | Responder LLMNR/NBT-NS/mDNS poisoning | M | Biggest new offensive capability that needs no new radio. Bulk of the work is process lifecycle + parsing (detail below). |
+| 7 | PCAP capture + offline exfil | M | Now has a delivery pipeline to land in (Telegram/SMTP both exist) **and** a monitor-mode radio. |
+| 8 | Defensive "canary" mode | M | Reuses the web/report stack; lowest urgency of the four. |
+
+## Re-review 2026-08-04 — a monitor-mode dongle changes the Tier 3/4 gating
+
+A USB Wi-Fi dongle supporting **all modes** is now on hand. That retires the "needs a second radio"
+blocker which was the dominant cost on wardriving (#7) and the Bettercap monitor phase — and it
+overturns this file's own advice on both:
+
+- **"Don't build a separate monitor stack — extend bettercap's `wifi.recon`"** assumed bettercap
+  already existed. It doesn't; it's still an unbuilt **L**. So the real comparison was *airodump
+  (subprocess + CSV parse)* vs *build bettercap first, then parse anyway*. airodump-ng won and
+  shipped as Wave 4; Bettercap stays scoped in `BETTERCAP_PLAN.md` for the interactive/MITM
+  capabilities airodump can't do.
+- **Wardriving (#7) is done** — `wifi_aps.csv` + `wifi_clients.csv` *is* the wardriving log. It was
+  never an L, and never needed Bettercap Phase 4. **GPS tagging and a map view are dropped, not
+  deferred** — no GPS module, and Bjorn is carried rather than driven (the same reasoning that
+  killed PG-6). Nothing remains on this item.
+
+## Wave 4 — implemented 2026-08-04 (needs the dongle to verify)
+
+1. **Standalone-action scheduling fixed first** — adding a 5th standalone action surfaced two
+   compounding orchestrator bugs that would have made `WiFiScan` never run: the idle loop `break`ed
+   on the first success (and a *disabled* action returns success), and a recorded success latched
+   the action off permanently because `retry_success_actions` defaults to False. Every standalone
+   action ran **once per netkb lifetime**. Now `run_standalone_actions()` gives each a turn per idle
+   window and the success gate no longer applies to them (they self-throttle); the failed-retry
+   backoff is kept. Very likely the real cause of the Wave 2 "BLE never got a turn" note. Also
+   revives `WpaSecImport` / `SNMPEnum` / `TelegramReport`. Covered by `test_standalone_actions.py`.
+2. **`WiFiScan` action** — timed `airodump-ng` capture on the second radio → `wifi_aps.csv` +
+   `wifi_clients.csv`, merged by BSSID / station MAC with `FirstSeen` preserved. The CSV parser
+   handles airodump's two-tables-in-one-file format and its truncated trailing row (it flushes every
+   second and we stop it by timeout).
+3. **`monitor_mode.py` guard** — refuses any interface holding the **default route**, keyed on the
+   routing table rather than the name `wlan0` (names aren't stable across dongles/reboots). Avoids
+   `airmon-ng` because its standard companion `check kill` would kill Bjorn's own uplink. One
+   acquisition point, so the mutex has an obvious home when a second consumer arrives.
+4. **`/wifi` page + Telegram dataset** — config (with the uplink shown but disabled in the dropdown),
+   AP and client tables, a "test monitor mode" button; both CSVs added to `compile_targets`.
+   Installer provisions `aircrack-ng` + `iw`.
+
+**On-Pi verification still needed:** that the dongle enumerates and enters monitor mode, that
+airodump actually captures, and — most importantly — that the uplink guard refuses the onboard radio
+*without* dropping connectivity. Test the guard before enabling the scan.
+
+**Tier 3 — blocked on hardware, a target, or a live WebUI** (do opportunistically when the Pi is out):
+`rustscan_batch_size` tuning · #176/#155/#122 re-tests · #113 V4 panel · CVE + credential-reuse
+end-to-end (need a vulnerable/crackable host) · wpa-sec inject (needs an API key) · usb0 plugged-host
+test · BLE/Telegram on-Pi confirmation · `Thread-1` exception in `epd_test.py` (only if it recurs).
+
+**Tier 4 — large / deliberately deferred:** Bettercap (`BETTERCAP_PLAN.md`) → Evil Twin (#8) →
+ESP32 fleet · Bluetooth PAN · BadUSB (a reversal of a past decision, needs a call before code) ·
+tri-color panel (YAGNI, no panel) · Cortex export (YAGNI, no swarm).
+*(Wardriving (#7) left this tier in Wave 4 — shipped as `WiFiScan`, and it never needed Bettercap.)*
+
+**Dropped, do not revisit:** GPS tagging and the wardriving map view (PG-6) · `device_type` netkb
+column (two separate-file precedents make it unnecessary) · Cortex `.csv.gz` export · PG-5 plugin
+system (folded into the P3-1 module contract).
+
+## Wave 3 — implemented 2026-08-03 (no hardware required)
+
+1. **Dead `web_increment ` key removed** — the long-known trailing-space key was never read
+   anywhere in the codebase, so this was a dead default, not a rename: dropped from
+   `shared.py::get_default_config` and `config/shared_config.json`. Existing installs keep the
+   stale key in their saved JSON; it stays inert.
+2. **`match_server` template gating** — `config/web_templates.json` templates take an optional
+   `match_server` list; `WebTemplateScan` reads the parent action's `http_fingerprints.csv` for the
+   host's `Server` header and skips templates whose tech doesn't match (case-insensitive). Fails
+   **open**: no `match_server`, or no known Server header → the template still fires. `apache-status`
+   is gated to `["apache"]` as the first user. Closes the ponytail note on that file.
+3. **BLE tracker detection from the advertisement** — two-stage now: the name heuristic first, then
+   (only for devices the name didn't flag) `bluetoothctl info <mac>`, matched against finder-network
+   service UUIDs (Apple Find My `fd44`, Samsung SmartTag `fd5a`, Tile `feed`/`feec`) and Apple
+   manufacturer data `0x004c` whose payload type is `0x12` (offline finding). Google Fast Pair
+   (`fe2c`) is deliberately **not** a signature — headphones advertise it too. New `TrackerType`
+   column in `ble_devices.csv` + the `/ble` table shows how each was detected. Closes the BLE
+   follow-up.
+4. **SMTP fallback delivery channel** — `telegram_client.py` gained `send_email()` (stdlib
+   `smtplib`/`EmailMessage`; port 465 = implicit SSL, else STARTTLS when offered) and a `_deliver()`
+   that tries Telegram then falls back to SMTP, so a network that blocks Telegram still delivers.
+   Config: `smtp_enabled/host/port/user/password/to` (comma-separated recipients), validated in
+   `config_validation.py`, editable on the `/telegram` page. `TelegramReport` now runs when *either*
+   channel is enabled, and the "Send test message" button tests whichever is configured. The delta /
+   rate-floor logic is unchanged and shared by both channels. Closes the "email fallback" sub-item.
+   *(The module keeps its `telegram_client.py` filename — renaming it would churn three importers
+   for no behavior change.)*
+
+Needs the Pi to confirm 2–4 end-to-end; the pure logic in each is covered by tests
+(`test_web_template_scan.py`, `test_ble_scan.py`, `test_telegram.py`).
+
 ## Wave 0 verification — on-Pi results (2026-08-02, v2.5.0-alpha, Pi Zero armv7l)
 
 Clean reinstall of 2.5.0-alpha, checked against a real LAN (source: install/verify log pull).
@@ -67,7 +178,8 @@ Full reinstall of the latest code, checked against the LAN.
 - `Exception in thread Thread-1:` printed during `epd_test.py` after the epd2in13 / epd2in13_V3 runs
   (non-fatal — each finished with "ran without error"); full traceback was cut off. Investigate if it
   recurs.
-- `'web_increment '` config key still has a trailing space (long-known cosmetic bug).
+- ~~`'web_increment '` config key still has a trailing space~~ — ✅ **FIXED (Wave 3)** — the key was
+  never read anywhere, so it was deleted rather than renamed.
 
 ## Bugs still open (need the WebUI/Pi to reproduce + verify)
 | Ref | Issue | Likely fix / pointer |
@@ -123,7 +235,7 @@ collapsing to 4 distinct issues.
 - ~~**wpa-sec / Pwnagotchi network import**~~ (from `LOCOSP/BjornWpaSecHarvester`): ✅ **DONE** (Wave 1 #4) — opt-in standalone action `WpaSecImport` fetches cracked Wi-Fi keys from wpa-sec.stanev.org (stdlib urllib) and injects them into NetworkManager as low-priority autoconnect profiles, deduped against `crackedpwd/wifi_wpasec.csv`. No-op unless `wpasec_api_key` set; throttled by `wpasec_interval`. Remote SSID/PSK sanitized at the trust boundary. Needs the Pi + internet to verify end-to-end.
 - ~~**Scan all network interfaces**~~ (#133): ✅ **DONE** — `get_network()` → `get_networks()` returns one IPv4Network per interface subnet (all AF_INET addrs, deduped, loopback/link-local skipped). `scan()` loops every subnet and **accumulates** hosts into a single `update_netkb` write with the union of alive MACs — writing per-network would make each subnet mark the others' hosts dead. Dropped the dead (never-printed) `table` builder while there. Needs a multi-interface host to verify end-to-end.
 - ~~**SNMP enumeration**~~: ✅ **DONE (Wave 2)** — standalone `SNMPEnum` action iterates alive netkb hosts and probes UDP/161 via `snmpget` (SNMP isn't TCP-discoverable, so it's not port-gated), recording sysDescr/sysName to `snmp_enum.csv`. `snmp_communities` config; installer provisions `snmp`; graceful no-op if `snmpget` missing. Needs the Pi + an SNMP host to confirm.
-- ~~**HTTP service fingerprinting**~~ (PRD P3-5): ✅ **DONE (Wave 2)** — `HTTPFingerprint` action (`actions/http_fingerprint.py`) GETs each open web port, records status / `Server` / `X-Powered-By` / `<title>` to `data/output/scan_results/http_fingerprints.csv`. Stdlib `urllib`; `b_port=80`, fingerprints all web ports per host. Feeds the nuclei item below. *(ponytail: `b_port=80` misses 443-only hosts; add an https sibling if that gap matters.)* Needs the Pi to confirm end-to-end.
+- ~~**HTTP service fingerprinting**~~ (PRD P3-5): ✅ **DONE (Wave 2)** — `HTTPFingerprint` action (`actions/http_fingerprint.py`) GETs each open web port, records status / `Server` / `X-Powered-By` / `<title>` to `data/output/scan_results/http_fingerprints.csv`. Stdlib `urllib`; `b_port=80`, fingerprints all web ports per host. Feeds the nuclei item below. **Confirmed on-Pi (Wave 2):** both :80 and :443 of the ZTE router were captured, self-signed cert and all — the earlier "misses 443-only hosts" note applies only to a host exposing 443 *without* 80, which hasn't been seen in practice; no https sibling module needed.
 
 ## Hardware / display
 - **Waveshare 2.13" B/C tri-color** (#166) — **deferred (YAGNI, single panel for now).** Only the
@@ -200,12 +312,15 @@ fit ÷ effort. Effort tags: **S** ≈ 1 session, **M** ≈ 2–3 sessions, **L**
 3. ~~**nuclei-style templated web checks**~~ *(ProjectDiscovery nuclei)* — ✅ **DONE (Wave 2)** —
    `WebTemplateScan` action, a child of `HTTPFingerprint`, fires bundled JSON templates
    (`config/web_templates.json`) at each web port; hits → `web_template_findings.csv`. Matchers:
-   `status` + `body_contains`. JSON not YAML (stdlib, no pyyaml dep). Needs the Pi to confirm
-   end-to-end. *(ponytail: no tech-gating on the fingerprint yet; add a `match_server` template gate
-   if request volume bites.)*
-4. **Credential reuse / auto-lateral chaining** *(CrackMapExec pattern)* — **S–M.** When a
-   brute-force cracks a cred, auto-replay it across every other host/protocol in `netkb` (reuse /
-   spray). Pure logic on top of the existing 6 connectors + netkb; compounds every crack.
+   `status` + `body_contains`, plus the optional `match_server` tech gate added in Wave 3. JSON not
+   YAML (stdlib, no pyyaml dep). Needs the Pi to confirm end-to-end.
+4. ~~**Credential reuse / auto-lateral chaining**~~ *(CrackMapExec pattern)* — ✅ **DONE (Wave 1 #2,
+   `7f854cf`)** — `credential_pool.py`: every connector records a crack into a shared
+   `crackedpwd/known_creds.csv` pool and tries that pool **first** on the next host, so a cred cracked
+   on one host/protocol is auto-replayed across all the others. Read fresh per attack, so reuse works
+   within the same cycle. `credential_reuse` config key (default on). *(This entry was stale — it was
+   still listed as open through Wave 2.)* Still needs a crackable host on the LAN to confirm a real
+   replay end-to-end.
 5. **PCAP capture + offline exfil** *(tcpdump / bettercap sniff)* — **M.** Rotating capture on the
    joined network, delivered via the planned Telegram/report pipeline. Extends the Bettercap
    managed-mode **sniff** capability already scoped in [`BETTERCAP_PLAN.md`](BETTERCAP_PLAN.md).
@@ -213,12 +328,18 @@ fit ÷ effort. Effort tags: **S** ≈ 1 session, **M** ≈ 2–3 sessions, **L**
    ✅ **DONE (Wave 2)** — opt-in `BLEScan` standalone action does a timed `bluetoothctl` discovery →
    `ble_devices.csv` (MAC, name, tracker flag, first/last seen), with a `/ble` web page (config +
    results table). **Decision:** kept in its own file, **not netkb** — non-IP wireless entries don't
-   fit the netkb IP+Ports schema; the unified `device_type` column stays a future foundation item for
-   wardriving/ESP32. **Follow-up:** name-based tracker heuristic only; robust FindMy detection needs
-   BLE manufacturer data (`bluetoothctl info <mac>`). Needs the Pi + nearby BLE devices to confirm.
-7. **Passive Wi-Fi survey / wardriving** *(Kismet / Pwnagotchi)* — **M** (on top of Bettercap
-   Phase 4) / **L** standalone. Log nearby APs+clients (BSSID/signal/channel, optional GPS) to a
-   wardriving map. Needs monitor mode → shares the second-radio gate. See effort detail below.
+   fit the netkb IP+Ports schema. *(Wave 4 confirmed this call — `WiFiScan` landed the same way, and
+   the unified `device_type` column was dropped as a prerequisite rather than built.)*
+   **Follow-up closed (Wave 3):** tracker
+   detection now also reads BLE manufacturer data / service UUIDs via `bluetoothctl info <mac>`, not
+   just the name — see Wave 3 #3. Needs the Pi + nearby BLE devices to confirm.
+7. ~~**Passive Wi-Fi survey / wardriving**~~ *(Kismet / Pwnagotchi)* — ✅ **DONE (Wave 4)** —
+   `WiFiScan` logs APs (BSSID/ESSID/channel/privacy/signal) and their clients to
+   `wifi_aps.csv`/`wifi_clients.csv` via airodump-ng on the dongle, with a `/wifi` panel. **Not**
+   built on Bettercap Phase 4 as recommended below — that advice assumed bettercap existed; it
+   doesn't, and airodump's CSV output made this a parse job instead of a daemon-integration job.
+   GPS tagging and a map view are **dropped** (see PG-6), so nothing remains here. Original analysis
+   kept below only for the monitor-mode caveats, which still apply.
 8. **Evil Twin / rogue AP + captive portal** *(WiFi Pineapple / hostapd+dnsmasq)* — **L.** Lookalike
    AP + credential-harvesting portal. Needs an AP-capable radio; overlaps bettercap. Later project.
 9. **HID / BadUSB payload delivery** *(Flipper BadUSB / P4wnP1 / Rubber Ducky)* — **M.** Bjorn is
@@ -257,19 +378,16 @@ fit ÷ effort. Effort tags: **S** ≈ 1 session, **M** ≈ 2–3 sessions, **L**
   **and** a results view listing discovered BLE devices/trackers — modeled on the Bettercap panel.
 - *Risks:* netkb schema change; BlueZ scan reliability; BT/Wi-Fi coexistence on the shared antenna.
 
-**#7 Passive Wi-Fi survey / wardriving — Effort: M *if built on Bettercap Phase 4*, else L.**
-- *Hardware:* **needs monitor mode → a second radio, never `wlan0`** (same gate, same nexmon
-  caveats as Bettercap Phase 4). This radio requirement is the dominant cost.
-- *Approach (lazy):* **don't build a separate monitor stack** — bettercap already does `wifi.recon`.
-  Wardriving = subscribe the Bettercap poller to AP/client events and log them to a wardriving CSV +
-  optional GPS tag. So this is largely an **extension of Bettercap Phase 4**, not standalone work.
-- *New/touched:* extend the Bettercap poller + a `wardrive.csv`; optional GPS (needs a GPS module —
-  note **PG-6 GPS tagging was dropped** earlier, so GPS is its own deferred sub-item).
-- *Web UI (required):* a dedicated panel — config **and** a wardriving results view (AP/client
-  table with BSSID/signal/channel, optional map) — modeled on the Bettercap panel.
-- *Risks:* monitor-mode hardware instability (nexmon on Zero 2 W), second-radio requirement, GPS module.
-- *Recommendation:* schedule **after** Bettercap Phase 4 lands; building it standalone duplicates
-  the whole monitor-mode/second-radio effort for little gain.
+**#7 Passive Wi-Fi survey / wardriving — ✅ shipped in Wave 4; estimate and recommendation were both
+wrong.** Kept as a short post-mortem, since the file argued the opposite of what was built:
+- *The estimate* ("M on top of Bettercap Phase 4, else L") assumed the only route to AP data was
+  bettercap's `wifi.recon`. airodump-ng writes a plain CSV, so it was an **S–M parse job** — the
+  "don't build a separate monitor stack" advice was reasoning from a dependency that didn't exist
+  yet. Lesson: check whether the thing you're told to extend has actually been built.
+- *Still true — the hardware caveat:* monitor mode needs a second radio, **never the uplink**
+  (enforced by `monitor_mode.py`). The onboard Zero 2 W chip needs the nexmon patch and has an open
+  crash-on-injection bug, so the USB dongle is the only sane path. This is why the radio, not the
+  code, was always the real cost.
 
 ## Reference forks
 - `HackCocaine/BjornCocaine` — screen-agnostic WebUI-first, LOGS button, multi-Pi.
@@ -328,7 +446,9 @@ fit ÷ effort. Effort tags: **S** ≈ 1 session, **M** ≈ 2–3 sessions, **L**
   fingerprints + web findings + SNMP + vulns + optional creds, as a JSON document) to a bot **only
   when the data changed** (sha256 delta) past a `telegram_min_interval` floor. Web page configures
   the bot and has Send-test / Send-now buttons. Config: `telegram_enabled/bot_token/chat_id/
-  min_interval/include_creds`. **Still open:** email/SMTP fallback channel. Original note kept below.
+  min_interval/include_creds`. **Email/SMTP fallback added in Wave 3** (`smtp_enabled/host/port/user/
+  password/to`, stdlib `smtplib`, tried when Telegram is unset or fails) — this item is now complete
+  pending on-Pi confirmation. Original note kept below.
   - **Auto-report collected data via Telegram (or email) when internet is available** —
   extend the existing redacted run_reports pipeline (2.0.0-alpha) with an online
   delivery step: render a small Markdown summary (host/port/vuln counts, action

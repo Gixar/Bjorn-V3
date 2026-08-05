@@ -197,6 +197,21 @@ class Orchestrator:
             self._record_result(action.action_name, False, error=e)
             return False
 
+    def run_standalone_actions(self, current_data):
+        """Give every standalone action a turn this idle window. Returns the names that ran.
+
+        These are recurring recon/reporting jobs that police their own cadence
+        (ble_scan_interval, wpasec_interval, telegram_min_interval; SNMPEnum tracks probed IPs).
+        The old loop `break`ed on the first action returning success — and a *disabled or
+        throttled* action also returns 'success' — so a single switched-off action consumed the
+        whole cycle and starved every action registered after it."""
+        ran = []
+        for action in self.standalone_actions:
+            with self.semaphore:
+                self.execute_standalone_action(action, current_data)
+                ran.append(action.action_name)
+        return ran
+
     def execute_standalone_action(self, action, current_data):
         """Execute a standalone action"""
         row = next((r for r in current_data if r["MAC Address"] == "STANDALONE"), None)
@@ -214,14 +229,12 @@ class Orchestrator:
         if action_key not in row:
             row[action_key] = ""
 
-        # Skip if the action succeeded recently and is still within its retry-delay window.
-        if 'success' in row[action_key]:
-            if not self.shared_data.retry_success_actions:
-                return False
-            remaining = retry_wait_remaining(row[action_key], self.shared_data.success_retry_delay)
-            if remaining > 0:
-                logger.warning(f"Skipping standalone action {action.action_name} due to success retry delay, retry possible in: {timedelta(seconds=remaining)}")
-                return False
+        # NOTE: no success-retry gate here, unlike per-host actions. `retry_success_actions`
+        # defaults to False, which for a *host* action correctly means "don't re-attack a box you
+        # already cracked" — but applied to a standalone action it meant a single success marked it
+        # done forever, so BLEScan/WpaSecImport/SNMPEnum/TelegramReport each ran exactly once per
+        # netkb lifetime and their own interval keys never got a second turn to take effect.
+        # Recurring jobs self-throttle; the orchestrator must not also latch them off.
 
         # Skip if the action failed recently and is still within its retry-delay window.
         if 'failed' in row.get(action_key, ""):
@@ -319,11 +332,7 @@ class Orchestrator:
                     logger.warning("No network scanner available.")
                 self.failed_scans_count += 1
                 if self.failed_scans_count >= 1:
-                    for action in self.standalone_actions:
-                        with self.semaphore:
-                            if self.execute_standalone_action(action, current_data):
-                                self.failed_scans_count = 0
-                                break
+                    self.run_standalone_actions(current_data)
                     # P3: batch the idle-cycle netkb write — one write for the whole branch
                     # (post-scan action pass + vuln scan + standalone) instead of after every
                     # action. ponytail: mid-cycle results are lost on a crash, but the actions

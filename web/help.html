@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bjorn Cyberviking — Help</title>
+    <link rel="icon" href="web/images/favicon.ico" type="image/x-icon">
+    <link rel="stylesheet" href="web/css/styles.css">
+    <link rel="manifest" href="manifest.json">
+    <link rel="apple-touch-icon" sizes="192x192" href="web/images/icon-192x192.png">
+    <script src="web/scripts/common.js" defer></script>
+    <script>
+        document.addEventListener("DOMContentLoaded", () => {
+            if (typeof renderNav === "function") renderNav();
+        });
+    </script>
+</head>
+<body>
+    <nav id="app-nav" class="topnav"></nav>
+
+    <main class="page">
+
+        <div class="page-header">
+            <div>
+                <h1>Help</h1>
+                <p class="card-subtitle">What the device does, how to set it up, and what every setting means</p>
+            </div>
+        </div>
+
+        <!-- ============================================================ -->
+        <div class="card">
+            <div class="card-header">
+                <div>
+                    <h2 class="card-title">What Bjorn is</h2>
+                    <p class="card-subtitle">An autonomous network scanner and offensive-security appliance</p>
+                </div>
+            </div>
+            <div class="prose">
+                <p>
+                    Bjorn joins a network, maps every host on it, and then works through those hosts
+                    on its own — port scanning, fingerprinting web services, brute-forcing logins,
+                    pulling files off anything it opens — writing everything it learns into a single
+                    knowledge base (<code>netkb.csv</code>). It runs unattended on a Raspberry Pi with
+                    an e-Paper screen; this web UI is how you configure it and read the results.
+                </p>
+                <p>
+                    Optional add-on modules extend it past the wired/Wi-Fi LAN: Bluetooth device
+                    recon, 802.11 access-point survey, and automatic report delivery to Telegram or
+                    email. Each one is <strong>off by default</strong> and has its own page.
+                </p>
+                <div class="note warn">
+                    <strong>Authorized use only.</strong> Bjorn actively attacks the network it is on
+                    — it brute-forces credentials and copies files. Run it only on networks and
+                    devices you own or have written permission to test. Its own MAC is auto-added to
+                    <code>mac_scan_blacklist</code>, but nothing else on the network is exempt unless
+                    you list it.
+                </div>
+            </div>
+        </div>
+
+        <!-- ============================================================ -->
+        <div class="card">
+            <div class="card-header">
+                <div>
+                    <h2 class="card-title">First run — five steps</h2>
+                    <p class="card-subtitle">From a fresh install to a working scan</p>
+                </div>
+            </div>
+            <div class="prose">
+                <ol>
+                    <li>
+                        <strong>Get it on a network.</strong> On the <a href="/config.html">Config</a>
+                        page press <em>Wi-Fi</em>, pick an SSID and enter the password. Leave the
+                        static-IP fields blank for DHCP. Ethernet or the USB gadget (<code>usb0</code>,
+                        <code>http://172.20.2.1:8000/</code>) work too, with nothing to configure.
+                    </li>
+                    <li>
+                        <strong>Check the screen driver.</strong> If the e-Paper panel is blank, set
+                        <code>epd_type</code> on Config — <code>auto</code> tries every known driver,
+                        <code>mock</code> runs headless. To find the exact one, stop the service and
+                        run <code>sudo python3 scripts/epd_test.py --all</code>.
+                    </li>
+                    <li>
+                        <strong>Set the scan scope.</strong> <code>portlist</code> is the set of ports
+                        probed per host. Add anything on the network you must never touch to
+                        <code>ip_scan_blacklist</code> / <code>mac_scan_blacklist</code> <em>before</em>
+                        starting.
+                    </li>
+                    <li>
+                        <strong>Start it.</strong> <a href="/index.html">Home</a> → <em>Start</em>.
+                        The live console below the buttons streams what it is doing. First results
+                        appear on <a href="/netkb.html">NetKB</a> after the first scan pass
+                        (<code>scan_interval</code>, default 180 s).
+                    </li>
+                    <li>
+                        <strong>Turn on what you need.</strong> The optional modules are each one
+                        checkbox on their own page — see the table further down. Nothing is enabled
+                        for you.
+                    </li>
+                </ol>
+            </div>
+        </div>
+
+        <!-- ============================================================ -->
+        <div class="card">
+            <div class="card-header">
+                <div>
+                    <h2 class="card-title">How the cycle works</h2>
+                    <p class="card-subtitle">Why an action runs when it runs</p>
+                </div>
+            </div>
+            <div class="prose">
+                <ol>
+                    <li>
+                        <strong>Scan.</strong> Every subnet Bjorn has an interface on is swept for
+                        live hosts, then those hosts are port-scanned. Results are merged into
+                        <code>netkb.csv</code> — hosts are never dropped, only marked alive or dead.
+                    </li>
+                    <li>
+                        <strong>Act, port by port.</strong> Each host's open ports decide which
+                        actions apply: 22 → SSH brute force, 445 → SMB, 80/443 → HTTP fingerprint
+                        then the web-template checks, and so on. A crack promotes the host to the
+                        matching steal action, which copies files off it.
+                    </li>
+                    <li>
+                        <strong>Reuse credentials.</strong> Anything cracked goes into a shared pool
+                        and is tried <em>first</em> against every other host and protocol
+                        (<code>credential_reuse</code>). One crack tends to cascade.
+                    </li>
+                    <li>
+                        <strong>Idle.</strong> When a pass finds nothing new, Bjorn waits out
+                        <code>scan_interval</code> — and during that window it gives every standalone
+                        module (BLE, Wi-Fi, SNMP, wpa-sec, reporting) a turn. Each of those throttles
+                        itself with its own interval setting.
+                    </li>
+                </ol>
+                <div class="note">
+                    <strong>Retries.</strong> A <em>failed</em> action backs off for
+                    <code>failed_retry_delay</code> before being tried again. A <em>successful</em>
+                    one is not repeated at all unless <code>retry_success_actions</code> is on —
+                    the point being not to re-attack a box you already own. Standalone modules are
+                    exempt from that rule; they run every idle window.
+                </div>
+            </div>
+        </div>
+
+        <!-- ============================================================ -->
+        <div class="card">
+            <div class="card-header">
+                <div>
+                    <h2 class="card-title">The pages</h2>
+                    <p class="card-subtitle">What each one is for</p>
+                </div>
+            </div>
+            <div class="prose">
+                <table>
+                    <tr><th><a href="/index.html">Home</a></th><td>Start/stop, manual single-target attack, backup/restore, reboot/shutdown, and the live console.</td></tr>
+                    <tr><th><a href="/stats.html">Stats</a></th><td>Live counters — coins, level, hosts, cracked credentials, loot, vulnerabilities — pushed over a WebSocket.</td></tr>
+                    <tr><th><a href="/network.html">Network</a></th><td>Hosts as currently seen on the network.</td></tr>
+                    <tr><th><a href="/netkb.html">NetKB</a></th><td>The knowledge base itself: every host ever seen, its ports, and the per-action success/fail state. The source of truth.</td></tr>
+                    <tr><th><a href="/credentials.html">Creds</a></th><td>Credentials cracked so far, per host and protocol.</td></tr>
+                    <tr><th><a href="/loot.html">Loot</a></th><td>Files pulled off compromised hosts.</td></tr>
+                    <tr><th><a href="/config.html">Config</a></th><td>Core settings, the Wi-Fi joiner, and the scan-engine benchmark. Module settings are <em>not</em> here — see below.</td></tr>
+                    <tr><th><a href="/telegram.html">Telegram</a></th><td>Report delivery: Telegram bot and the SMTP email fallback. Config, manual, test and send-now.</td></tr>
+                    <tr><th><a href="/ble.html">BLE</a></th><td>Bluetooth recon: config, manual, and the discovered-device table with tracker flags.</td></tr>
+                    <tr><th><a href="/wifi.html">Wi-Fi</a></th><td>802.11 AP/client survey: config, manual, the monitor-mode test, and the AP and client tables.</td></tr>
+                    <tr><th><a href="/bjorn.html">Screen</a></th><td>A live mirror of the e-Paper display.</td></tr>
+                    <tr><th><a href="/logs.html">Logs</a></th><td>Full log viewer with level filtering.</td></tr>
+                </table>
+                <div class="note">
+                    <strong>Where did my setting go?</strong> Everything for BLE, Wi-Fi, Telegram and
+                    SMTP was moved off the Config page onto the module's own page, so each module is
+                    set up next to its own results, its test button and its manual. The values are
+                    still the same keys in the same <code>shared_config.json</code> — saving from
+                    either page merges, never overwrites the rest.
+                </div>
+            </div>
+        </div>
+
+        <!-- ============================================================ -->
+        <div class="card">
+            <div class="card-header">
+                <div>
+                    <h2 class="card-title">Optional modules</h2>
+                    <p class="card-subtitle">All off by default — enable on the module's own page</p>
+                </div>
+            </div>
+            <div class="prose">
+                <table>
+                    <tr><th>Module</th><th>Needs</th><th>Gives you</th></tr>
+                    <tr>
+                        <td><a href="/ble.html">BLE recon</a></td>
+                        <td>The Pi's built-in Bluetooth. No extra hardware.</td>
+                        <td>Nearby Bluetooth devices, with likely Find My / SmartTag / Tile trackers flagged.</td>
+                    </tr>
+                    <tr>
+                        <td><a href="/wifi.html">Wi-Fi survey</a></td>
+                        <td><strong>A second radio</strong> — a USB dongle. Never the uplink.</td>
+                        <td>Nearby access points and their clients: BSSID, channel, encryption, signal.</td>
+                    </tr>
+                    <tr>
+                        <td><a href="/telegram.html">Reporting</a></td>
+                        <td>A Telegram bot token, or SMTP credentials, plus internet.</td>
+                        <td>The collected dataset pushed out automatically whenever it changes.</td>
+                    </tr>
+                    <tr>
+                        <td>wpa-sec import</td>
+                        <td>A wpa-sec.stanev.org API key (<code>wpasec_api_key</code> on Config).</td>
+                        <td>Cracked Wi-Fi keys imported as low-priority NetworkManager profiles, so Bjorn can join those networks.</td>
+                    </tr>
+                    <tr>
+                        <td>RustScan engine</td>
+                        <td>The <code>rustscan</code> binary (<code>use_rustscan</code> on Config).</td>
+                        <td>Much faster port discovery. Falls back to nmap automatically if missing. Time both with the Benchmark button.</td>
+                    </tr>
+                    <tr>
+                        <td>Battery monitor</td>
+                        <td>A PiSugar-style power server (<code>battery_monitor_enabled</code>).</td>
+                        <td>Clean shutdown below <code>battery_shutdown_percent</code> instead of a yanked-power corruption.</td>
+                    </tr>
+                </table>
+            </div>
+        </div>
+
+        <!-- ============================================================ -->
+        <div class="card">
+            <div class="card-header">
+                <div>
+                    <h2 class="card-title">Settings reference</h2>
+                    <p class="card-subtitle">The keys on the Config page that actually change behavior</p>
+                </div>
+            </div>
+            <div class="prose">
+                <h3>Scanning</h3>
+                <table>
+                    <tr><th><code>portlist</code></th><td>Ports probed on every host. Comma-separated. Longer list = slower cycle.</td></tr>
+                    <tr><th><code>scan_interval</code></th><td>Seconds between scan passes (default 180). Also the length of the idle window the standalone modules run in.</td></tr>
+                    <tr><th><code>nmap_scan_aggressivity</code></th><td>nmap timing template. <code>-T2</code> is polite and quiet; <code>-T4</code> is fast and loud.</td></tr>
+                    <tr><th><code>ip_scan_blacklist</code> / <code>mac_scan_blacklist</code></th><td>Never touched. Set these before starting on any network with something fragile on it.</td></tr>
+                    <tr><th><code>use_rustscan</code> / <code>rustscan_full_port</code> / <code>rustscan_batch_size</code></th><td>Swap discovery to RustScan; optionally sweep all 65,535 ports. Lower the batch size on a Pi Zero if ports start going missing.</td></tr>
+                </table>
+
+                <h3>Vulnerability scanning</h3>
+                <table>
+                    <tr><th><code>scan_vuln_interval</code></th><td>Seconds between vulnerability passes (default 900).</td></tr>
+                    <tr><th><code>vuln_scan_sv</code></th><td>Service/version detection. Needed for any CVE matching to work at all.</td></tr>
+                    <tr><th><code>vuln_scan_vulners</code></th><td>The online vulners.nse CVE script — the heaviest step, and it needs internet.</td></tr>
+                    <tr><th><code>vuln_offline_cve</code></th><td>Match detected versions against the bundled offline CVE database. No internet required.</td></tr>
+                </table>
+
+                <h3>Attacking</h3>
+                <table>
+                    <tr><th><code>credential_reuse</code></th><td>Replay a cracked login against every other host and protocol, tried first. On by default; the single biggest force multiplier.</td></tr>
+                    <tr><th><code>bruteforce_threads</code></th><td>Worker threads per connector. <code>0</code> = auto (core-aware, capped at 8). Raise only if the Pi is idle.</td></tr>
+                    <tr><th><code>retry_success_actions</code> / <code>success_retry_delay</code></th><td>Whether to redo an action that already succeeded, and how long to wait first. Off by default.</td></tr>
+                    <tr><th><code>retry_failed_actions</code> / <code>failed_retry_delay</code></th><td>Same for actions that failed. On by default, 600 s.</td></tr>
+                    <tr><th><code>timewait_*</code></th><td>Per-protocol delay between attempts. Raise to stay under lockout thresholds or rate limits.</td></tr>
+                    <tr><th><code>steal_file_names</code> / <code>steal_file_extensions</code></th><td>What the steal actions look for once a host is open.</td></tr>
+                </table>
+
+                <h3>System</h3>
+                <table>
+                    <tr><th><code>manual_mode</code></th><td>Stops autonomous attacking; you drive from the Home page. Opening the manual-attack panel sets this for you.</td></tr>
+                    <tr><th><code>epd_type</code></th><td>e-Paper driver. <code>auto</code> to probe, <code>mock</code> to run with no screen.</td></tr>
+                    <tr><th><code>websrv</code></th><td>Serve this web UI at all. Turning it off locks you out of everything here.</td></tr>
+                    <tr><th><code>debug_mode</code> / <code>log_*</code></th><td>Verbosity. Debug logging is heavy on SD-card writes — leave it off unless chasing something.</td></tr>
+                    <tr><th><code>startup_delay</code>, <code>screen_delay</code>, <code>stats_ws_interval</code></th><td>Pacing for boot, screen refresh, and the Stats dashboard push rate.</td></tr>
+                </table>
+            </div>
+        </div>
+
+        <!-- ============================================================ -->
+        <div class="card">
+            <div class="card-header">
+                <div>
+                    <h2 class="card-title">Where things are written</h2>
+                    <p class="card-subtitle">On the Pi, under the install directory</p>
+                </div>
+            </div>
+            <div class="prose">
+                <table>
+                    <tr><th><code>config/shared_config.json</code></th><td>Every setting on every page. Backed up by the Home → Backup button.</td></tr>
+                    <tr><th><code>data/netkb.csv</code></th><td>The knowledge base: hosts, ports, per-action state.</td></tr>
+                    <tr><th><code>data/output/scan_results/</code></th><td>Fingerprints, web findings, SNMP, BLE devices, Wi-Fi APs and clients.</td></tr>
+                    <tr><th><code>data/output/crackedpwd/</code></th><td>Cracked credentials and the shared reuse pool.</td></tr>
+                    <tr><th><code>data/output/data_stolen/</code></th><td>Files pulled off hosts.</td></tr>
+                    <tr><th><code>data/logs/</code></th><td>Per-module logs, also readable on the Logs page.</td></tr>
+                </table>
+            </div>
+        </div>
+
+        <!-- ============================================================ -->
+        <div class="card">
+            <div class="card-header">
+                <div>
+                    <h2 class="card-title">When something is wrong</h2>
+                    <p class="card-subtitle">Start with the doctor script</p>
+                </div>
+            </div>
+            <div class="prose">
+                <p>
+                    <code>sudo ./scripts/bjorn_doctor.sh</code> is read-only and prints version, OS,
+                    SPI state, <code>epd_type</code>, service status, recent errors and where every
+                    file lives — including when Bjorn will not start at all. Details are in
+                    <code>TROUBLESHOOTING.md</code> in the repository.
+                </p>
+                <table>
+                    <tr><th>Nothing on the e-Paper screen</th><td>Wrong <code>epd_type</code>. Stop the service first (it holds the GPIO pins), then <code>sudo python3 scripts/epd_test.py --all</code> and set the driver that actually renders.</td></tr>
+                    <tr><th>Web UI unreachable</th><td>Confirm the Pi's IP and that the service is running; the UI is on port 8000. If the Pi is plugged into a host over USB, try <code>http://172.20.2.1:8000/</code>.</td></tr>
+                    <tr><th>No hosts found</th><td>Bjorn scans the subnets of its own interfaces. Check it actually joined the network, and that the target range is not blacklisted.</td></tr>
+                    <tr><th>A module does nothing</th><td>Every module is off until enabled, and each throttles itself with an interval. Enable it on its own page, then give it one idle window.</td></tr>
+                    <tr><th>Scans feel too slow</th><td>Shorten <code>portlist</code>, raise <code>nmap_scan_aggressivity</code>, or enable <code>use_rustscan</code> and compare with the Benchmark button on Config.</td></tr>
+                </table>
+            </div>
+        </div>
+
+    </main>
+</body>
+</html>

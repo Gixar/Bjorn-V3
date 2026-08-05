@@ -316,7 +316,7 @@ genuinely new here (cross-checked against §4–§10 and `docs/BACKLOG.md`):
 | **PG-3** | **Battery / UPS awareness** (PiSugar / universal UPS: %, runtime, auto-shutdown at low charge). | Only if run portable with a battery HAT. | ✅ Done (v2.4.0-alpha) — `battery.py`, opt-in, low-charge → clean shutdown |
 | **PG-4** | **Watchdog / auto-restart on a wedged main loop.** | Resilience for an unattended device (installer already has an fd-watchdog, not a loop one). | ✅ Done (v2.4.0-alpha) — `/run` heartbeat + systemd restart loop |
 | **PG-5** | **Plugin system** (lifecycle + UI + web hooks) — broader than attack modules. | Widens the P3-1 "module contract" from attack-only to features generally. | Folded into P3-1 scope |
-| **PG-6** | **GPS tagging of findings.** | Stretch — Bjorn is LAN-stationary; cheap only if a GPS is present. | Backlog (low priority) |
+| **PG-6** | **GPS tagging of findings.** | Stretch — Bjorn is LAN-stationary; cheap only if a GPS is present. | ❌ **Dropped** — no GPS module, and the Wi-Fi survey it would have tagged (Wave 4) ships without it |
 
 > ⚠️ **PG-1 honesty note.** `auto` selects the first driver that *initializes*, which cannot
 > distinguish V3 from V4 (both init on the same panel with no render feedback). Its value is

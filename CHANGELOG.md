@@ -130,6 +130,18 @@
   (a missed finding is worse than a spare request). `apache-status` is gated to `["apache"]`.
 
 ### Changed
+- **`bjorn_doctor.sh` reports the commit, not just `version.txt`** — a diagnostic pull described a
+  device many merged commits behind and nothing in the report said so, because `version.txt` is
+  bumped per *release*, not per commit. It now prints the short SHA, date, subject, branch, whether
+  the working tree is dirty, and how many commits behind its upstream branch it is — with a
+  "git pull before trusting this report" nudge when that count is non-zero. Uses
+  `git -c safe.directory=…` so it still works run under sudo against a repo owned by another user,
+  without mutating any git config.
+- **`bjorn_doctor.sh` gained a dependency check keyed on import names** — pip name and import name
+  differ often enough that guessing produces false alarms: `pysmb` imports as `smb`, `Pillow` as
+  `PIL`, `get-mac` as `getmac`. A separate diagnostic script reported `pysmb NOT IMPORTABLE` for a
+  package that was installed and working — worse than not checking at all, since it sends you
+  chasing a non-bug. Each row shows both names when they differ.
 - **`rustscan_batch_size: 0` now means memory-aware auto, not "RustScan's default"** — 1500 on a
   board under 640MB (Pi Zero / Zero 2 W), 3000 under 1.5GB, otherwise RustScan's own 4500. Its
   documented failure mode under too-aggressive batching is *silently dropped ports* rather than an

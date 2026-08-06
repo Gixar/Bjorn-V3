@@ -23,11 +23,50 @@ section() { printf '\n=== %s ===\n' "$1"; }
 have()    { command -v "$1" >/dev/null 2>&1; }
 
 section "Bjorn version & environment"
-echo "version:  $(cat "$REPO/version.txt" 2>/dev/null || echo '?')"
+echo "version:  $(cat "$REPO/version.txt" 2>/dev/null || echo '?')  (version.txt — bumped per release, NOT per commit)"
+# The commit is what actually tells you which code is running. version.txt lags by design: a
+# diagnostic that reported only "2.5.0-alpha" described a device many merged commits behind, and
+# nothing in the report said so. `-c safe.directory` because this script is run under sudo against
+# a repo owned by another user, which git otherwise refuses to touch; it mutates no config.
+GIT="git -c safe.directory=$REPO -C $REPO"
+if have git && $GIT rev-parse --git-dir >/dev/null 2>&1; then
+    dirty=""; [ -n "$($GIT status --porcelain 2>/dev/null)" ] && dirty="  (UNCOMMITTED CHANGES)"
+    echo "commit:   $($GIT log -1 --format='%h %cs %s' 2>/dev/null)$dirty"
+    echo "branch:   $($GIT rev-parse --abbrev-ref HEAD 2>/dev/null)"
+    behind="$($GIT rev-list --count HEAD..@{upstream} 2>/dev/null)"
+    if [ -n "${behind:-}" ] && [ "${behind:-0}" -gt 0 ] 2>/dev/null; then
+        echo "upstream: $behind commit(s) BEHIND — git pull before trusting this report"
+    else
+        echo "upstream: up to date (or no tracking branch)"
+    fi
+else
+    echo "commit:   ? (not a git checkout)"
+fi
 echo "repo:     $REPO"
 echo "python:   $(python3 --version 2>&1)"
 if [ -f /etc/os-release ]; then . /etc/os-release; echo "os:       ${PRETTY_NAME:-?}"; fi
 echo "arch:     $(uname -m)"
+
+section "Python dependencies"
+# Keyed on IMPORT name, not the pip package name — they differ often enough that guessing produces
+# false alarms: pysmb imports as `smb`, Pillow as `PIL`, get-mac as `getmac`. A diagnostic that
+# reports a working dependency as missing costs more time than not checking it at all.
+python3 - <<'PY' 2>/dev/null || echo "  (python3 unavailable)"
+import importlib
+# (pip name, import name)
+DEPS = [("fastapi", "fastapi"), ("uvicorn", "uvicorn"), ("paramiko", "paramiko"),
+        ("pysmb", "smb"), ("smbprotocol", "smbprotocol"), ("pymysql", "pymysql"),
+        ("Pillow", "PIL"), ("numpy", "numpy"), ("pandas", "pandas"), ("rich", "rich"),
+        ("netifaces", "netifaces"), ("get-mac", "getmac"), ("gpiozero", "gpiozero"),
+        ("lgpio", "lgpio"), ("python-nmap", "nmap"), ("sqlalchemy", "sqlalchemy")]
+for pip_name, import_name in DEPS:
+    label = pip_name if pip_name == import_name else f"{pip_name} (import {import_name})"
+    try:
+        mod = importlib.import_module(import_name)
+        print(f"  {label:<28} {getattr(mod, '__version__', 'ok')}")
+    except Exception as e:
+        print(f"  {label:<28} MISSING - {type(e).__name__}")  # ASCII: this gets pasted around
+PY
 
 section "Hardware"
 if ls /dev/spidev* >/dev/null 2>&1; then

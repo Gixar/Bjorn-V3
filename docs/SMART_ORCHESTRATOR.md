@@ -32,6 +32,7 @@ stay separate, so all of the scoring is testable without SharedData, netkb or ha
 | Parent action already succeeded | +55 | loot is unlocked *now*; collect it before it goes stale |
 | Never tried | +45 | unknown beats known |
 | Known CVEs on this host | +35 | read from `vulnerability_summary.csv` |
+| Looks like an appliance | +18…+30 | NAS / camera / admin panel / router, from `http_fingerprints.csv` |
 | Retry due after a failure | +20 | ahead of a re-check, behind fresh work |
 | High-value port | +8…+28 | 22 / 445 / 3389 / 3306 lead; see `HIGH_VALUE_PORTS` |
 | Open-port count | +1 per port, capped at 12 | a rich host is a better target |
@@ -47,6 +48,35 @@ stay separate, so all of the scoring is testable without SharedData, netkb or ha
   remains*, plus whenever nothing else was chosen.
 - `idle_boost` rises with consecutive fruitless scans, so recon that needs no target takes over as
   host work dries up.
+
+## Service-aware weights
+
+`load_service_hints()` reads the `Server` / `X-Powered-By` / `<title>` that `HTTPFingerprint`
+already banked and boosts hosts that look like an appliance rather than a generic web server: NAS
++30, camera +28, admin panel +26, router +22, embedded +20, printer +18. These are the classes that
+ship with default credentials *and* hold something worth having. A host exposing several web ports
+keeps its strongest hint. The reason line names the class, e.g. `SSHBruteforce@10.0.0.1 - NAS - :22`.
+
+Matching is case-insensitive substring against an unambiguous list (`SERVICE_HINTS`) — a false
+positive here quietly reorders the whole attack queue, which is why "nginx" earns nothing and
+`axis` is absent (Apache Axis is a SOAP library, not a camera). It is a starting list; tune it
+against what a real LAN turns up.
+
+## Adaptive idle interval
+
+`plan_idle_seconds()` sizes the sleep after a scan that found nothing, pulling in two directions:
+
+- **Back off** as fruitless scans accumulate — `scan_interval x min(4, failed_scans)`. An exhausted
+  network does not become interesting by being asked four times a minute, and each pass costs CPU
+  and SD writes. Capped at 4x so a device walked onto the LAN is still noticed reasonably soon.
+- **Wake early** when the only thing standing between Bjorn and real work is a retry window.
+  `collect()` records `next_retry_wait` — the soonest a blocked action becomes runnable — and the
+  sleep is cut to it, with a 30 s floor so a nearly-expired window can't become a busy loop.
+
+Only blocks that actually expire count. A success with `retry_success_actions` off never becomes
+runnable, and a closed port is structural, not temporal; neither shortens the wait.
+
+Set `adaptive_scan_interval: false` to go back to a flat `scan_interval`.
 
 ## Two rules that must not be broken
 
@@ -86,8 +116,7 @@ without a restart, like every other setting.
 
 ## Not built (next levers)
 
-- **Service-aware weights** from HTTP fingerprints / CPE — prefer hosts that look like routers, NAS
-  or cameras once fingerprint data exists.
-- **Adaptive `scan_interval`** — shorter while high-score candidates remain, longer once exhausted.
+- **CPE-based weights** — the offline CVE enrichment already parses `nmap -sV` CPEs; a specific
+  product+version could weigh more precisely than a `Server` header substring.
 - **An LLM proposing the next-action list** (PRD P-AI), falling back to this planner. It belongs
   *between* cycles, never in the attack loop: scanning and attacking stay deterministic and local.

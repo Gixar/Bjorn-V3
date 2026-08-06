@@ -57,6 +57,41 @@ ACTION_BASE = {
 
 DEFAULT_BASE = 10  # anything not listed above (new actions rank mid-pack rather than last)
 
+# Device families worth reaching first, matched against what HTTPFingerprint already recorded
+# (Server / X-Powered-By / Title). These are the appliance classes that ship with default or weak
+# credentials and hold something worth having — a NAS is files, a camera is a live feed, an admin
+# panel is the box itself. A generic web server is deliberately absent: "nginx" says nothing about
+# whether the host is interesting.
+#
+# Substrings are matched case-insensitively and must be unambiguous — a false positive here quietly
+# reorders the whole attack queue. ("axis" is left out for that reason: Apache Axis is a SOAP
+# library, not a camera.) A starting list, meant to be tuned against what a real LAN turns up.
+SERVICE_HINTS = (
+    ("synology", 30, "NAS"),
+    ("qnap", 30, "NAS"),
+    ("truenas", 30, "NAS"),
+    ("freenas", 30, "NAS"),
+    ("openmediavault", 30, "NAS"),
+    ("hikvision", 28, "camera"),
+    ("dahua", 28, "camera"),
+    ("ipcamera", 28, "camera"),
+    ("netwave", 28, "camera"),
+    ("jenkins", 26, "admin panel"),
+    ("webmin", 26, "admin panel"),
+    ("phpmyadmin", 26, "admin panel"),
+    ("routeros", 22, "router"),
+    ("mikrotik", 22, "router"),
+    ("openwrt", 22, "router"),
+    ("dd-wrt", 22, "router"),
+    ("draytek", 22, "router"),
+    ("zyxel", 22, "router"),
+    ("tp-link", 22, "router"),
+    ("goahead", 20, "embedded"),   # embedded web server, near-exclusively appliances
+    ("mini_httpd", 20, "embedded"),
+    ("jetdirect", 18, "printer"),
+    ("cups/", 18, "printer"),
+)
+
 
 @dataclass
 class Candidate:
@@ -101,6 +136,46 @@ def load_vuln_ips(summary_path) -> Set[str]:
     return ips
 
 
+def load_service_hints(fingerprint_path) -> dict:
+    """{ip: (weight, label)} from http_fingerprints.csv — what kind of box this looks like.
+
+    HTTPFingerprint already banks the Server / X-Powered-By / Title of every web port; this just
+    reads meaning out of data Bjorn collected two actions ago. A host can expose several ports, so
+    the strongest hint wins. Missing file (no fingerprints yet) is the normal early state."""
+    hints: dict = {}
+    try:
+        with open(fingerprint_path, newline="", encoding="utf-8", errors="replace") as f:
+            for row in csv.DictReader(f):
+                ip = (row.get("IP") or "").strip()
+                if not ip:
+                    continue
+                haystack = " ".join((row.get("Server") or "", row.get("X-Powered-By") or "",
+                                     row.get("Title") or "")).lower()
+                for needle, weight, label in SERVICE_HINTS:
+                    if needle in haystack and weight > hints.get(ip, (0, ""))[0]:
+                        hints[ip] = (weight, label)
+    except (FileNotFoundError, OSError):
+        pass
+    return hints
+
+
+def plan_idle_seconds(base_interval, failed_scans, next_retry_wait=0, floor=30):
+    """How long to idle after a scan that found nothing. Pure/testable.
+
+    Two pulls in opposite directions:
+      * **Back off** as fruitless scans pile up — an exhausted network does not become interesting
+        by being asked four times a minute, and each pass costs CPU and SD writes on a Pi Zero.
+        Capped at 4x so it stays responsive to someone walking a new device onto the LAN.
+      * **Wake early** when the only thing standing between Bjorn and real work is a retry window.
+        The planner knows when the soonest blocked action unblocks; sleeping past that wastes the
+        difference. The floor stops a nearly-expired window from turning into a busy loop.
+    """
+    interval = base_interval * min(4, max(1, failed_scans))
+    if next_retry_wait and next_retry_wait < interval:
+        return int(max(floor, min(next_retry_wait, interval)))
+    return int(interval)
+
+
 def _in_failed_backoff(status: str, delay: int) -> bool:
     return "failed" in status and retry_wait_remaining(status, delay) > 0
 
@@ -115,33 +190,59 @@ def _in_success_window(status: str, delay: int, retry_success: bool) -> bool:
     return retry_wait_remaining(status, delay) > 0
 
 
-def is_host_action_eligible(
+def host_gate(
     action,
     row: dict,
     *,
     success_retry_delay: int,
     failed_retry_delay: int,
     retry_success_actions: bool,
-) -> bool:
-    """The same gates the orchestrator applied before ranking existed: host alive, port open,
-    parent succeeded, not inside a retry window."""
+):
+    """(eligible, seconds_until_eligible) for one (action, host) pair.
+
+    The second value is only meaningful when eligible is False *and* the block is a retry window
+    that will actually expire — it feeds the adaptive idle interval. A success with
+    `retry_success_actions` off never expires, so it reports 0: waiting for it would be waiting
+    forever. Structural mismatches (dead host, closed port, parent not yet succeeded) report 0 too;
+    no amount of sleeping fixes them."""
     if row.get("Alive") != "1":
-        return False
+        return False, 0
 
     port = getattr(action, "port", None)
     if port is not None and str(port) not in ("0", "None") and str(port) not in _ports_of(row):
-        return False
+        return False, 0
 
     parent = getattr(action, "b_parent_action", None)
     if parent and "success" not in str(row.get(parent, "") or ""):
-        return False
+        return False, 0
 
     status = str(row.get(_action_name(action), "") or "")
-    if _in_success_window(status, success_retry_delay, retry_success_actions):
-        return False
-    if _in_failed_backoff(status, failed_retry_delay):
-        return False
-    return True
+    if "success" in status:
+        if not retry_success_actions:
+            return False, 0
+        wait = retry_wait_remaining(status, success_retry_delay)
+        return (False, wait) if wait > 0 else (True, 0)
+    if "failed" in status:
+        wait = retry_wait_remaining(status, failed_retry_delay)
+        return (False, wait) if wait > 0 else (True, 0)
+    return True, 0
+
+
+def is_host_action_eligible(action, row: dict, **kw) -> bool:
+    """The same gates the orchestrator applied before ranking existed: host alive, port open,
+    parent succeeded, not inside a retry window."""
+    return host_gate(action, row, **kw)[0]
+
+
+def standalone_gate(action, row: Optional[dict], *, failed_retry_delay: int):
+    """(eligible, seconds_until_eligible) for a standalone action — see is_standalone_eligible."""
+    if row is None:
+        return True, 0
+    status = str(row.get(_action_name(action), "") or "")
+    if "failed" in status:
+        wait = retry_wait_remaining(status, failed_retry_delay)
+        return (False, wait) if wait > 0 else (True, 0)
+    return True, 0
 
 
 def is_standalone_eligible(action, row: Optional[dict], *, failed_retry_delay: int) -> bool:
@@ -158,7 +259,8 @@ def is_standalone_eligible(action, row: Optional[dict], *, failed_retry_delay: i
     return not _in_failed_backoff(status, failed_retry_delay)
 
 
-def score_host_action(action, row: dict, vuln_ips: Optional[Set[str]] = None):
+def score_host_action(action, row: dict, vuln_ips: Optional[Set[str]] = None,
+                      service_hints: Optional[dict] = None):
     """Rank one (action, host) pair. Higher runs sooner. Returns (score, short reason)."""
     name = _action_name(action)
     score = ACTION_BASE.get(name, DEFAULT_BASE)
@@ -180,9 +282,15 @@ def score_host_action(action, row: dict, vuln_ips: Optional[Set[str]] = None):
         score += 5
         reasons.append("re-check")
 
-    if vuln_ips and row.get("IPs", "") in vuln_ips:
+    ip = row.get("IPs", "")
+    if vuln_ips and ip in vuln_ips:
         score += 35
         reasons.append("has CVEs")
+
+    if service_hints and ip in service_hints:
+        weight, label = service_hints[ip]
+        score += weight
+        reasons.append(label)
 
     port = getattr(action, "port", None)
     try:
@@ -199,7 +307,7 @@ def score_host_action(action, row: dict, vuln_ips: Optional[Set[str]] = None):
         if nports >= 5:
             reasons.append(f"{nports} ports")
 
-    reason = f"{name}@{row.get('IPs', '?')}"
+    reason = f"{name}@{ip or '?'}"
     if reasons:
         reason += " - " + " - ".join(reasons[:3])
     return score, reason
@@ -237,6 +345,9 @@ class Planner:
     standalone_every: int = 3
     _cycle: int = field(default=0, repr=False)
     _recent_names: List[str] = field(default_factory=list, repr=False)
+    # Seconds until the soonest retry-blocked action becomes runnable, or 0 when nothing is merely
+    # waiting. Set by collect(), read by the orchestrator to size the idle sleep.
+    next_retry_wait: int = field(default=0, repr=False)
 
     def sync_config(self, shared_data) -> None:
         """Re-read the knobs from live config. Called each cycle: everything else in Bjorn honours
@@ -256,23 +367,28 @@ class Planner:
         *,
         idle_boost: int = 0,
         vuln_ips: Optional[Set[str]] = None,
+        service_hints: Optional[dict] = None,
     ) -> List[Candidate]:
         candidates: List[Candidate] = []
         recent = self._recent_names[-6:]
+        waits: List[int] = []
 
         for action in host_actions:
             name = _action_name(action)
             for row in current_data:
                 if row.get("MAC Address") == "STANDALONE":
                     continue
-                if not is_host_action_eligible(
+                eligible, wait = host_gate(
                     action, row,
                     success_retry_delay=self.success_retry_delay,
                     failed_retry_delay=self.failed_retry_delay,
                     retry_success_actions=self.retry_success_actions,
-                ):
+                )
+                if not eligible:
+                    if wait:
+                        waits.append(wait)
                     continue
-                score, reason = score_host_action(action, row, vuln_ips)
+                score, reason = score_host_action(action, row, vuln_ips, service_hints)
                 if name in recent:
                     score -= 8  # mild anti-monopoly; a strong candidate still wins
                 candidates.append(Candidate(
@@ -284,8 +400,11 @@ class Planner:
         standalone_row = next(
             (r for r in current_data if r.get("MAC Address") == "STANDALONE"), None)
         for action in standalone_actions:
-            if not is_standalone_eligible(action, standalone_row,
-                                          failed_retry_delay=self.failed_retry_delay):
+            eligible, wait = standalone_gate(action, standalone_row,
+                                             failed_retry_delay=self.failed_retry_delay)
+            if not eligible:
+                if wait:
+                    waits.append(wait)
                 continue
             score, reason = score_standalone(action, standalone_row, idle_boost=idle_boost)
             candidates.append(Candidate(
@@ -293,6 +412,7 @@ class Planner:
                 score=score, reason=reason, row=standalone_row,
             ))
 
+        self.next_retry_wait = min(waits) if waits else 0
         candidates.sort(key=lambda c: c.score, reverse=True)
         return candidates
 

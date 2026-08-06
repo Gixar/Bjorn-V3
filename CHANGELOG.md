@@ -3,6 +3,29 @@
 ## [Unreleased]
 
 ### Added
+- **Service-aware planner weights** — `load_service_hints()` reads the `Server` / `X-Powered-By` /
+  `<title>` that `HTTPFingerprint` already banked and boosts hosts that look like an *appliance*
+  rather than a generic web server: NAS +30, camera +28, admin panel +26, router +22, embedded +20,
+  printer +18. Those are the classes that ship with default credentials **and** hold something worth
+  having, so they should be reached before a random Linux box. A host with several web ports keeps
+  its strongest hint, and the reason line names the class
+  (`SSHBruteforce@10.0.0.1 - NAS - :22`). Matching is unambiguous-substring only: a false positive
+  silently reorders the whole attack queue, so `nginx` earns nothing and `axis` is deliberately
+  absent (Apache Axis is a SOAP library, not a camera). No new scanning — this is meaning read out
+  of data collected two actions ago.
+- **Adaptive idle interval** (`adaptive_scan_interval`, default on) — the sleep after a fruitless
+  scan is no longer a flat `scan_interval`:
+  - **Backs off** as fruitless scans accumulate (`scan_interval x min(4, failed_scans)`). An
+    exhausted network doesn't become interesting by being asked four times a minute, and each pass
+    costs CPU and SD writes on a Pi Zero. Capped at 4x so a newly-arrived device is still noticed.
+  - **Wakes early** when the only thing blocking real work is a retry window. `collect()` now
+    records `next_retry_wait` — the soonest a blocked action becomes runnable — and the sleep is cut
+    to it, with a 30 s floor so a nearly-expired window can't turn into a busy loop. Previously a
+    45 s backoff behind a 180 s interval wasted 135 s every time.
+  - Only blocks that *expire* count: a success with `retry_success_actions` off never becomes
+    runnable, and a closed port is structural rather than temporal. Neither shortens the wait.
+  - The gates were split into `host_gate()` / `standalone_gate()` returning
+    `(eligible, seconds_until_eligible)`; the `is_*_eligible()` predicates remain as wrappers.
 - **Scored work selection — the orchestrator picks what to do next instead of following load
   order** (`action_planner.py`, see [`docs/SMART_ORCHESTRATOR.md`](docs/SMART_ORCHESTRATOR.md)).
   `process_alive_ips` walked `self.actions` in load order and `break`ed on the first success per

@@ -29,7 +29,7 @@ from actions.nmap_vuln_scanner import NmapVulnScanner
 from init_shared import shared_data
 from logger import Logger
 from retry_policy import retry_wait_remaining
-from action_planner import Planner, load_vuln_ips
+from action_planner import Planner, load_service_hints, load_vuln_ips, plan_idle_seconds
 
 logger = Logger(name="orchestrator.py", level=logging.DEBUG)
 
@@ -131,6 +131,8 @@ class Orchestrator:
             self.actions, self.standalone_actions, current_data,
             idle_boost=idle_boost,
             vuln_ips=load_vuln_ips(self.shared_data.vuln_summary_file),
+            service_hints=load_service_hints(
+                os.path.join(self.shared_data.scan_results_dir, "http_fingerprints.csv")),
         )
         work = self.planner.select(candidates)
         if not work:
@@ -358,12 +360,19 @@ class Orchestrator:
                     # just re-run next cycle.
                     self.shared_data.write_data(current_data)
                     idle_start_time = datetime.now()
-                    idle_end_time = idle_start_time + timedelta(seconds=self.shared_data.scan_interval)
+                    idle_seconds = self.shared_data.scan_interval
+                    if getattr(self.shared_data, "adaptive_scan_interval", True):
+                        # Back off while the net stays barren, but cut the wait short when the only
+                        # thing blocking real work is a retry window that expires sooner.
+                        idle_seconds = plan_idle_seconds(
+                            self.shared_data.scan_interval, self.failed_scans_count,
+                            self.planner.next_retry_wait)
+                    idle_end_time = idle_start_time + timedelta(seconds=idle_seconds)
                     # Log the idle notice ONCE, not once per second: the old per-second
                     # logger.warning wrote ~180 lines per idle window to the rotating file log
                     # (7000+ lines / ~800KB), which is log spam and made the WebUI log viewer
                     # choke on the huge file. INFO, not WARNING — "no new targets" is normal.
-                    logger.info(f"Scanner found no new targets; idling {self.shared_data.scan_interval}s until next scan.")
+                    logger.info(f"Scanner found no new targets; idling {idle_seconds}s until next scan.")
                     self.shared_data.bjornorch_status = "IDLE"
                     self.shared_data.bjornstatustext2 = "resting..."
                     while datetime.now() < idle_end_time:

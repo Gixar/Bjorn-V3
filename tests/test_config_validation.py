@@ -28,6 +28,7 @@ def _good_config():
         "wifi_scan_enabled": False, "wifi_scan_duration": 30, "wifi_scan_interval": 900,
         "wifi_scan_band": "bg", "wifi_scan_channel": 0,
         "planner_max_host_actions": 4, "planner_standalone_every": 3,
+        "adaptive_scan_interval": True,
         "use_rustscan": False, "rustscan_batch_size": 0, "rustscan_full_port": False,
     }
 

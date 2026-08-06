@@ -12,9 +12,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from action_planner import (  # noqa: E402
     Planner,
+    host_gate,
     is_host_action_eligible,
     is_standalone_eligible,
+    load_service_hints,
     load_vuln_ips,
+    plan_idle_seconds,
     score_host_action,
     score_standalone,
 )
@@ -188,6 +191,96 @@ def test_load_vuln_ips_reads_only_hosts_with_findings():
 
 def test_load_vuln_ips_missing_file_is_not_an_error():
     assert load_vuln_ips("/nonexistent/vulnerability_summary.csv") == set()
+
+
+# --- service hints ------------------------------------------------------------------------
+def _fingerprint_csv(tmp, *rows):
+    path = Path(tmp) / "http_fingerprints.csv"
+    body = "IP,Hostname,Port,Status,Server,X-Powered-By,Title,URL\n" + "".join(rows)
+    path.write_text(body, encoding="utf-8")
+    return path
+
+
+def test_service_hints_identify_appliances_and_ignore_plain_web_servers():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _fingerprint_csv(
+            tmp,
+            "10.0.0.1,nas,5000,200,nginx,,Synology DiskStation,http://10.0.0.1:5000\n",
+            "10.0.0.2,web,80,200,nginx,PHP/8.1,Welcome,http://10.0.0.2\n",
+        )
+        hints = load_service_hints(path)
+        assert hints["10.0.0.1"] == (30, "NAS")
+        assert "10.0.0.2" not in hints, "a generic web server says nothing about the host"
+
+
+def test_service_hints_keep_the_strongest_signal_per_host():
+    """One host, several web ports: a NAS behind a plain server must not be downgraded."""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _fingerprint_csv(
+            tmp,
+            "10.0.0.1,nas,80,200,GoAhead-Webs,,Login,http://10.0.0.1\n",       # embedded, 20
+            "10.0.0.1,nas,5000,200,nginx,,QNAP Turbo NAS,http://10.0.0.1:5000\n",  # NAS, 30
+        )
+        assert load_service_hints(path)["10.0.0.1"] == (30, "NAS")
+
+
+def test_service_hint_raises_the_score_and_names_the_device():
+    action = FakeAction("SSHBruteforce", port=22)
+    plain, _ = score_host_action(action, _row(ip="10.0.0.1"))
+    hinted, reason = score_host_action(action, _row(ip="10.0.0.1"), None,
+                                       {"10.0.0.1": (28, "camera")})
+    assert hinted == plain + 28 and "camera" in reason
+
+
+def test_missing_fingerprint_file_is_not_an_error():
+    assert load_service_hints("/nonexistent/http_fingerprints.csv") == {}
+
+
+# --- adaptive idle interval ---------------------------------------------------------------
+def test_idle_backs_off_as_scans_stay_fruitless_but_is_capped():
+    assert plan_idle_seconds(180, 1) == 180
+    assert plan_idle_seconds(180, 2) == 360
+    assert plan_idle_seconds(180, 9) == 720, "capped at 4x so a new device is still noticed"
+
+
+def test_idle_wakes_early_when_a_retry_window_expires_first():
+    assert plan_idle_seconds(180, 1, next_retry_wait=45) == 45
+    # ...but never busy-loops on a nearly-expired window.
+    assert plan_idle_seconds(180, 1, next_retry_wait=2) == 30
+
+
+def test_idle_ignores_a_retry_window_that_lands_after_the_interval():
+    assert plan_idle_seconds(180, 1, next_retry_wait=600) == 180
+
+
+def test_planner_reports_when_the_soonest_blocked_action_unblocks():
+    """The number the adaptive interval consumes: a host action inside its failed backoff."""
+    import time
+    fresh = time.strftime("failed_%Y%m%d_%H%M%S")
+    ssh = FakeAction("SSHBruteforce", port=22)
+    planner = Planner(standalone_every=99, failed_retry_delay=600)
+    assert planner.collect([ssh], [], [_row(ports="22", SSHBruteforce=fresh)]) == []
+    assert 0 < planner.next_retry_wait <= 600
+
+
+def test_permanent_blocks_do_not_count_as_a_wait():
+    """A success with retry_success_actions off never becomes runnable — sleeping for it would be
+    sleeping forever, so it must not shorten (or lengthen) the idle interval."""
+    ssh = FakeAction("SSHBruteforce", port=22)
+    planner = Planner(standalone_every=99, retry_success_actions=False)
+    planner.collect([ssh], [], [_row(ports="22", SSHBruteforce=SUCCESS)])
+    assert planner.next_retry_wait == 0
+
+    # A closed port is structural, not temporal — same rule.
+    planner.collect([ssh], [], [_row(ports="80")])
+    assert planner.next_retry_wait == 0
+
+
+def test_host_gate_reports_eligibility_and_wait_together():
+    ssh = FakeAction("SSHBruteforce", port=22)
+    gates = dict(success_retry_delay=900, failed_retry_delay=600, retry_success_actions=False)
+    assert host_gate(ssh, _row(ports="22"), **gates) == (True, 0)
+    assert host_gate(ssh, _row(ports="80"), **gates) == (False, 0)
 
 
 def test_standalone_score_rises_when_idle():

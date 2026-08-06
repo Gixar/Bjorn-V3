@@ -133,7 +133,8 @@ tri-color panel (YAGNI, no panel) · Cortex export (YAGNI, no swarm).
 
 **Dropped, do not revisit:** GPS tagging and the wardriving map view (PG-6) · `device_type` netkb
 column (two separate-file precedents make it unnecessary) · Cortex `.csv.gz` export · PG-5 plugin
-system (folded into the P3-1 module contract).
+system (folded into the P3-1 module contract) · **web UI authentication** (decided 2026-08-05 —
+single-user device on an operator-controlled network; see the security-review section above).
 
 ## Security review of `b624337` — 2026-08-05 (2 findings, neither fixed yet)
 
@@ -154,14 +155,16 @@ the first is a real defect in new code and should be Tier 1.
    the network is hostile enough to have blocked Telegram. *Fix:* refuse to send when the
    connection is not encrypted, rather than silently downgrading; if the LAN-relay case is worth
    keeping, it needs its own explicit opt-in key, not a silent `pass`.
-2. **[Tier 3, M–L] The unauthenticated web UI serves secrets via `/load_config`.** The config
-   endpoint returns the whole JSON, including `telegram_bot_token`, `smtp_password` and
-   `wpasec_api_key`, to anyone who can reach port 8000. True, but **pre-existing and systemic
-   rather than new**: the same server offers Reboot/Shutdown, manual attacks, and pages that list
-   cracked credentials and stolen loot outright, so masking one endpoint fixes nothing. The real
-   item is "the web UI has no authentication at all", which is an M–L project (auth + session +
-   every page), not a patch. *(The Wave 4 `load_config` default-merge did not widen this: unset
-   keys are empty strings, and a key that has ever been saved was already in the file.)*
+2. ~~**[Tier 3, M–L] The unauthenticated web UI serves secrets via `/load_config`.**~~
+   ❌ **WON'T FIX — decided 2026-08-05.** The finding is accurate: the config endpoint returns the
+   whole JSON, `telegram_bot_token` / `smtp_password` / `wpasec_api_key` included, to anyone who can
+   reach port 8000. It is also **pre-existing and systemic rather than new** — the same server
+   offers Reboot/Shutdown, manual attacks, and pages listing cracked credentials and stolen loot
+   outright, so masking one endpoint would fix nothing while implying the rest were safe. Adding
+   real auth means auth + session + every page, and the project doesn't want it: Bjorn is a
+   single-user device on a network its operator controls. **Do not revisit** unless that
+   deployment assumption changes. *(The Wave 4 `load_config` default-merge did not widen this:
+   unset keys are empty strings, and a key that has ever been saved was already in the file.)*
 
 ## Wave 3 — implemented 2026-08-03 (no hardware required)
 

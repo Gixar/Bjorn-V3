@@ -749,10 +749,25 @@ method=auto
         except Exception as e:
             return _err(e)
 
+    # Config keys whose *values* must never reach a log file. Substring match on the key name, so a
+    # future `*_token` / `*_password` key is covered without anyone remembering to add it here.
+    _SECRET_KEY_PARTS = ("token", "password", "api_key", "secret", "passwd")
+
+    @classmethod
+    def _redact_params(cls, params):
+        """Copy of `params` with secret values replaced. Pure/testable.
+
+        save_configuration used to log the whole dict at INFO, so every save from the Telegram page
+        wrote the bot token and SMTP password into data/logs — which the diagnostic script then
+        tails into a report meant for sharing. Logging the *keys* is genuinely useful for debugging
+        a save; logging their values never was."""
+        return {k: ("***" if any(p in k.lower() for p in cls._SECRET_KEY_PARTS) and v else v)
+                for k, v in params.items()}
+
     def save_configuration(self, params):
         try:
             fichier = self.shared_data.shared_config_json
-            self.logger.info(f"Received params: {params}")
+            self.logger.info(f"Received params: {self._redact_params(params)}")
 
             with open(fichier, 'r') as f:
                 current_config = json.load(f)

@@ -130,6 +130,16 @@
   (a missed finding is worse than a spare request). `apache-status` is gated to `["apache"]`.
 
 ### Changed
+- **`scripts/bjorn_diag.sh` added to the repo** — the deep diagnostic (system health, service and
+  process state, network, SPI/I2C, external tools, netkb/stats summary, config, log errors, recent
+  orchestrator activity, plus `--save` / `--short` / `--repo`). It had been living untracked on the
+  device, where it wasn't versioned, wasn't backed up, and drifted from the code it inspects — it
+  was still recommending a planner patch that had already merged. Fixed while importing it:
+  redacted config output (its fallback grepped for `telegram` and printed the bot token verbatim),
+  dependency checks keyed on import names (`pysmb` → `smb`), commit/branch/behind-count reporting,
+  an NTP-sync check for the no-RTC clock-jump case, a `grep -c` no-match bug that produced the
+  string `"0\n0"` and silently failed every numeric test on it, ANSI colour suppressed when stdout
+  isn't a terminal, and a `wait` on the `--save` tee so the report's tail isn't truncated.
 - **`bjorn_doctor.sh` reports the commit, not just `version.txt`** — a diagnostic pull described a
   device many merged commits behind and nothing in the report said so, because `version.txt` is
   bumped per *release*, not per commit. It now prints the short SHA, date, subject, branch, whether
@@ -173,6 +183,14 @@
   the seed DB (vsftpd/openssh/proftpd/unrealircd) even without a CPE.
 
 ### Fixed
+- **Saving config no longer writes secrets to the logs** — `save_configuration()` logged the whole
+  params dict at INFO, so every save from the `/telegram` page wrote the **bot token and SMTP
+  password in plaintext** into `data/logs/webapp.py.log`, and `wpasec_api_key` alongside them. Those
+  logs are exactly what the diagnostic script tails into a report meant for pasting into an issue —
+  a leak with a delivery mechanism attached. Values for keys containing `token` / `password` /
+  `api_key` / `secret` / `passwd` are now replaced with `***`; the key names stay, since knowing
+  *which* keys a save touched is the diagnostic value. Substring match, so a future `*_token` key
+  is covered without anyone remembering. Covered by `test_config_redaction.py`.
 - **Disabled and throttled standalone actions no longer report success** (found by an on-Pi
   diagnostic, 2026-08-05) — every no-op path in `BLEScan` / `WiFiScan` / `WpaSecImport` /
   `SNMPEnum` / `TelegramReport` returned `'success'`, which the orchestrator wrote to netkb and

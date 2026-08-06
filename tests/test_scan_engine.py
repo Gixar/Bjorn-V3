@@ -99,3 +99,13 @@ if __name__ == "__main__":
         if name.startswith("test_") and callable(fn):
             fn()
     print("ok")
+
+
+def test_auto_rustscan_batch_is_memory_aware():
+    """RustScan's default of 4500 sockets is tuned for a laptop; on a Pi Zero its documented
+    failure mode is silently dropped ports, so a small board must get a smaller batch. Anything
+    with real memory keeps the upstream default."""
+    from shared import SharedData
+    assert SharedData._auto_rustscan_batch(425) == 1500    # Pi Zero 2 W
+    assert SharedData._auto_rustscan_batch(1024) == 3000   # Pi 3
+    assert SharedData._auto_rustscan_batch(4096) == 4500   # upstream default untouched

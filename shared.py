@@ -189,7 +189,7 @@ class SharedData:
             
             "__title_network__": "Network",
             "use_rustscan": False,       # port discovery via RustScan (fast) instead of nmap -sT; falls back to nmap if the binary is missing
-            "rustscan_batch_size": 0,    # RustScan -b socket batch; 0 = RustScan default. Lower on a Pi Zero 2 W if it drops ports
+            "rustscan_batch_size": 0,    # RustScan -b socket batch; 0 = auto (memory-aware: 1500 on a Pi Zero, 4500 elsewhere)
             "rustscan_full_port": False, # RustScan sweeps all 65,535 ports (its strength) instead of the curated portlist; needs use_rustscan
             "nmap_scan_aggressivity": "-T2",
             "vuln_scan_sv": True,        # include nmap -sV (service/version detection) in the vuln scan
@@ -353,11 +353,36 @@ class SharedData:
             f"Last error: {last_error}"
         )
 
+    @staticmethod
+    def _auto_rustscan_batch(total_ram_mb=None):
+        """A RustScan `-b` batch size this box can actually sustain. Pure enough to unit-test.
+
+        Thresholds are deliberately coarse — the point is to stay well clear of the cliff, not to
+        squeeze the last socket out of a Pi Zero. Anything with real memory keeps RustScan's own
+        4500, so this only bites on the small boards where the failure mode actually shows up."""
+        if total_ram_mb is None:
+            try:
+                total_ram_mb = (os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")) // (1024 ** 2)
+            except (ValueError, OSError, AttributeError):
+                return 4500  # not Linux / can't tell — leave RustScan's default alone
+        if total_ram_mb < 640:      # Pi Zero / Zero 2 W
+            return 1500
+        if total_ram_mb < 1536:     # Pi 3 / Zero-class with more headroom
+            return 3000
+        return 4500                 # RustScan's own default
+
     def initialize_variables(self):
         """Initialize the variables."""
         # Resolve auto (0) brute-force thread count: core-aware, capped at 8 (IO-bound, so >cores is fine).
         if not getattr(self, "bruteforce_threads", 0):
             self.bruteforce_threads = min(8, (os.cpu_count() or 1) * 4)
+        # Resolve auto (0) RustScan batch size: memory-aware. RustScan's own default is 4500
+        # concurrent sockets, tuned for a laptop; a Pi Zero 2 W has ~425MB of RAM, and its
+        # documented failure mode under too-aggressive batching is *silently dropped ports*, not an
+        # error — so an over-large batch costs findings without ever announcing itself. Same
+        # "0 = auto" contract as bruteforce_threads above; set a number to override.
+        if not getattr(self, "rustscan_batch_size", 0):
+            self.rustscan_batch_size = self._auto_rustscan_batch()
         self.should_exit = False
         self.display_should_exit = False
         self.orchestrator_should_exit = False 

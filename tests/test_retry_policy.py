@@ -41,3 +41,13 @@ if __name__ == "__main__":
         if name.startswith("test_") and callable(fn):
             fn()
     print("ok")
+
+
+def test_future_timestamp_does_not_park_an_action():
+    """The Pi has no RTC: it boots at the fake-hwclock time (a diagnostic showed
+    "boot 1970-01-09") and jumps when NTP lands, so a status written before the sync is stamped
+    ahead of everything after it. Read literally that blocks the action until the clock catches
+    up — potentially decades."""
+    now = datetime(2026, 8, 5, 23, 0, 0)
+    assert retry_wait_remaining("success_20301231_235959", 900, now=now) == 0
+    assert not retry_pending("failed_20301231_235959", 600, now=now)

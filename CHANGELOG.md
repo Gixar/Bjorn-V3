@@ -130,6 +130,18 @@
   (a missed finding is worse than a spare request). `apache-status` is gated to `["apache"]`.
 
 ### Changed
+- **`rustscan_batch_size: 0` now means memory-aware auto, not "RustScan's default"** — 1500 on a
+  board under 640MB (Pi Zero / Zero 2 W), 3000 under 1.5GB, otherwise RustScan's own 4500. Its
+  documented failure mode under too-aggressive batching is *silently dropped ports* rather than an
+  error, so an over-large batch costs findings without announcing itself. Same `0 = auto` contract
+  as `bruteforce_threads`; set any number to override. *(Precautionary — the on-Pi diagnostic that
+  prompted it turned out to have a benign explanation: the hosts showing no open ports are phones
+  and IoT devices that legitimately answer nothing.)*
+- **`/wifi` says so when the configured radio isn't present** — interface names follow probe order,
+  not the physical port, so a dongle moved to another USB socket or re-enumerated after a reboot
+  can come back under a different name, or not at all. The saved `wifi_scan_iface` then pointed at
+  nothing and the dropdown simply rendered blank, which reads as "my config was lost" rather than
+  "the radio is gone". `/wifi_ifaces` now reports `configured_missing` and the page explains it.
 - **Module settings moved off the Config page onto their own pages** — `config.js` now hides any key
   owned by a dedicated page (`ble_scan_*`, `wifi_scan_*`, `telegram_*`, `smtp_*`) from the generic
   auto-generated form, so each module is configured in one place, next to its own results, test
@@ -149,6 +161,30 @@
   the seed DB (vsftpd/openssh/proftpd/unrealircd) even without a CPE.
 
 ### Fixed
+- **Disabled and throttled standalone actions no longer report success** (found by an on-Pi
+  diagnostic, 2026-08-05) — every no-op path in `BLEScan` / `WiFiScan` / `WpaSecImport` /
+  `SNMPEnum` / `TelegramReport` returned `'success'`, which the orchestrator wrote to netkb and
+  counted in the run report. A diagnostic pull therefore read **`WiFiScan: success=4`** for an
+  action that had never completed a single capture — the reporting was reassuring about a feature
+  that was dead. Those paths now return a third outcome, `'skipped'`: the action still gets its
+  turn, but leaves no netkb mark, no run-report entry, and doesn't count as work for the cycle.
+  `TelegramReport` likewise distinguishes *not sent* (unchanged data / inside the rate floor) from
+  a genuine send failure, which used to be reported as success too.
+- **A failed monitor-mode acquire no longer burns the whole Wi-Fi scan interval** — `WiFiScan` set
+  `_last_scan` *before* attempting, so a configuration error (dongle unplugged, wrong interface)
+  cost a full `wifi_scan_interval` — 15 minutes by default — before it could be retested. The clock
+  now starts only once a capture actually begins; the orchestrator's `failed_retry_delay` still
+  backs off a genuinely broken config.
+- **A backwards clock jump can no longer park an action for years** — the Pi has no RTC, so it
+  boots at the fake-hwclock time (a diagnostic showed `boot 1970-01-09`) and jumps when NTP lands.
+  Any netkb status written before that sync is stamped *ahead* of everything after it, and
+  `retry_wait_remaining` took it literally: the action would wait until the clock caught up.
+  A status stamped in the future is now treated as runnable now.
+- **The fd watchdog no longer runs `lsof` over the whole system every 10s** — the systemd
+  `ExecStartPost` loop counted every open file on the box to decide whether *Bjorn* was leaking
+  descriptors. On a Pi Zero 2 W that walk is expensive at a 10-second cadence and it answered the
+  wrong question (another process could trip the threshold). Now reads `/proc/$MAINPID/fd`.
+  **Existing installs keep the old unit until reinstalled** — see `install_bjorn.sh`.
 - **SMTP delivery no longer downgrades to cleartext** (security review of `b624337`) —
   `telegram_client.py::send_email` treated `SMTPNotSupportedError` from `starttls()` as benign and
   carried on over the plaintext socket, then still called `smtp.login()` and sent the report. Two

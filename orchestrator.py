@@ -259,6 +259,13 @@ class Orchestrator:
         try:
             logger.info(f"Executing standalone action {action.action_name}")
             result = action.execute()
+            # 'skipped' = the action was disabled, throttled, or its tool isn't installed, so it did
+            # no work. It must leave no trace: writing 'success' to netkb and counting it in the run
+            # report made a switched-off action indistinguishable from a working one — a diagnostic
+            # pull read "WiFiScan: success=4" for an action that had never completed a capture.
+            if result == 'skipped':
+                logger.debug(f"Standalone action {action.action_name} skipped (nothing to do)")
+                return False
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             if result == 'success':
                 row[action_key] = f'success_{timestamp}'

@@ -40,17 +40,17 @@ class WpaSecImport:
             api_key = (getattr(self.shared_data, "wpasec_api_key", "") or "").strip()
             if not api_key:
                 logger.info("wpasec_api_key not set; skipping wpa-sec import.")
-                return 'success'
+                return 'skipped'
 
             interval = getattr(self.shared_data, "wpasec_interval", 3600)
             now = time.time()
             if interval and (now - self._last_fetch) < interval:
-                return 'success'  # throttled — don't hammer the service each idle cycle
+                return 'skipped'  # throttled — don't hammer the service each idle cycle
             self._last_fetch = now
 
             text = self._fetch(api_key)
             if text is None:
-                return 'success'  # network error already logged; this is opportunistic
+                return 'skipped'  # network error already logged; this is opportunistic
 
             pairs = self._parse_potfile(text)
             known = self._known_ssids()

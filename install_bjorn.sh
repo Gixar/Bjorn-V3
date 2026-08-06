@@ -512,8 +512,12 @@ RestartSec=10
 TimeoutStopSec=30
 User=root
 
-# Check open files and restart if it reached the limit (ulimit -n buffer of 1000)
-ExecStartPost=/bin/bash -c 'FILE_LIMIT=\$(ulimit -n); THRESHOLD=\$(( FILE_LIMIT - 1000 )); while :; do TOTAL_OPEN_FILES=\$(lsof | wc -l); if [ "\$TOTAL_OPEN_FILES" -ge "\$THRESHOLD" ]; then echo "File descriptor threshold reached: \$TOTAL_OPEN_FILES (threshold: \$THRESHOLD). Restarting service."; systemctl restart bjorn.service; exit 0; fi; sleep 10; done &'
+# Restart if Bjorn leaks file descriptors (ulimit -n buffer of 1000).
+# Counts \$MAINPID's own fds via /proc, NOT 'lsof | wc -l': lsof walks every process on the box and
+# is genuinely expensive on a Pi Zero 2 W at a 10s cadence (it was a measurable slice of the
+# service's CPU). It also answered the wrong question — the threshold is about Bjorn's own leak,
+# and a system-wide count could trip on some other process entirely.
+ExecStartPost=/bin/bash -c 'FILE_LIMIT=\$(ulimit -n); THRESHOLD=\$(( FILE_LIMIT - 1000 )); while :; do OPEN_FILES=\$(ls /proc/\$MAINPID/fd 2>/dev/null | wc -l); if [ "\$OPEN_FILES" -ge "\$THRESHOLD" ]; then echo "File descriptor threshold reached: \$OPEN_FILES (threshold: \$THRESHOLD). Restarting service."; systemctl restart bjorn.service; exit 0; fi; sleep 10; done &'
 
 # PG-4 watchdog: restart if the main loop stops refreshing /run/bjorn_heartbeat (i.e. it wedged
 # while the process is still alive — which Restart=always alone can't catch). 180s stale window;

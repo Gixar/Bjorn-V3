@@ -57,15 +57,15 @@ class BLEScan:
     def execute(self):
         try:
             if not getattr(self.shared_data, "ble_scan_enabled", False):
-                return 'success'
+                return 'skipped'
             binp = shutil.which("bluetoothctl")
             if not binp:
                 logger.info("bluetoothctl not found (install bluez); skipping BLE scan.")
-                return 'success'
+                return 'skipped'
             interval = getattr(self.shared_data, "ble_scan_interval", 300)
             now = time.time()
             if interval and (now - self._last_scan) < interval:
-                return 'success'  # throttled
+                return 'skipped'  # throttled
             self._last_scan = now
 
             duration = max(3, int(getattr(self.shared_data, "ble_scan_duration", 10)))

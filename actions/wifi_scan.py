@@ -53,24 +53,27 @@ class WiFiScan:
         and the interval — the user asking for a scan by hand *is* the schedule."""
         try:
             if not force and not getattr(self.shared_data, "wifi_scan_enabled", False):
-                return 'success'
+                return 'skipped'
             binp = shutil.which("airodump-ng")
             if not binp:
                 logger.info("airodump-ng not found (install aircrack-ng); skipping Wi-Fi scan.")
-                return 'success'
+                return 'skipped'
             interval = getattr(self.shared_data, "wifi_scan_interval", 900)
             now = time.time()
             if not force and interval and (now - self._last_scan) < interval:
-                return 'success'  # throttled
-            self._last_scan = now
+                return 'skipped'  # throttled
 
             iface = (getattr(self.shared_data, "wifi_scan_iface", "") or "").strip()
             ok, detail = monitor_mode.acquire(iface)
             if not ok:
                 # A refused interface is a configuration error, not a transient failure — say so
-                # loudly rather than silently scanning nothing every cycle.
+                # loudly rather than silently scanning nothing every cycle. The interval clock is
+                # deliberately NOT started here: a fix (plug the dongle back in, pick the right
+                # radio) should be testable on the next cycle, not 15 minutes later. The
+                # orchestrator's failed_retry_delay still backs a genuinely broken config off.
                 logger.error(f"Wi-Fi scan skipped: {detail}")
                 return 'failed'
+            self._last_scan = now  # only a real capture starts the throttle
             try:
                 duration = max(10, int(getattr(self.shared_data, "wifi_scan_duration", 30)))
                 aps, clients = self._capture(binp, iface, duration,

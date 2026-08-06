@@ -39,7 +39,7 @@ class SNMPEnum:
             binp = shutil.which("snmpget")
             if not binp:
                 logger.info("snmpget not found (install the 'snmp' package); skipping SNMP enum.")
-                return 'success'
+                return 'skipped'
             communities = getattr(self.shared_data, "snmp_communities", ["public"]) or ["public"]
             known = self._known_ips()
             found = 0

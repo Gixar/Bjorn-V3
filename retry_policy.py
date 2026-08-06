@@ -28,6 +28,13 @@ def retry_wait_remaining(status, delay_seconds, now=None):
     started = parse_status_time(status)
     if started is None:
         return 0
+    # A status stamped in the future means the clock moved backwards, not that the action runs
+    # later. The Pi has no RTC: it boots at the fake-hwclock time (a diagnostic pull showed
+    # "boot 1970-01-09") and jumps when NTP lands, so anything written before the sync is stamped
+    # ahead of everything after it. Taken literally that would park the action until the clock
+    # caught up — potentially decades. Treat it as runnable now.
+    if started > now:
+        return 0
     ready_at = started + timedelta(seconds=delay_seconds)
     if now >= ready_at:
         return 0

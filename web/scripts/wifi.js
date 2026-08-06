@@ -32,6 +32,13 @@ async function wifiLoadIfaces(selected) {
         sel.appendChild(opt);
     });
     if (selected) sel.value = selected;
+
+    if (data.configured_missing) {
+        wifiStatus(`Configured radio "${data.configured}" is not present. `
+            + `Interface names follow probe order, so a dongle moved to another USB port or `
+            + `re-enumerated after a reboot can come back under a different name. `
+            + `Pick it again below and Save.`);
+    }
 }
 
 function wifiFillConfig(cfg) {

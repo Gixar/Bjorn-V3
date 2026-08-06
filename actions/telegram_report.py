@@ -29,13 +29,18 @@ class TelegramReport:
         try:
             if not (getattr(self.shared_data, "telegram_enabled", False)
                     or getattr(self.shared_data, "smtp_enabled", False)):
-                return 'success'
+                return 'skipped'
             ok, detail, sent = telegram_client.send_targets(self.shared_data, force=False)
-            if sent and ok:
+            if not sent:
+                # Nothing to send (data unchanged) or inside the rate floor — not an outcome worth
+                # recording either way.
+                logger.debug(f"Report not sent: {detail}")
+                return 'skipped'
+            if ok:
                 logger.success(f"Target data delivered ({detail}).")
-            elif not ok:
-                logger.warning(f"Report send skipped/failed: {detail}")
-            return 'success'
+                return 'success'
+            logger.warning(f"Report send failed: {detail}")
+            return 'failed'
         except Exception as e:
             logger.error(f"Error in Telegram report: {e}")
             return 'failed'

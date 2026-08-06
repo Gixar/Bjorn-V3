@@ -76,6 +76,41 @@ airodump actually captures, and — most importantly — that the uplink guard r
 *without* dropping connectivity. Test the guard before enabling the scan.
 **→ First attempt 2026-08-05 blocked on a missing driver — see below.**
 
+## On-Pi diagnostic — 2026-08-05 23:44 (`bjorn_diag.sh`, running 2.5.0-alpha)
+
+A full system pull. **The device was several commits behind** (`action_planner missing — stock
+load-order orchestrator`), so some of this was already fixed in the repo; what follows is what the
+scan surfaced that was *not*.
+
+**Fixed in response (see CHANGELOG):**
+1. **The run report was lying.** `WiFiScan: success=4` for an action that had never completed a
+   capture — every disabled/throttled path returned `'success'`. New `'skipped'` outcome: no netkb
+   mark, no run-report entry, doesn't count as work. This is the one that matters: the diagnostic
+   was *reassuring* about a dead feature, which is worse than no diagnostic.
+2. **A failed acquire burned the full 15-minute Wi-Fi interval** (`_last_scan` set before the
+   attempt), so the `wlan1 is not a wireless interface` error at 23:27:49 locked out retries until
+   23:42:49. The clock now starts only on a real capture.
+3. **`lsof | wc -l` every 10s** in the systemd fd watchdog — expensive on a Pi Zero (service CPU
+   was 3m39s over 27min) and it answered the wrong question. Now `/proc/$MAINPID/fd`.
+4. **No RTC → `boot 1970-01-09`, uptime 18min vs. service 27min.** A status written pre-NTP is
+   stamped ahead of everything after it, which `retry_wait_remaining` honoured literally. A future
+   timestamp is now treated as runnable now.
+5. **`rustscan_batch_size: 0` is now memory-aware auto** (1500 on a Pi Zero). Precautionary: the
+   thin port results that prompted it turned out to be phones/IoT that legitimately answer nothing.
+
+**Not a Bjorn bug:**
+- `wlan1 is not a wireless interface` — correct behaviour. The dongle had been moved to a different
+  USB port; interface names follow probe order, so the saved `wifi_scan_iface` pointed at nothing.
+  `/wifi` now says so instead of rendering a blank dropdown. **Note for the Pi Zero 2 W: only the
+  inner micro-USB carries data — the outer one is power-only.**
+- `pysmb NOT IMPORTABLE` — a bug in `bjorn_diag.sh`, not in Bjorn: pysmb's import name is `smb`.
+  It is in `requirements.txt` and `smb_connector.py.log` exists, so it imported fine.
+
+**Confirmed healthy:** service + heartbeat fresh, 8.7G/28G disk, 39°C, `throttled=0x0`, SPI and I2C
+OK, all six external tools present (nmap 7.93, rustscan 2.4.1, bluetoothctl 5.66, snmpget 5.9.3),
+web server listening, and the Wave 4 standalone fix visibly working — every standalone action takes
+a turn each idle window in the orchestrator log.
+
 ## Wave 4 on-Pi verification — 2026-08-05: second radio now present, Bjorn side still untested
 
 Pi Zero 2 W, dongle = TP-Link Archer T2U Nano `2357:011e`, Realtek **RTL8811AU**.

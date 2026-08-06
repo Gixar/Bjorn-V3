@@ -126,6 +126,44 @@ def test_a_raising_action_does_not_stop_the_others():
     assert boom.calls == 1 and after.calls == 1
 
 
+# --- the 'skipped' outcome (from the 2026-08-05 on-Pi diagnostic) ---------------------------
+def test_skipped_action_leaves_no_trace_in_netkb_or_the_run_report():
+    """A disabled or throttled action must not look like a working one. A diagnostic pull read
+    "WiFiScan: success=4" for an action that had never completed a single capture, because every
+    no-op path returned 'success' — the report was reassuring about a feature that was dead."""
+    stats = {}
+    skipped, working = FakeAction("Disabled", result='skipped'), FakeAction("Working")
+    fake = _fake_self([skipped, working])
+    fake._record_result = lambda name, ok, **k: stats.setdefault(name, []).append(ok)
+
+    data = []
+    _run(fake, data)
+
+    row = next(r for r in data if r["MAC Address"] == "STANDALONE")
+    assert skipped.calls == 1, "it must still be given its turn"
+    assert row.get("Disabled", "") == "", "a skipped action must not be written to netkb"
+    assert "Disabled" not in stats, "a skipped action must not be counted in the run report"
+    assert "success" in row["Working"] and stats["Working"] == [True]
+
+
+def test_skipped_does_not_count_as_work_for_the_cycle():
+    """process_alive_ips uses the return value to decide whether the cycle did anything; a no-op
+    must not keep Bjorn out of its idle branch."""
+    fake = _fake_self([FakeAction("Disabled", result='skipped')])
+    assert _exec(fake, fake.standalone_actions[0], []) is False
+
+
+def test_no_op_paths_in_the_action_modules_return_skipped():
+    """Guards the contract in the modules themselves, not just the orchestrator's handling of it."""
+    import re
+    root = Path(__file__).resolve().parent.parent
+    for name in ("ble_scan", "wifi_scan", "wpasec_import", "telegram_report"):
+        body = (root / "actions" / f"{name}.py").read_text(encoding="utf-8").split("def execute", 1)[1]
+        assert "'skipped'" in body, f"{name}.py has no skipped path — its no-ops read as successes"
+        assert not re.search(r"return 'success'\s+# throttled", body), \
+            f"{name}.py still reports a throttled no-op as success"
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

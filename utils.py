@@ -160,9 +160,18 @@ class WebUtils:
         """Wireless interfaces for the config dropdown, flagging the uplink so the user can't pick
         it by mistake (monitor_mode.acquire refuses it anyway — this just explains why)."""
         uplink = monitor_mode.default_route_iface()
-        return JSONResponse({"interfaces": [{"name": n, "uplink": n == uplink}
-                                            for n in monitor_mode.wireless_ifaces()],
-                             "uplink": uplink})
+        present = monitor_mode.wireless_ifaces()
+        configured = (getattr(self.shared_data, "wifi_scan_iface", "") or "").strip()
+        return JSONResponse({
+            "interfaces": [{"name": n, "uplink": n == uplink} for n in present],
+            "uplink": uplink,
+            "configured": configured,
+            # Interface names follow probe order, not the physical port, so a dongle moved to
+            # another socket or re-enumerated after a reboot can come back under a different name —
+            # or not at all. The saved name then points at nothing and the dropdown just renders
+            # blank, which reads as "my config was lost" rather than "the radio is gone".
+            "configured_missing": bool(configured and configured not in present),
+        })
 
     def wifi_scan_now(self):
         """'Scan now' button: run one capture immediately, ignoring the enabled flag and the

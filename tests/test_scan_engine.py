@@ -109,3 +109,22 @@ def test_auto_rustscan_batch_is_memory_aware():
     assert SharedData._auto_rustscan_batch(425) == 1500    # Pi Zero 2 W
     assert SharedData._auto_rustscan_batch(1024) == 3000   # Pi 3
     assert SharedData._auto_rustscan_batch(4096) == 4500   # upstream default untouched
+
+
+def test_down_interfaces_are_not_scanned():
+    """netifaces reports an address whether or not the link is up, so an unplugged-but-configured
+    interface looked live. On the Pi, usb0 keeps 172.20.2.1/24 with no carrier by design, and Bjorn
+    was sweeping all 254 addresses of a subnet that physically cannot answer, every cycle at -T2.
+    Only 'down' is filtered: 'unknown' is normal for tunnels and loopback, which do carry traffic."""
+    import tempfile, os
+    from actions.scanning import NetworkScanner
+    with tempfile.TemporaryDirectory() as tmp:
+        for iface, state in (("usb0", "down"), ("wlan0", "up"), ("tun0", "unknown")):
+            os.makedirs(os.path.join(tmp, iface))
+            with open(os.path.join(tmp, iface, "operstate"), "w") as f:
+                f.write(state + "\n")
+        assert NetworkScanner.iface_is_down("usb0", sysfs=tmp) is True
+        assert NetworkScanner.iface_is_down("wlan0", sysfs=tmp) is False
+        assert NetworkScanner.iface_is_down("tun0", sysfs=tmp) is False
+        # Unreadable operstate must not filter the interface out — failing open beats scanning nothing.
+        assert NetworkScanner.iface_is_down("nope", sysfs=tmp) is False

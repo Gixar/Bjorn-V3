@@ -260,18 +260,38 @@ class NetworkScanner:
             except Exception as e:
                 self.logger.error(f"Error in display_csv: {e}")
 
+    @staticmethod
+    def iface_is_down(iface, sysfs="/sys/class/net"):
+        """True when the kernel reports this interface as down. Pure enough to unit-test.
+
+        netifaces hands back an interface's address whether or not the link is up, so a configured
+        but unplugged interface looked exactly like a live one. On the Pi the USB gadget `usb0`
+        keeps 172.20.2.1/24 with no carrier by design (the #68 fix), which had Bjorn sweeping all
+        254 addresses of a subnet that physically cannot answer — every cycle, at -T2, on a Pi
+        Zero. Only 'down' is filtered: some interfaces legitimately report 'unknown' (tunnels,
+        loopback) and those still carry traffic."""
+        try:
+            with open(f"{sysfs}/{iface}/operstate") as f:
+                return f.read().strip() == "down"
+        except OSError:
+            return False  # can't tell (not Linux, or the iface vanished) -> don't filter it out
+
     def get_networks(self):
         """
         Retrieves the subnet of every interface that has an IPv4 address (#133).
 
         Bjorn used to scan only the default gateway's network; a device on more than one LAN
         (eth0 + wlan0 + usb0, etc.) never saw the others. This returns a de-duplicated list of
-        IPv4Network objects, one per interface subnet, skipping loopback and link-local. The
-        caller scans each and merges the results into a single netkb.
+        IPv4Network objects, one per interface subnet, skipping loopback, link-local, and
+        interfaces whose link is down. The caller scans each and merges the results into a
+        single netkb.
         """
         networks = {}
         try:
             for iface in netifaces.interfaces():
+                if self.iface_is_down(iface):
+                    self.logger.debug(f"Skipping {iface}: link is down")
+                    continue
                 for addr in netifaces.ifaddresses(iface).get(netifaces.AF_INET, []):
                     ip_address = addr.get('addr')
                     netmask = addr.get('netmask')

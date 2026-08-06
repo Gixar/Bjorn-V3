@@ -117,8 +117,18 @@ if have git && $GIT rev-parse --git-dir >/dev/null 2>&1; then
     else
         ok "upstream" "up to date (or no tracking branch)"
     fi
+elif [ -f "$REPO/build_info" ]; then
+    # The deployed tree is often not a git checkout — the installer copies from local source, and a
+    # downloaded zip has no .git — so fall back to the stamp install_bjorn.sh writes.
+    while IFS='=' read -r k v; do
+        case "$k" in
+            source_commit) ok "commit" "$v  (from build_info — deployed tree is not a checkout)" ;;
+            installed_at)  ok "installed_at" "$v" ;;
+        esac
+    done < "$REPO/build_info"
+    warn "upstream" "cannot tell — not a git checkout; compare source_commit against origin/main"
 else
-    warn "commit" "? (not a git checkout)"
+    warn "commit" "? — not a git checkout and no build_info; reinstall to stamp the build"
 fi
 ok "python"  "$(python3 --version 2>&1)"
 if [ -f /etc/os-release ]; then
@@ -641,7 +651,10 @@ if [ -n "${behind:-}" ] && [ "${behind:-0}" -gt 0 ] 2>/dev/null; then
     recs=1
 fi
 if have timedatectl && [ "$(timedatectl show -p NTPSynchronized --value 2>/dev/null)" != "yes" ]; then
-    echo "  • System clock not NTP-synced — netkb timestamps (retry windows) are unreliable"
+    echo "  • System clock not NTP-synced - netkb timestamps (retry windows) are unreliable."
+    echo "    The Pi has no RTC, so it boots in 1970 until NTP lands. Check with:"
+    echo "      timedatectl status; systemctl status systemd-timesyncd"
+    echo "      sudo timedatectl set-ntp true"
     recs=1
 fi
 if [ -f "$CFG" ]; then
@@ -668,8 +681,8 @@ fi
 
 echo
 echo "Done. Save this output when asking for help:"
-echo "  sudo bash $SCRIPT_DIR/bjorn_diag.sh --save"
-echo "  sudo bash $SCRIPT_DIR/bjorn_diag.sh | tee /tmp/bjorn_diag.txt"
+echo "  sudo $SCRIPT_DIR/bjorn_diag.sh --save"
+echo "  sudo $SCRIPT_DIR/bjorn_diag.sh | tee /tmp/bjorn_diag.txt"
 if [ -n "$REPORT_FILE" ]; then
     echo
     echo "Report written to: $REPORT_FILE"

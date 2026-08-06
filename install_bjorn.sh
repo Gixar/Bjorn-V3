@@ -450,6 +450,17 @@ setup_bjorn() {
 
     cd Bjorn
 
+    # Stamp what was actually installed. version.txt only carries the release tag, and the deployed
+    # tree is often not a git checkout (the local-source path above copies whatever it was handed,
+    # and a downloaded zip has no .git at all) — so a diagnostic from the device had no way to say
+    # which code was running. Written once, at install; read back by scripts/bjorn_diag.sh.
+    {
+        echo "installed_at=$(date -Is 2>/dev/null || date)"
+        echo "installed_from=$SCRIPT_DIR"
+        src_commit="$(git -c safe.directory="$SCRIPT_DIR" -C "$SCRIPT_DIR" log -1 --format='%H %cs %s' 2>/dev/null)"
+        [ -n "$src_commit" ] && echo "source_commit=$src_commit" || echo "source_commit=unknown (source was not a git checkout)"
+    } > build_info 2>/dev/null || log "WARNING" "Could not write build_info"
+
     # Update the shared_config.json file with the selected EPD version
     log "INFO" "Updating E-Paper display configuration..."
     if [ -f "config/shared_config.json" ]; then

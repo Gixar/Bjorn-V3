@@ -192,6 +192,20 @@
   the seed DB (vsftpd/openssh/proftpd/unrealircd) even without a CPE.
 
 ### Fixed
+- **Down interfaces are no longer scanned** (found in an on-Pi diagnostic, 2026-08-06) —
+  `get_networks()` took every interface with an IPv4 address, and `netifaces` reports one whether
+  or not the link is up. On the Pi the USB gadget `usb0` keeps `172.20.2.1/24` with **no carrier by
+  design** (the #68 fix), so Bjorn swept all 254 addresses of a subnet that physically cannot
+  answer — every cycle, at `-T2`, on a Pi Zero. The diagnostic caught it in the act:
+  `nmap -oX - 172.20.2.0/24 -sn` in the service's cgroup with `usb0 DOWN, carrier 0`. Interfaces
+  whose kernel `operstate` is `down` are now skipped; `unknown` (tunnels, loopback) still counts as
+  usable, and an unreadable operstate fails open.
+- **The installer stamps what it deployed (`build_info`)** — `bjorn_diag.sh` reported
+  `commit ? (not a git checkout)` on the device, because the install path copies from local source
+  (and a downloaded zip has no `.git` at all), so the commit reporting added a commit earlier could
+  never work where it mattered most. `install_bjorn.sh` now writes `build_info` with the source
+  commit, install time and source path; the diag reads it as a fallback. Existing installs show
+  the "reinstall to stamp the build" hint until then.
 - **Saving config no longer writes secrets to the logs** — `save_configuration()` logged the whole
   params dict at INFO, so every save from the `/telegram` page wrote the **bot token and SMTP
   password in plaintext** into `data/logs/webapp.py.log`, and `wpasec_api_key` alongside them. Those

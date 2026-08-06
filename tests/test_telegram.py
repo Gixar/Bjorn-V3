@@ -107,6 +107,92 @@ def test_send_email_requires_host_and_recipient():
     assert tc.send_email(_sd(smtp_host="mail", smtp_to=""), "s", "b")[0] is False
 
 
+class _FakeSMTP:
+    """Minimal stand-in for smtplib.SMTP. `starttls_supported=False` reproduces the relay that
+    triggered the cleartext downgrade."""
+    def __init__(self, starttls_supported=True):
+        self.starttls_supported = starttls_supported
+        self.logged_in = False
+        self.sent = False
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def starttls(self, context=None):
+        if not self.starttls_supported:
+            raise tc.smtplib.SMTPNotSupportedError("STARTTLS extension not supported by server.")
+        self.tls_context = context
+
+    def login(self, user, password):
+        self.logged_in = True
+
+    def send_message(self, msg):
+        self.sent = True
+
+
+def _with_smtp(fake, attr="SMTP"):
+    saved = getattr(tc.smtplib, attr)
+    setattr(tc.smtplib, attr, lambda *a, **k: fake)
+    return lambda: setattr(tc.smtplib, attr, saved)
+
+
+def _smtp_config(**kw):
+    base = dict(smtp_host="mail.example.com", smtp_to="you@example.com", smtp_port=587,
+                smtp_user="bjorn@example.com", smtp_password="hunter2")
+    base.update(kw)
+    return _sd(**base)
+
+
+def test_send_email_refuses_cleartext_when_starttls_is_unsupported():
+    """The security fix: a server without STARTTLS must abort the send, not continue in the clear.
+    The payload can carry every cracked credential, and login() would put the mailbox password on
+    the wire too — on exactly the hostile network that made Telegram fail in the first place."""
+    fake = _FakeSMTP(starttls_supported=False)
+    restore = _with_smtp(fake)
+    try:
+        ok, detail = tc.send_email(_smtp_config(), "subj", "body", "t.json", b"{}")
+    finally:
+        restore()
+    assert ok is False
+    assert "cleartext" in detail and "STARTTLS" in detail
+    assert not fake.sent, "the report must not be transmitted"
+    assert not fake.logged_in, "the SMTP password must not be sent over an unencrypted socket"
+
+
+def test_send_email_sends_once_starttls_succeeds():
+    fake = _FakeSMTP(starttls_supported=True)
+    restore = _with_smtp(fake)
+    try:
+        ok, _ = tc.send_email(_smtp_config(), "subj", "body", "t.json", b"{}")
+    finally:
+        restore()
+    assert ok and fake.sent and fake.logged_in
+    assert fake.tls_context.check_hostname, "STARTTLS must use a verifying context"
+
+
+def test_send_email_port_465_uses_a_verifying_context():
+    """SMTP_SSL's own default context has historically skipped certificate verification, so the
+    context is passed explicitly."""
+    captured = {}
+    saved = tc.smtplib.SMTP_SSL
+    fake = _FakeSMTP()
+
+    def _ssl(*a, **k):
+        captured.update(k)
+        return fake
+
+    tc.smtplib.SMTP_SSL = _ssl
+    try:
+        ok, _ = tc.send_email(_smtp_config(smtp_port=465), "subj", "body")
+    finally:
+        tc.smtplib.SMTP_SSL = saved
+    assert ok and fake.sent
+    assert captured.get("context") is not None and captured["context"].check_hostname
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

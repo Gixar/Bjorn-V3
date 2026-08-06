@@ -105,6 +105,18 @@
   the seed DB (vsftpd/openssh/proftpd/unrealircd) even without a CPE.
 
 ### Fixed
+- **SMTP delivery no longer downgrades to cleartext** (security review of `b624337`) —
+  `telegram_client.py::send_email` treated `SMTPNotSupportedError` from `starttls()` as benign and
+  carried on over the plaintext socket, then still called `smtp.login()` and sent the report. Two
+  exposures on one path: the payload, which carries **every cracked credential** when
+  `telegram_include_creds` is on, and the user's own mailbox password. Worse, this channel is
+  reached precisely when the network was hostile enough to block Telegram (HTTPS-only) — so the
+  downgrade handed secrets to exactly the network already interfering with delivery. The send is
+  now **refused** with a message naming the cause, rather than downgraded; `send_targets` leaves
+  the stored signature untouched on failure, so the next cycle retries. A plain LAN relay is no
+  longer usable — if that case ever matters it needs an explicit opt-in key, not a silent `pass`.
+  Also passes an explicit verifying `ssl` context to `SMTP_SSL` (port 465), whose stdlib default
+  has historically skipped certificate verification. Covered by `test_telegram.py`.
 - **New config keys were invisible in the web UI until an unrelated save** — `SharedData.load_config()`
   merged the defaults over the saved `shared_config.json` **in memory only**, so the file on disk kept
   whatever key set it was last written with. Everything that reads the *file* rather than the live

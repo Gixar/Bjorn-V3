@@ -58,7 +58,7 @@
                         or its send fails.
                     </p>
                     <table>
-                        <tr><th>Host / Port</th><td>Port <strong>465</strong> connects with implicit SSL; anything else (typically <strong>587</strong>) upgrades with STARTTLS when the server offers it.</td></tr>
+                        <tr><th>Host / Port</th><td>Port <strong>465</strong> connects with implicit TLS; anything else (typically <strong>587</strong>) upgrades with STARTTLS. <strong>A server that offers neither is refused</strong> — the send fails rather than going out in the clear, since this report can contain cracked credentials and the login would expose your mailbox password. A plain LAN relay will not work here.</td></tr>
                         <tr><th>Username / From</th><td>Also used as the sender address.</td></tr>
                         <tr><th>Password</th><td>For Gmail, Outlook and most large providers this must be an <em>app-specific password</em>, not your account password. Stored in plain text in <code>shared_config.json</code> — use a throwaway mailbox.</td></tr>
                         <tr><th>Recipients</th><td>Comma-separated.</td></tr>

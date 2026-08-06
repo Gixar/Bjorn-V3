@@ -68,9 +68,15 @@ def send_document(token, chat_id, filename, content_bytes, caption=""):
 
 # --- SMTP fallback channel ----------------------------------------------------------------
 def send_email(shared_data, subject, body, filename=None, content_bytes=None):
-    """Deliver over SMTP, optionally with a JSON attachment. Port 465 = implicit SSL, anything else
-    = STARTTLS when the server offers it. Returns (ok, detail). Nothing is sent unless a host and a
-    recipient are configured."""
+    """Deliver over SMTP, optionally with a JSON attachment. Port 465 = implicit TLS, anything else
+    = STARTTLS. Returns (ok, detail). Nothing is sent unless a host and a recipient are configured.
+
+    The connection MUST be encrypted; there is no cleartext path. This payload carries every cracked
+    credential when `telegram_include_creds` is on, and `login()` would put the user's own mailbox
+    password on the wire besides. This channel is also reached precisely when the network was hostile
+    enough to block Telegram (which is HTTPS-only), so a silent downgrade would hand secrets to
+    exactly the network already interfering with delivery. Failing to send is the safe outcome:
+    `send_targets` leaves the stored signature untouched, so the next cycle retries."""
     host = (getattr(shared_data, "smtp_host", "") or "").strip()
     to = (getattr(shared_data, "smtp_to", "") or "").strip()
     if not host or not to:
@@ -87,15 +93,19 @@ def send_email(shared_data, subject, body, filename=None, content_bytes=None):
     if filename and content_bytes:
         msg.add_attachment(content_bytes, maintype="application", subtype="json",
                            filename=filename)
+    # Explicit context on both paths: smtplib's own default for SMTP_SSL has historically been an
+    # unverified stdlib context, which would accept any certificate.
+    context = ssl.create_default_context()
     try:
-        smtp = (smtplib.SMTP_SSL(host, port, timeout=30) if port == 465
+        smtp = (smtplib.SMTP_SSL(host, port, timeout=30, context=context) if port == 465
                 else smtplib.SMTP(host, port, timeout=30))
         with smtp:
             if port != 465:
                 try:
-                    smtp.starttls(context=ssl.create_default_context())
+                    smtp.starttls(context=context)
                 except smtplib.SMTPNotSupportedError:
-                    pass  # plain SMTP relay (e.g. a LAN mail host)
+                    return (False, f"{host}:{port} does not offer STARTTLS — refusing to send in "
+                                   f"cleartext. Use port 465, or a server that supports STARTTLS.")
             if user and password:
                 smtp.login(user, password)
             smtp.send_message(msg)

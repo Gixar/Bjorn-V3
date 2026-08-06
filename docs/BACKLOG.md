@@ -140,8 +140,12 @@ system (folded into the P3-1 module contract).
 Automated review of the pushed commit. Both are recorded here rather than patched on the spot;
 the first is a real defect in new code and should be Tier 1.
 
-1. **[Tier 1, S] SMTP fallback can deliver cracked credentials — and the mailbox password — over
-   an unencrypted connection.** `telegram_client.py::send_email` treats `SMTPNotSupportedError`
+1. ~~**[Tier 1, S] SMTP fallback can deliver cracked credentials — and the mailbox password — over
+   an unencrypted connection.**~~ ✅ **FIXED 2026-08-05** — the send is now refused rather than
+   downgraded, and `SMTP_SSL` gets an explicit verifying context (its stdlib default skipped
+   certificate verification). A plain LAN relay is no longer usable; that case would need an
+   explicit opt-in key. Original finding below.
+   `telegram_client.py::send_email` treats `SMTPNotSupportedError`
    from `starttls()` as benign and continues on the plaintext socket (the comment reasons about a
    LAN relay), then still calls `smtp.login(user, password)` and sends the payload. Two exposures
    in one path: the report itself, which carries every cracked credential when

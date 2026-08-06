@@ -48,9 +48,11 @@ class WiFiScan:
         self.clientfile = os.path.join(shared_data.scan_results_dir, "wifi_clients.csv")
         logger.info("WiFiScan initialized.")
 
-    def execute(self):
+    def execute(self, force=False):
+        """Run a capture if due. `force=True` (the web 'Scan now' button) ignores the enabled flag
+        and the interval — the user asking for a scan by hand *is* the schedule."""
         try:
-            if not getattr(self.shared_data, "wifi_scan_enabled", False):
+            if not force and not getattr(self.shared_data, "wifi_scan_enabled", False):
                 return 'success'
             binp = shutil.which("airodump-ng")
             if not binp:
@@ -58,7 +60,7 @@ class WiFiScan:
                 return 'success'
             interval = getattr(self.shared_data, "wifi_scan_interval", 900)
             now = time.time()
-            if interval and (now - self._last_scan) < interval:
+            if not force and interval and (now - self._last_scan) < interval:
                 return 'success'  # throttled
             self._last_scan = now
 
@@ -71,7 +73,9 @@ class WiFiScan:
                 return 'failed'
             try:
                 duration = max(10, int(getattr(self.shared_data, "wifi_scan_duration", 30)))
-                aps, clients = self._capture(binp, iface, duration)
+                aps, clients = self._capture(binp, iface, duration,
+                                             getattr(self.shared_data, "wifi_scan_band", "bg"),
+                                             getattr(self.shared_data, "wifi_scan_channel", 0))
             finally:
                 monitor_mode.release(iface)
 
@@ -85,7 +89,21 @@ class WiFiScan:
             logger.error(f"Error in Wi-Fi scan: {e}")
             return 'failed'
 
-    def _capture(self, binp, iface, duration):
+    @staticmethod
+    def build_cmd(binp, iface, prefix, band="bg", channel=0):
+        """airodump-ng command line. Pure/testable.
+
+        `--band` matters on a dual-band adapter: airodump defaults to 2.4 GHz only, so every 5 GHz
+        AP is invisible until you ask for it. `-c` locks one channel instead of hopping — far more
+        thorough on a known channel, and blind to every other one, so 0 (hop) stays the default."""
+        cmd = [binp, iface, "-w", prefix, "--output-format", "csv", "--write-interval", "1"]
+        if channel:
+            cmd += ["-c", str(int(channel))]  # a locked channel overrides band hopping
+        elif band and band != "bg":
+            cmd += ["--band", band]
+        return cmd
+
+    def _capture(self, binp, iface, duration, band="bg", channel=0):
         """Run airodump-ng for `duration` seconds into a scratch dir and parse its CSV.
 
         airodump-ng runs until killed, so the timeout IS the stop signal — TimeoutExpired is the
@@ -93,8 +111,7 @@ class WiFiScan:
         already on disk when the process dies."""
         tmpdir = tempfile.mkdtemp(prefix="bjorn_wifi_")
         try:
-            cmd = [binp, iface, "-w", os.path.join(tmpdir, "scan"),
-                   "--output-format", "csv", "--write-interval", "1"]
+            cmd = self.build_cmd(binp, iface, os.path.join(tmpdir, "scan"), band, channel)
             try:
                 subprocess.run(cmd, capture_output=True, text=True, timeout=duration)
             except subprocess.TimeoutExpired:

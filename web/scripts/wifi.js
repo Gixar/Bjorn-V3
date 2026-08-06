@@ -40,6 +40,9 @@ function wifiFillConfig(cfg) {
         cfg.wifi_scan_duration !== undefined ? cfg.wifi_scan_duration : 30;
     document.getElementById("wifi-interval").value =
         cfg.wifi_scan_interval !== undefined ? cfg.wifi_scan_interval : 900;
+    document.getElementById("wifi-band").value = cfg.wifi_scan_band || "bg";
+    document.getElementById("wifi-channel").value =
+        cfg.wifi_scan_channel !== undefined ? cfg.wifi_scan_channel : 0;
     wifiLoadIfaces(cfg.wifi_scan_iface || "");
 }
 
@@ -54,6 +57,8 @@ async function wifiSave() {
         wifi_scan_iface: iface,
         wifi_scan_duration: parseInt(document.getElementById("wifi-duration").value, 10) || 30,
         wifi_scan_interval: parseInt(document.getElementById("wifi-interval").value, 10) || 0,
+        wifi_scan_band: document.getElementById("wifi-band").value,
+        wifi_scan_channel: parseInt(document.getElementById("wifi-channel").value, 10) || 0,
     };
     try {
         await postJson("/save_config", body);
@@ -61,6 +66,41 @@ async function wifiSave() {
     } catch (e) {
         toast(e.message || "Save failed", "error");
     }
+}
+
+// Run one capture right now. The backend returns as soon as it has started the thread (a capture is
+// 30s+), so the countdown here is cosmetic — the real completion signal is the results table.
+async function wifiScanNow() {
+    const btn = document.getElementById("wifi-scan-btn");
+    const iface = document.getElementById("wifi-iface").value;
+    if (!iface) {
+        toast("Pick an interface first", "error");
+        return;
+    }
+    let d;
+    try {
+        d = await postJson("/wifi_scan_now");
+    } catch (e) {
+        toast(e.message || "Could not start the capture", "error");
+        wifiStatus("Scan failed to start: " + (e.message || ""));
+        return;
+    }
+    toast(d.message || "Capture started", "success");
+
+    // Disabled for the capture window: a second click would be refused by the radio lock anyway,
+    // and an error toast for pressing an enabled button reads as a bug.
+    let left = (d.duration || 30) + 3;
+    btn.disabled = true;
+    const tick = setInterval(() => {
+        left -= 1;
+        wifiStatus(`Capturing on ${iface}… ${left}s`);
+        if (left <= 0) {
+            clearInterval(tick);
+            btn.disabled = false;
+            wifiStatus("Capture finished — results refreshed.");
+            wifiRefresh();
+        }
+    }, 1000);
 }
 
 async function wifiTestMonitor() {

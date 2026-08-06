@@ -59,8 +59,24 @@
                     <h3>The settings</h3>
                     <table>
                         <tr><th>Capture duration</th><td>Seconds per capture. airodump hops channels throughout, so a short capture simply misses APs on channels it did not reach — 30 s is a floor, 60 s+ finds noticeably more.</td></tr>
-                        <tr><th>Min interval</th><td>Floor between captures. The radio is held for the whole capture, so a short interval means a nearly always-busy dongle.</td></tr>
+                        <tr><th>Min interval</th><td>Floor between captures. The radio is held for the whole capture, so a short interval means a nearly always-busy dongle. <em>Scan now</em> ignores it.</td></tr>
+                        <tr><th>Band</th><td>airodump listens on 2.4 GHz only unless told otherwise — on a dual-band adapter every 5 GHz network is simply absent from the results until you pick <code>a/b/g</code>. The catch: the same capture time now covers roughly three times as many channels, so each gets a third of the dwell. Widen the band and the duration together, or you trade 5 GHz coverage for missed 2.4 GHz APs.</td></tr>
+                        <tr><th>Lock to channel</th><td><code>0</code> hops every channel in the selected band. Any other value parks the radio there for the whole capture: far more thorough on that channel — it will catch clients and probes a hopping scan skips right past — and completely blind everywhere else. Overrides the band setting. Use it once a survey has told you which channel matters.</td></tr>
                     </table>
+
+                    <h3>Scan now</h3>
+                    <p>
+                        Runs one capture immediately, ignoring both the enable checkbox and the
+                        interval — useful for testing a new adapter or a channel setting without
+                        waiting out an idle window. Save first: it uses the <em>saved</em> config,
+                        not what is currently typed in the boxes.
+                    </p>
+                    <p>
+                        The button returns as soon as the capture has started, not when it finishes,
+                        and stays disabled for roughly the capture duration. If the scheduled scan
+                        happens to be running at that moment the radio is busy and the request is
+                        refused — one capture at a time, by design; try again in a few seconds.
+                    </p>
 
                     <h3>Reading the tables</h3>
                     <table>
@@ -96,9 +112,31 @@
                 <label class="tg-field">Min interval between scans (seconds)
                     <input type="number" id="wifi-interval" min="0" value="900">
                 </label>
+
+                <label class="tg-field">Band
+                    <select id="wifi-band">
+                        <option value="bg">2.4 GHz only (b/g) — airodump default</option>
+                        <option value="abg">2.4 + 5 GHz (a/b/g) — needs a dual-band adapter</option>
+                        <option value="a">5 GHz only (a)</option>
+                    </select>
+                </label>
+                <p class="card-subtitle">
+                    airodump scans 2.4 GHz only unless told otherwise, so 5 GHz APs stay invisible on
+                    the default setting. Covering both bands spreads the same capture time over more
+                    channels — raise the duration with it.
+                </p>
+
+                <label class="tg-field">Lock to channel (0 = hop all)
+                    <input type="number" id="wifi-channel" min="0" max="196" value="0">
+                </label>
+                <p class="card-subtitle">
+                    Locking a channel catches far more on that one channel and nothing anywhere else.
+                    Overrides the band setting.
+                </p>
             </div>
             <div class="log-toolbar">
                 <button type="button" class="btn" onclick="wifiSave()">Save</button>
+                <button type="button" class="btn btn-primary" id="wifi-scan-btn" onclick="wifiScanNow()">Scan now</button>
                 <button type="button" class="btn btn-ghost" onclick="wifiTestMonitor()">Test monitor mode</button>
                 <button type="button" class="btn btn-ghost" onclick="wifiRefresh()">Refresh results</button>
             </div>

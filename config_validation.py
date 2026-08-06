@@ -21,8 +21,11 @@ _NONNEG_INT_KEYS = (
     "battery_shutdown_percent", "bruteforce_threads", "rustscan_batch_size",
     "wpasec_interval", "telegram_min_interval",
     "ble_scan_duration", "ble_scan_interval", "smtp_port",
-    "wifi_scan_duration", "wifi_scan_interval",
+    "wifi_scan_duration", "wifi_scan_interval", "wifi_scan_channel",
 )
+# airodump-ng --band: any combination of a (5GHz) / b / g (both 2.4GHz). Its own default is 2.4-only,
+# so a dual-band adapter sees no 5GHz APs until this says so.
+KNOWN_WIFI_BANDS = ("bg", "abg", "a", "b", "g", "ab", "ag")
 
 
 def validate_config(config):
@@ -49,6 +52,18 @@ def validate_config(config):
         errors.append("missing required key: 'epd_type'")
     elif epd not in KNOWN_EPD_TYPES:
         errors.append(f"'epd_type' {epd!r} is not one of {sorted(KNOWN_EPD_TYPES)}")
+
+    band = config.get("wifi_scan_band")
+    if band is None:
+        errors.append("missing required key: 'wifi_scan_band'")
+    elif band not in KNOWN_WIFI_BANDS:
+        errors.append(f"'wifi_scan_band' {band!r} is not one of {sorted(KNOWN_WIFI_BANDS)}")
+
+    # 0 = hop every channel. Otherwise a real 802.11 channel — a typo'd one is worse than an error,
+    # it captures nothing at all and looks like a broken radio.
+    chan = config.get("wifi_scan_channel")
+    if isinstance(chan, int) and not isinstance(chan, bool) and chan and not (1 <= chan <= 196):
+        errors.append(f"'wifi_scan_channel' must be 0 (hop) or a valid channel 1-196, got {chan}")
 
     if "portlist" not in config:
         errors.append("missing required key: 'portlist'")

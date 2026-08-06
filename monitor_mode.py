@@ -17,10 +17,18 @@
 # without constructing SharedData (which pulls in PIL / the e-Paper stack).
 import shutil
 import logging
+import threading
 import subprocess
 from logger import Logger
 
 logger = Logger(name="monitor_mode.py", level=logging.INFO)
+
+# One radio, one capture. The scheduled WiFiScan and the web "Scan now" button are two independent
+# consumers now, and they run on different threads: without this, a manual scan started mid-cycle
+# would put the interface down underneath a running airodump and both captures would return
+# nothing. Non-blocking on purpose — the second caller is told to come back, not queued behind a
+# 30s+ capture holding an HTTP request open.
+_radio_lock = threading.Lock()
 
 
 def _run(args, timeout=15):
@@ -122,10 +130,14 @@ def acquire(iface):
     """Put `iface` into monitor mode. Returns (ok, detail). Refuses the uplink interface.
 
     NetworkManager is told to stop managing the interface first, otherwise it races us back to
-    managed mode mid-capture. Only this interface is touched — the uplink keeps its manager."""
+    managed mode mid-capture. Only this interface is touched — the uplink keeps its manager.
+
+    Holds the radio until release(); a second caller is refused rather than queued."""
     problem = check_usable(iface)
     if problem:
         return False, problem
+    if not _radio_lock.acquire(blocking=False):
+        return False, "another Wi-Fi capture is already running — wait for it to finish"
     if shutil.which("nmcli"):
         _run(["nmcli", "device", "set", iface, "managed", "no"])
     for args in (["ip", "link", "set", iface, "down"],
@@ -140,19 +152,20 @@ def acquire(iface):
 
 
 def release(iface):
-    """Return `iface` to managed mode and hand it back to NetworkManager. Best-effort: this runs
-    in a finally-block after a capture, so it never raises."""
+    """Return `iface` to managed mode, hand it back to NetworkManager, and free the radio lock.
+    Best-effort: this runs in a finally-block after a capture, so it never raises. Always the
+    counterpart of a successful acquire() — releasing the lock last means the radio is fully back
+    in managed mode before the next caller can take it."""
     if not iface:
         return
-    for args in (["ip", "link", "set", iface, "down"],
-                 ["iw", "dev", iface, "set", "type", "managed"],
-                 ["ip", "link", "set", iface, "up"]):
-        _run(args)
-    if shutil.which("nmcli"):
-        _run(["nmcli", "device", "set", iface, "managed", "yes"])
-    logger.info(f"{iface} returned to managed mode.")
-
-
-# ponytail: no lock — WiFiScan is the only consumer today. When a second one lands (bettercap
-# monitor mode, deauth, evil twin), the mutex goes here around acquire/release, not at the call
-# sites; that is the whole reason acquisition is funnelled through this module.
+    try:
+        for args in (["ip", "link", "set", iface, "down"],
+                     ["iw", "dev", iface, "set", "type", "managed"],
+                     ["ip", "link", "set", iface, "up"]):
+            _run(args)
+        if shutil.which("nmcli"):
+            _run(["nmcli", "device", "set", iface, "managed", "yes"])
+        logger.info(f"{iface} returned to managed mode.")
+    finally:
+        if _radio_lock.locked():
+            _radio_lock.release()

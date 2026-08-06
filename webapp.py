@@ -134,6 +134,11 @@ def wifi_ifaces():
     return web_utils.wifi_ifaces()
 
 
+@app.post("/wifi_scan_now")
+def wifi_scan_now():
+    return web_utils.wifi_scan_now()
+
+
 @app.post("/wifi_monitor_test")
 async def wifi_monitor_test(request: Request):
     body = await request.json()

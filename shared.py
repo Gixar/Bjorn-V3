@@ -168,6 +168,8 @@ class SharedData:
             "wifi_scan_iface": "",            # monitor-mode radio — MUST NOT be Bjorn's uplink (use a USB dongle)
             "wifi_scan_duration": 30,         # seconds per airodump-ng capture
             "wifi_scan_interval": 900,        # min seconds between Wi-Fi scans
+            "wifi_scan_band": "bg",           # airodump --band: bg = 2.4GHz (its default), a = 5GHz, abg = both
+            "wifi_scan_channel": 0,           # 0 = hop channels; a channel number locks to it (overrides band)
             "telegram_enabled": False,        # auto-send raw target data to Telegram when it changes
             "telegram_bot_token": "",         # Telegram bot token (secret, user-supplied)
             "telegram_chat_id": "",           # Telegram chat/channel id to deliver to

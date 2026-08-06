@@ -3,6 +3,29 @@
 ## [Unreleased]
 
 ### Added
+- **`/wifi`: "Scan now", band selection, and channel lock** — the page could configure a capture but
+  never start one, so testing a new adapter meant waiting out an idle window.
+  - **Scan now** (`POST /wifi_scan_now`) runs one capture immediately, ignoring both
+    `wifi_scan_enabled` and `wifi_scan_interval` — asking for a scan by hand *is* the schedule.
+    Backgrounded like the benchmark, since a capture is 30 s+ and must not hold the HTTP request
+    open; the button disables itself for the capture window and then refreshes the tables.
+  - **`wifi_scan_band`** (`bg` default, `abg`, `a`) → airodump `--band`. This is the setting most
+    likely to be wrong on a dual-band adapter: airodump listens on **2.4 GHz only** unless told
+    otherwise, so every 5 GHz AP was simply absent from the results. Widening it spreads the same
+    capture time over ~3× the channels, so the page says to raise the duration alongside it.
+  - **`wifi_scan_channel`** (`0` = hop) → airodump `-c`. Parks the radio on one channel: much more
+    thorough there, blind everywhere else. Overrides the band, and `config_validation.py` rejects a
+    channel outside 1–196 — a typo'd channel captures nothing and reads as dead hardware.
+  - `WiFiScan.build_cmd()` is a pure static method so the flag logic is testable without a radio;
+    the defaults deliberately emit **no** `--band`/`-c`, rather than restating airodump's own.
+- **Monitor-mode radio lock** (`monitor_mode.py`) — "Scan now" is the second consumer of the single
+  radio that the module's ponytail note anticipated, so the mutex landed where that note said it
+  would: around `acquire()`/`release()`, not at the call sites. Non-blocking on purpose — a caller
+  arriving mid-capture is told to come back rather than queued behind 30 s of airodump with an HTTP
+  request open. Without it, a manual scan started during a scheduled one would `ip link set down`
+  the interface underneath a running capture and both would return nothing. `release()` frees the
+  lock in a `finally`, after the radio is back in managed mode, so the next caller can never take a
+  half-restored interface.
 - **`/help` page — how to use and configure the device** — a static page (no API, no new endpoint
   beyond the route) covering what Bjorn does, a five-step first run, how the scan → act → idle cycle
   decides what runs when, what every page is for, the optional modules and what hardware each needs,

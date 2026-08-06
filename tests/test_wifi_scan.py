@@ -145,6 +145,43 @@ def test_guard_refuses_by_route_not_by_name():
         _restore(saved)
 
 
+def test_build_cmd_defaults_add_no_band_or_channel_flags():
+    """airodump's own default is 2.4GHz hopping — don't pass flags that restate it."""
+    cmd = WiFiScan.build_cmd("/usr/sbin/airodump-ng", "wlan1", "/tmp/scan")
+    assert cmd[:2] == ["/usr/sbin/airodump-ng", "wlan1"]
+    assert "--band" not in cmd and "-c" not in cmd
+    assert "--write-interval" in cmd  # the CSV must stay flushed; we stop the process by timeout
+
+
+def test_build_cmd_band_and_channel():
+    assert "--band" in WiFiScan.build_cmd("a", "wlan1", "/tmp/s", band="abg")
+    cmd = WiFiScan.build_cmd("a", "wlan1", "/tmp/s", band="abg", channel=6)
+    # A locked channel and a band sweep are mutually exclusive — the channel wins, alone.
+    assert cmd[cmd.index("-c") + 1] == "6" and "--band" not in cmd
+
+
+def test_radio_lock_refuses_a_second_capture():
+    """The scheduled scan and the web 'Scan now' button are two consumers of one radio: the second
+    must be refused, not queued, and the lock must survive release() for the next caller."""
+    saved = _guard_with("wlan0", ["wlan0", "wlan1"])
+    saved_run = monitor_mode._run
+    monitor_mode._run = lambda *a, **k: (0, "")  # every ip/iw/nmcli call "succeeds"
+    try:
+        ok, _ = monitor_mode.acquire("wlan1")
+        assert ok, "first acquire must win the radio"
+
+        ok2, detail = monitor_mode.acquire("wlan1")
+        assert not ok2 and "already running" in detail, "second acquire must be refused"
+
+        monitor_mode.release("wlan1")
+        ok3, _ = monitor_mode.acquire("wlan1")
+        assert ok3, "the radio must be acquirable again after release"
+        monitor_mode.release("wlan1")
+    finally:
+        monitor_mode._run = saved_run
+        _restore(saved)
+
+
 def test_guard_rejects_blank_and_unknown_interfaces():
     saved = _guard_with("wlan0", ["wlan0"])
     try:

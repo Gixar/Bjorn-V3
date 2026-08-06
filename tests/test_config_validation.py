@@ -26,6 +26,7 @@ def _good_config():
         "ble_scan_enabled": False, "ble_scan_duration": 10, "ble_scan_interval": 300,
         "smtp_enabled": False, "smtp_port": 587,
         "wifi_scan_enabled": False, "wifi_scan_duration": 30, "wifi_scan_interval": 900,
+        "wifi_scan_band": "bg", "wifi_scan_channel": 0,
         "use_rustscan": False, "rustscan_batch_size": 0, "rustscan_full_port": False,
     }
 
@@ -143,6 +144,22 @@ def test_load_config_does_not_rewrite_a_complete_file():
         sd.load_config()
 
         assert path.stat().st_mtime_ns == before, "a complete config file was rewritten anyway"
+
+
+def test_rejects_unknown_wifi_band():
+    cfg = _good_config()
+    cfg["wifi_scan_band"] = "5ghz"  # airodump wants a/b/g letters, not a friendly name
+    _assert_raises(cfg, "wifi_scan_band")
+
+
+def test_rejects_out_of_range_channel_but_allows_zero():
+    """0 means 'hop every channel'. A typo'd channel captures nothing and looks like dead hardware,
+    so it must fail loudly at startup instead."""
+    cfg = _good_config()
+    cfg["wifi_scan_channel"] = 0
+    assert validate_config(cfg) is None
+    cfg["wifi_scan_channel"] = 250
+    _assert_raises(cfg, "wifi_scan_channel")
 
 
 def _assert_raises(cfg, expected_substr):

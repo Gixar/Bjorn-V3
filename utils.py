@@ -164,6 +164,27 @@ class WebUtils:
                                             for n in monitor_mode.wireless_ifaces()],
                              "uplink": uplink})
 
+    def wifi_scan_now(self):
+        """'Scan now' button: run one capture immediately, ignoring the enabled flag and the
+        interval. Backgrounded like the benchmark — a capture is 30s+ and must not hold the HTTP
+        request open. Overlap is refused by the radio lock in monitor_mode, not here: the scheduled
+        WiFiScan can start at any moment, so a flag on this object would only cover half the race."""
+        iface = (getattr(self.shared_data, "wifi_scan_iface", "") or "").strip()
+        problem = monitor_mode.check_usable(iface)
+        if problem:
+            return _err(problem)
+
+        def _run():
+            try:
+                from actions.wifi_scan import WiFiScan
+                WiFiScan(self.shared_data).execute(force=True)
+            except Exception as e:
+                self.logger.error(f"Manual Wi-Fi scan failed: {e}")
+
+        threading.Thread(target=_run, daemon=True).start()
+        duration = max(10, int(getattr(self.shared_data, "wifi_scan_duration", 30)))
+        return _ok(message=f"Capture started on {iface} (~{duration}s).", payload={"duration": duration})
+
     def wifi_monitor_test(self, iface):
         """'Test monitor mode' button: check the guard and the radio's capability without capturing."""
         problem = monitor_mode.check_usable(iface)

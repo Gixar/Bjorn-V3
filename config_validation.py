@@ -23,6 +23,9 @@ _NONNEG_INT_KEYS = (
     "ble_scan_duration", "ble_scan_interval", "smtp_port",
     "wifi_scan_duration", "wifi_scan_interval", "wifi_scan_channel",
 )
+# Planner knobs that divide or bound a loop: 0 is not a meaningful value for either (standalone_every
+# is a modulus), so they are checked separately from the non-negative keys above.
+_POSITIVE_INT_KEYS = ("planner_max_host_actions", "planner_standalone_every")
 # airodump-ng --band: any combination of a (5GHz) / b / g (both 2.4GHz). Its own default is 2.4-only,
 # so a dual-band adapter sees no 5GHz APs until this says so.
 KNOWN_WIFI_BANDS = ("bg", "abg", "a", "b", "g", "ab", "ag")
@@ -52,6 +55,14 @@ def validate_config(config):
         errors.append("missing required key: 'epd_type'")
     elif epd not in KNOWN_EPD_TYPES:
         errors.append(f"'epd_type' {epd!r} is not one of {sorted(KNOWN_EPD_TYPES)}")
+
+    for key in _POSITIVE_INT_KEYS:
+        if key not in config:
+            errors.append(f"missing required key: {key!r}")
+        elif isinstance(config[key], bool) or not isinstance(config[key], int):
+            errors.append(f"{key!r} must be an integer, got {type(config[key]).__name__}")
+        elif config[key] < 1:
+            errors.append(f"{key!r} must be >= 1, got {config[key]}")
 
     band = config.get("wifi_scan_band")
     if band is None:

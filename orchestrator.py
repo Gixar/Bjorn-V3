@@ -13,6 +13,10 @@
 # - Implementing threading to manage concurrent execution of actions with a semaphore to limit active threads.
 # - Logging events and errors to ensure maintainability and ease of debugging.
 # - Handling graceful degradation by managing retries and idle states when no new targets are found.
+#
+# Work selection lives in action_planner.py: instead of walking the action list in load order and
+# breaking on the first success, every eligible (host, action) pair and standalone action is scored
+# each cycle and the top picks run. See docs/SMART_ORCHESTRATOR.md.
 
 import json
 import importlib
@@ -25,6 +29,7 @@ from actions.nmap_vuln_scanner import NmapVulnScanner
 from init_shared import shared_data
 from logger import Logger
 from retry_policy import retry_wait_remaining
+from action_planner import Planner, load_vuln_ips
 
 logger = Logger(name="orchestrator.py", level=logging.DEBUG)
 
@@ -43,6 +48,7 @@ class Orchestrator:
         actions_loaded = [action.__class__.__name__ for action in self.actions + self.standalone_actions]  # Get the names of the loaded actions
         logger.info(f"Actions loaded: {actions_loaded}")
         self.semaphore = threading.Semaphore(10)  # Limit the number of active threads to 10
+        self.planner = Planner()  # knobs re-read from config each cycle via sync_config()
 
     def load_actions(self):
         """Load all actions from the actions file"""
@@ -109,53 +115,54 @@ class Orchestrator:
         with open(os.path.join(report_dir, f"{self.run_id}.json"), "w") as f:
             json.dump(report, f, indent=2)
 
-    def process_alive_ips(self, current_data):
-        """Process all IPs with alive status set to 1"""
+    def process_alive_ips(self, current_data, idle_boost=0):
+        """Score every eligible unit of work and run this cycle's top picks.
+
+        Replaces a walk over `self.actions` in load order that `break`ed on the first success per
+        host, which meant: the earliest-loaded action always went first regardless of how promising
+        the target was, and a child action only ran if it happened to follow its parent in the same
+        pass. Ranking lives in action_planner.py; this method only executes.
+
+        Note the one behaviour traded away: a parent unlocked *during* this cycle no longer has its
+        child run immediately after it. The child becomes eligible next cycle, where "parent ok"
+        (+55) puts it at the top — one cycle of latency, and cycles with work don't sleep."""
+        self.planner.sync_config(self.shared_data)
+        candidates = self.planner.collect(
+            self.actions, self.standalone_actions, current_data,
+            idle_boost=idle_boost,
+            vuln_ips=load_vuln_ips(self.shared_data.vuln_summary_file),
+        )
+        work = self.planner.select(candidates)
+        if not work:
+            return False
+
         any_action_executed = False
-        action_executed_status = None
-
-        for action in self.actions:
-            for row in current_data:
-                if row["Alive"] != '1':
-                    continue
-                ip, ports = row["IPs"], row["Ports"].split(';')
-                action_key = action.action_name
-
-                if action.b_parent_action is None:
-                    with self.semaphore:
-                        if self.execute_action(action, ip, ports, row, action_key, current_data):
-                            action_executed_status = action_key
-                            any_action_executed = True
-                            self.shared_data.bjornorch_status = action_executed_status
-
-                            for child_action in self.actions:
-                                if child_action.b_parent_action == action_key:
-                                    with self.semaphore:
-                                        if self.execute_action(child_action, ip, ports, row, child_action.action_name, current_data):
-                                            action_executed_status = child_action.action_name
-                                            self.shared_data.bjornorch_status = action_executed_status
-                                            break
-                            break
-
-        for child_action in self.actions:
-            if child_action.b_parent_action:
-                action_key = child_action.action_name
-                for row in current_data:
-                    ip, ports = row["IPs"], row["Ports"].split(';')
-                    with self.semaphore:
-                        if self.execute_action(child_action, ip, ports, row, action_key, current_data):
-                            action_executed_status = child_action.action_name
-                            any_action_executed = True
-                            self.shared_data.bjornorch_status = action_executed_status
-                            break
+        for cand in work:
+            with self.semaphore:
+                self.shared_data.bjornorch_status = cand.action_name
+                self.shared_data.bjornstatustext2 = cand.reason[:40]
+                logger.info(f"Planner chose: {cand.reason} (score={cand.score})")
+                if cand.kind == "standalone":
+                    if self.execute_standalone_action(cand.action, current_data):
+                        any_action_executed = True
+                elif cand.row is not None:
+                    ports = str(cand.row.get("Ports", "") or "").split(';')
+                    if self.execute_action(cand.action, cand.ip, ports, cand.row,
+                                           cand.action_name, current_data):
+                        any_action_executed = True
 
         return any_action_executed
 
 
     def execute_action(self, action, ip, ports, row, action_key, current_data):
-        """Execute an action on a target"""
-        if hasattr(action, 'port') and str(action.port) not in ports:
-            return False
+        """Execute an action on a target.
+
+        The planner pre-checks all of these gates, but they stay here: this is also the manual-attack
+        entry point, and a candidate ranked at the top of the cycle can have been invalidated by an
+        earlier action in the same cycle writing to the same row."""
+        if hasattr(action, 'port') and str(action.port) not in ("0", "None"):
+            if str(action.port) not in ports:
+                return False
 
         # Check parent action status
         if action.b_parent_action:
@@ -164,24 +171,28 @@ class Orchestrator:
                 return False  # Skip child action if parent action has not succeeded
 
         # Skip if the action succeeded recently and is still within its retry-delay window.
-        if 'success' in row[action_key]:
+        status = row.get(action_key, "") or ""
+        if 'success' in status:
             if not self.shared_data.retry_success_actions:
                 return False
-            remaining = retry_wait_remaining(row[action_key], self.shared_data.success_retry_delay)
+            remaining = retry_wait_remaining(status, self.shared_data.success_retry_delay)
             if remaining > 0:
                 logger.warning(f"Skipping action {action.action_name} for {ip}:{action.port} due to success retry delay, retry possible in: {timedelta(seconds=remaining)}")
                 return False
 
         # Skip if the action failed recently and is still within its retry-delay window.
-        if 'failed' in row.get(action_key, ""):
-            remaining = retry_wait_remaining(row[action_key], self.shared_data.failed_retry_delay)
+        if 'failed' in status:
+            remaining = retry_wait_remaining(status, self.shared_data.failed_retry_delay)
             if remaining > 0:
                 logger.warning(f"Skipping action {action.action_name} for {ip}:{action.port} due to failed retry delay, retry possible in: {timedelta(seconds=remaining)}")
                 return False
 
         try:
             logger.info(f"Executing action {action.action_name} for {ip}:{action.port}")
-            self.shared_data.bjornstatustext2 = ip
+            # The planner has already put its reason on the display; only fall back to the bare IP
+            # when nothing set one (e.g. a manual attack from the web UI).
+            if not getattr(self.shared_data, "bjornstatustext2", ""):
+                self.shared_data.bjornstatustext2 = ip
             result = action.execute(ip, str(action.port), row, action_key)
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             if result == 'success':
@@ -273,14 +284,17 @@ class Orchestrator:
             current_data = self.shared_data.read_data()
             any_action_executed = False
             action_retry_pending = False
-            any_action_executed = self.process_alive_ips(current_data)
+            # Consecutive fruitless scans raise the standalone score, so recon that needs no target
+            # (BLE, Wi-Fi, SNMP, reporting) takes over as host work dries up.
+            idle_boost = min(40, self.failed_scans_count * 12)
+            any_action_executed = self.process_alive_ips(current_data, idle_boost=idle_boost)
 
             # P3: one netkb write per cycle here — execute_action no longer writes per action.
             self.shared_data.write_data(current_data)
 
             if not any_action_executed:
                 self.shared_data.bjornorch_status = "IDLE"
-                self.shared_data.bjornstatustext2 = ""
+                self.shared_data.bjornstatustext2 = "thinking..."
                 self.write_run_report()
                 logger.info("No available targets. Running network scan...")
                 if self.network_scanner:
@@ -288,7 +302,8 @@ class Orchestrator:
                     self.network_scanner.scan()
                      # Relire les données mises à jour après le scan
                     current_data = self.shared_data.read_data()
-                    any_action_executed = self.process_alive_ips(current_data)
+                    any_action_executed = self.process_alive_ips(
+                        current_data, idle_boost=min(50, idle_boost + 15))
                     if self.shared_data.scan_vuln_running:
                         current_time = datetime.now()
                         if current_time >= self.last_vuln_scan_time + timedelta(seconds=self.shared_data.scan_vuln_interval):
@@ -332,6 +347,10 @@ class Orchestrator:
                     logger.warning("No network scanner available.")
                 self.failed_scans_count += 1
                 if self.failed_scans_count >= 1:
+                    # Belt and braces: the planner already interleaves standalone actions during
+                    # active cycles, but a fully idle net never reaches a cycle with work to
+                    # interleave into. Every action still gets its own turn here — they self-
+                    # throttle, so a second call in one cycle is a no-op for anything not due.
                     self.run_standalone_actions(current_data)
                     # P3: batch the idle-cycle netkb write — one write for the whole branch
                     # (post-scan action pass + vuln scan + standalone) instead of after every
@@ -346,7 +365,7 @@ class Orchestrator:
                     # choke on the huge file. INFO, not WARNING — "no new targets" is normal.
                     logger.info(f"Scanner found no new targets; idling {self.shared_data.scan_interval}s until next scan.")
                     self.shared_data.bjornorch_status = "IDLE"
-                    self.shared_data.bjornstatustext2 = ""
+                    self.shared_data.bjornstatustext2 = "resting..."
                     while datetime.now() < idle_end_time:
                         if self.shared_data.orchestrator_should_exit:
                             break

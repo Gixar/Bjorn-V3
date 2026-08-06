@@ -3,6 +3,27 @@
 ## [Unreleased]
 
 ### Added
+- **Scored work selection — the orchestrator picks what to do next instead of following load
+  order** (`action_planner.py`, see [`docs/SMART_ORCHESTRATOR.md`](docs/SMART_ORCHESTRATOR.md)).
+  `process_alive_ips` walked `self.actions` in load order and `break`ed on the first success per
+  host, so whichever action loaded first always went first regardless of how promising the target
+  was, and a child action only ran if it happened to follow its parent in the same pass. Now every
+  eligible `(host, action)` pair and standalone action is scored each cycle and the top picks run.
+  - **Signals:** parent already succeeded (+55), never tried (+45), host has known CVEs (+35, read
+    from `vulnerability_summary.csv`), retry due (+20), high-value port (+8…+28), open-port count,
+    minus a small penalty for an action class run in the last six picks.
+  - **Fairness:** up to `planner_max_host_actions` (4) per cycle, **one action class per cycle** so
+    twenty SSH boxes can't fill the window, and a standalone turn every `planner_standalone_every`
+    (3) cycles *while host work remains* — standalone recon previously waited for a fully idle net.
+    `idle_boost` raises standalone priority as host work dries up.
+  - **Why it's shown:** `bjornstatustext2` carries the reason
+    (`StealFilesSSH@192.168.1.10 - parent ok - :22`), idle reads `thinking...` / `resting...`, and
+    the log records `Planner chose: … (score=N)`.
+  - Ranking is pure functions over dicts — no SharedData, netkb or hardware in
+    `tests/test_action_planner.py`. Knobs are re-read every cycle via `sync_config()`, so a change
+    applies without a restart, and validated as >= 1 (`planner_standalone_every` is a modulus).
+  - **Trade-off:** a parent unlocked mid-cycle no longer runs its child in that same cycle; the
+    child tops the next one. Cycles with work don't sleep, so this is one cycle of latency.
 - **`/wifi`: "Scan now", band selection, and channel lock** — the page could configure a capture but
   never start one, so testing a new adapter meant waiting out an idle window.
   - **Scan now** (`POST /wifi_scan_now`) runs one capture immediately, ignoring both

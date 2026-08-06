@@ -27,6 +27,7 @@ def _good_config():
         "smtp_enabled": False, "smtp_port": 587,
         "wifi_scan_enabled": False, "wifi_scan_duration": 30, "wifi_scan_interval": 900,
         "wifi_scan_band": "bg", "wifi_scan_channel": 0,
+        "planner_max_host_actions": 4, "planner_standalone_every": 3,
         "use_rustscan": False, "rustscan_batch_size": 0, "rustscan_full_port": False,
     }
 
@@ -144,6 +145,17 @@ def test_load_config_does_not_rewrite_a_complete_file():
         sd.load_config()
 
         assert path.stat().st_mtime_ns == before, "a complete config file was rewritten anyway"
+
+
+def test_rejects_zero_planner_knobs():
+    """planner_standalone_every is a modulus — 0 divides by zero mid-cycle, and 0 host actions
+    would mean the orchestrator never attacks anything."""
+    cfg = _good_config()
+    cfg["planner_standalone_every"] = 0
+    _assert_raises(cfg, "planner_standalone_every")
+    cfg = _good_config()
+    cfg["planner_max_host_actions"] = 0
+    _assert_raises(cfg, "planner_max_host_actions")
 
 
 def test_rejects_unknown_wifi_band():

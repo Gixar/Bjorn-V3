@@ -1,5 +1,5 @@
-"""Tests for the web page wiring: config keys moved onto their own module pages, and nav
-links that resolve to a real, routable page.
+"""Tests that references resolve: config keys moved onto their own module pages, nav links that
+reach a real routable page, and docs that point at scripts which still exist.
 
 Pure text checks over the source files — no imports, no stubs, no browser. The failure these
 exist to catch is a config key hidden from the generic Config form with no other page able to
@@ -76,6 +76,24 @@ def test_help_page_is_reachable_and_points_at_the_module_pages():
     help_html = (WEB / "help.html").read_text(encoding="utf-8")
     for _prefix, page in hidden_prefixes():
         assert f"/{page}.html" in help_html, f"Help doesn't link to the {page} page"
+
+
+def test_docs_only_reference_scripts_that_exist():
+    """Renaming or merging a script leaves the docs pointing at a file that no longer exists —
+    which is worst for a *diagnostic* script, since the reader is already stuck. Prose that names
+    a retired script ("supersedes X", "replaced X") is fine; a runnable path is not."""
+    runnable = re.compile(r'`?(?:sudo\s+)?(?:bash\s+|\./)?(?:[\w./-]*/)?scripts/([\w.-]+\.(?:sh|py))')
+    missing = []
+    for doc in list(ROOT.glob("*.md")) + list((ROOT / "docs").glob("*.md")) + [WEB / "help.html"]:
+        if doc.name == "CHANGELOG.md":
+            continue  # a historical record; it names scripts as they were at the time
+        for line in doc.read_text(encoding="utf-8").splitlines():
+            if re.search(r"supersed|replaced|renamed|used to be", line, re.I):
+                continue
+            for name in runnable.findall(line):
+                if not (ROOT / "scripts" / name).exists():
+                    missing.append(f"{doc.name}: scripts/{name}")
+    assert not missing, f"docs reference scripts that don't exist: {missing}"
 
 
 if __name__ == "__main__":

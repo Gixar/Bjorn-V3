@@ -20,19 +20,32 @@
 - **Monitoring**: Check open files with `lsof -p $(pgrep -f Bjorn.py) | wc -l`
 - At the moment the logs show periodically this information as (FD : XXX)
 
-## 🩺 Start here: `bjorn_doctor.sh` (central diagnostics)
+## 🩺 Start here: `bjorn_diag.sh` (central diagnostics)
 
-One read-only command gathers everything into a single report — version, hardware (SPI),
-service status, recent errors from **all** log locations, and a map of where every log and
-output file lives. It works even when Bjorn won't start.
+One read-only command gathers everything into a single report — version **and running commit**,
+system health, service and process state, network, hardware (SPI/I2C), which external tools are
+actually installed, a netkb/stats summary, config highlights, recent errors from **all** log
+locations, recent orchestrator activity, and a map of where every log and output file lives. It
+works even when Bjorn won't start.
 
 ```bash
-sudo /home/bjorn/Bjorn/scripts/bjorn_doctor.sh
-# save it to share/attach:
-sudo /home/bjorn/Bjorn/scripts/bjorn_doctor.sh > /tmp/bjorn_report.txt
+sudo /home/bjorn/Bjorn/scripts/bjorn_diag.sh
+# quick pass (skips the long log tails):
+sudo /home/bjorn/Bjorn/scripts/bjorn_diag.sh --short
+# save a timestamped copy under data/output/ to share or attach:
+sudo /home/bjorn/Bjorn/scripts/bjorn_diag.sh --save
 ```
 
-Where Bjorn leaves things (the doctor prints this too):
+Read the top of the report first: it says how many commits behind upstream the checkout is. A
+report from stale code describes a device you have already fixed.
+
+Config values for `token` / `password` / `api_key` / `secret` keys are redacted, so the report is
+safe to paste into an issue. Log tails are printed verbatim — worth a glance before sharing.
+
+> Replaced `bjorn_doctor.sh`, which produced a smaller version of the same report. Two scripts
+> meant two places to update, and the smaller one went stale.
+
+Where Bjorn leaves things (the report prints this too):
 
 | What | Location |
 |------|----------|

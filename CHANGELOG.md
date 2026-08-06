@@ -140,6 +140,15 @@
   an NTP-sync check for the no-RTC clock-jump case, a `grep -c` no-match bug that produced the
   string `"0\n0"` and silently failed every numeric test on it, ANSI colour suppressed when stdout
   isn't a terminal, and a `wait` on the `--save` tee so the report's tail isn't truncated.
+- **`bjorn_doctor.sh` merged into `bjorn_diag.sh` and removed** — the diag reported a strict
+  superset of it, so keeping both meant two places to update and one of them quietly going stale.
+  `bjorn_diag.sh` is now the single "start here" diagnostic (`--short` for a quick pass, `--save`
+  for a timestamped copy) and is committed executable, so `sudo ./scripts/bjorn_diag.sh` works
+  without the `bash` prefix. `README.md`, `TROUBLESHOOTING.md` and the `/help` page repoint to it;
+  `--help` now prints the whole comment header instead of a hardcoded line range that truncated
+  the moment the header grew. A new test fails if any doc references a `scripts/*` file that
+  doesn't exist — the rot that prompted it — while still allowing prose that names a retired
+  script ("supersedes X").
 - **`bjorn_doctor.sh` reports the commit, not just `version.txt`** — a diagnostic pull described a
   device many merged commits behind and nothing in the report said so, because `version.txt` is
   bumped per *release*, not per commit. It now prints the short SHA, date, subject, branch, whether

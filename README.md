@@ -46,7 +46,7 @@ This is a modernized fork of [infinition/Bjorn](https://github.com/infinition/Bj
 - **SD-card protection** — `netkb.csv` is written atomically, so a yanked power plug mid-write can't corrupt it; commanded shutdowns get a flush window.
 - **Loop watchdog** — a `/run` heartbeat lets systemd restart Bjorn if the main loop wedges (not just if it crashes).
 - **Battery awareness (opt-in)** — set `battery_monitor_enabled: true`; with a PiSugar power server, Bjorn shuts down cleanly below `battery_shutdown_percent`. No-op without a battery.
-- **`scripts/bjorn_doctor.sh`** — one read-only command that aggregates version/OS/SPI/`epd_type`, service status, recent errors from every log location, and where each log/loot/output file lives — even when Bjorn won't start (the "start here" step in `TROUBLESHOOTING.md`).
+- **`scripts/bjorn_diag.sh`** — one read-only command that aggregates version **and running commit**, OS/SPI/`epd_type`, service and process state, network, installed external tools, a netkb/stats summary, config highlights (secrets redacted), recent errors from every log location, recent orchestrator activity, and where each log/loot/output file lives — even when Bjorn won't start (the "start here" step in `TROUBLESHOOTING.md`). `--short` for a quick pass, `--save` to write a timestamped copy. *(Supersedes `bjorn_doctor.sh`.)*
 
 **Hardware-found fixes (2.4.1–2.4.2-alpha):**
 - **Watchdog now actually fires** (2.4.1) — the PG-4 heartbeat-age check used unescaped `%s`/`%Y`, which systemd expanded as unit specifiers, so it never restarted a wedged loop. Escaped to `%%s`/`%%Y`.

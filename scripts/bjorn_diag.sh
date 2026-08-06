@@ -1,15 +1,19 @@
 #!/bin/bash
-# bjorn_diag.sh — deep diagnostic report for a Bjorn install (SSH-friendly).
+# bjorn_diag.sh — the diagnostic report for a Bjorn install. Start here when something is wrong.
 #
-# Read-only. Safe to run while Bjorn is up. Works even when the service is down.
-# Collects system health, service/process state, network, e-Paper/SPI, tool
-# availability, netkb/stats summary, config highlights, log errors, and recent
-# orchestrator activity — everything useful to improve or debug the device.
+# Read-only. Safe to run while Bjorn is up, and works when the service is down — which is exactly
+# when you need it. Collects version and commit, system health, service/process state, network,
+# e-Paper/SPI, tool availability, netkb/stats summary, config highlights (secrets redacted), log
+# errors from every location, recent orchestrator activity, and a map of where each file lives.
+#
+# Supersedes bjorn_doctor.sh, which was an earlier, smaller version of the same report — keeping
+# two scripts meant two places to update and one of them silently going stale.
 #
 # Usage:
-#   sudo bash /home/bjorn/Bjorn/scripts/bjorn_diag.sh
-#   sudo bash /home/bjorn/Bjorn/scripts/bjorn_diag.sh | tee /tmp/bjorn_diag.txt
-#   sudo bash /home/bjorn/Bjorn/scripts/bjorn_diag.sh --save   # writes timestamped file under data/output/
+#   sudo /home/bjorn/Bjorn/scripts/bjorn_diag.sh
+#   sudo /home/bjorn/Bjorn/scripts/bjorn_diag.sh --short          # quick pass, skips long log tails
+#   sudo /home/bjorn/Bjorn/scripts/bjorn_diag.sh --save           # timestamped file under data/output/
+#   sudo /home/bjorn/Bjorn/scripts/bjorn_diag.sh | tee /tmp/bjorn_diag.txt
 #
 # Optional flags:
 #   --save          write report to data/output/diag_YYYYMMDD_HHMMSS.txt
@@ -17,6 +21,10 @@
 #   --repo PATH     override Bjorn install path
 #
 # Prefer sudo so journal + install logs + some /proc details are readable.
+#
+# Safe to paste into an issue: config values for token/password/api_key/secret keys are redacted.
+# Log tails are printed verbatim, so glance over them if you have ever run a build that logged
+# secrets (fixed in ec5d50d — saving config used to write the bot token to webapp.py.log).
 
 set -u
 # intentionally NOT set -e — greps with no match must not abort the report
@@ -31,7 +39,9 @@ while [ $# -gt 0 ]; do
         --save)  DO_SAVE=1; shift ;;
         --repo)  REPO_OVERRIDE="${2:-}"; shift 2 ;;
         -h|--help)
-            sed -n '2,25p' "$0"
+            # Print the comment header, whatever its length — a hardcoded line range silently
+            # truncates the usage text the moment the header grows.
+            sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'
             exit 0
             ;;
         *) echo "Unknown flag: $1 (try --help)"; exit 1 ;;

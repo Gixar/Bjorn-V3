@@ -294,16 +294,24 @@
             <div class="card-header">
                 <div>
                     <h2 class="card-title">When something is wrong</h2>
-                    <p class="card-subtitle">Start with the doctor script</p>
+                    <p class="card-subtitle">Start with the diagnostic script</p>
                 </div>
             </div>
             <div class="prose">
                 <p>
-                    <code>sudo ./scripts/bjorn_doctor.sh</code> is read-only and prints version, OS,
-                    SPI state, <code>epd_type</code>, service status, recent errors and where every
-                    file lives — including when Bjorn will not start at all. Details are in
-                    <code>TROUBLESHOOTING.md</code> in the repository.
+                    <code>sudo ./scripts/bjorn_diag.sh</code> is read-only and prints the version
+                    <em>and the running commit</em>, OS, SPI state, <code>epd_type</code>, service
+                    and process state, network, which external tools are installed, a summary of
+                    what has been found, recent errors and where every file lives — including when
+                    Bjorn will not start at all. Add <code>--short</code> for a quick pass or
+                    <code>--save</code> to write a timestamped copy under <code>data/output/</code>.
+                    Details are in <code>TROUBLESHOOTING.md</code> in the repository.
                 </p>
+                <div class="note">
+                    Read the top of the report first — it says how many commits behind the checkout
+                    is. A report from stale code describes a device you may have already fixed.
+                    Config secrets are redacted, so it is safe to paste into an issue.
+                </div>
                 <table>
                     <tr><th>Nothing on the e-Paper screen</th><td>Wrong <code>epd_type</code>. Stop the service first (it holds the GPIO pins), then <code>sudo python3 scripts/epd_test.py --all</code> and set the driver that actually renders.</td></tr>
                     <tr><th>Web UI unreachable</th><td>Confirm the Pi's IP and that the service is running; the UI is on port 8000. If the Pi is plugged into a host over USB, try <code>http://172.20.2.1:8000/</code>.</td></tr>

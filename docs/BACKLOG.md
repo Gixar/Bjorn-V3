@@ -74,9 +74,55 @@ overturns this file's own advice on both:
 **On-Pi verification still needed:** that the dongle enumerates and enters monitor mode, that
 airodump actually captures, and — most importantly — that the uplink guard refuses the onboard radio
 *without* dropping connectivity. Test the guard before enabling the scan.
+**→ First attempt 2026-08-05 blocked on a missing driver — see below.**
+
+## Wave 4 on-Pi verification — 2026-08-05: second radio now present, Bjorn side still untested
+
+Pi Zero 2 W, dongle = TP-Link Archer T2U Nano `2357:011e`, Realtek **RTL8811AU**.
+
+**✅ Driver resolved.** RTL8811AU has no in-tree driver on this image (a mainline gap, not a
+misconfiguration), so USB enumerated the adapter while `iw dev` showed only the onboard `phy#0` and
+`dmesg` had no Realtek line at all. Fixed with the out-of-tree DKMS driver
+`morrownr/8821au-20210708`, which supports monitor mode and injection. `iw dev` now reports
+**`phy#1` / `wlan1`** (`24:2f:d0:d9:b3:71`) alongside the onboard radio.
+
+> **Trap worth remembering for anyone repeating this:** installing `linux-headers-rpi-v7` also
+> *upgrades the kernel* (here 6.12.93 → 6.12.96) and rewrites `kernel7.img`. `install-driver.sh`
+> then builds against the **running** 6.12.93, DKMS's autoinstall hook for 6.12.96 having already
+> fired before the module was registered — so the reboot lands on a kernel with no module and
+> `wlan1` silently doesn't appear. `sudo dkms autoinstall -k $(uname -r)` after the reboot fixes it.
+> It cannot recur: the module is registered with DKMS now, so later kernel upgrades rebuild it.
+> Also note `raspberrypi-kernel-headers` is the wrong (legacy) package on this image — it pulls a
+> 6.1.21 header tree, 193 MB, useless here.
+
+**✅ Guard verified on-Pi, 2026-08-05** — the Wave 4 design decision that mattered most, confirmed
+against a real second radio:
+- `POST /wifi_monitor_test {"iface":"wlan0"}` → **refused**, with the default-route message. The
+  uplink stayed up throughout (the same request path the scan uses, so this exercises
+  `check_usable()` exactly as `acquire()` would).
+- `POST /wifi_monitor_test {"iface":"wlan1"}` → accepted, *"supports monitor mode and is safe to
+  use"*. That answer comes from `iw phy phy1 info`, so it also confirms the out-of-tree RTL8811AU
+  driver really does advertise monitor mode rather than merely loading.
+- `GET /wifi_ifaces` → `[{"wlan1", uplink:false}, {"wlan0", uplink:true}]`, so the dropdown greys
+  out the right radio.
+
+**Still to verify:** `airodump-ng` actually captures into `wifi_aps.csv` / `wifi_clients.csv`, and
+`release()` returns `wlan1` to managed mode afterwards without disturbing `wlan0`.
+
+- **`iw` is present** (`/usr/sbin/iw`), so the guard's binary check passes and
+  `check_usable()` reaches its uplink test rather than short-circuiting on a missing binary. Worth
+  noting because "`iw` not found" is *not* a passing guard result.
+- **Lesson on ordering:** the guard's checks are read-only (`ip route show default`, `iw dev`), so
+  the refusal test costs nothing and is best run *while the second radio is still absent* — a guard
+  bug found then cannot take the uplink with it. Here it was run after the driver landed, which
+  worked out, but the free window had already closed.
+- **Unrelated confirmations from the same pull:** `usb0` still holds `172.20.2.1/24` with
+  `NO-CARRIER` (#68 fix holding across reboots — still needs a plugged-in host for the lease test),
+  and `wlan0` is on `192.168.1.35/24`, SSID `Kiwifi`, channel 2.
 
 **Tier 3 — blocked on hardware, a target, or a live WebUI** (do opportunistically when the Pi is out):
-`rustscan_batch_size` tuning · #176/#155/#122 re-tests · #113 V4 panel · CVE + credential-reuse
+~~RTL8811AU driver for the dongle~~ ✅ done 2026-08-05 (`wlan1` present; `WiFiScan` itself still
+unverified — see the verification section above) · `rustscan_batch_size` tuning · #176/#155/#122 re-tests · #113 V4 panel · CVE + credential-reuse
 end-to-end (need a vulnerable/crackable host) · wpa-sec inject (needs an API key) · usb0 plugged-host
 test · BLE/Telegram on-Pi confirmation · `Thread-1` exception in `epd_test.py` (only if it recurs).
 
@@ -88,6 +134,30 @@ tri-color panel (YAGNI, no panel) · Cortex export (YAGNI, no swarm).
 **Dropped, do not revisit:** GPS tagging and the wardriving map view (PG-6) · `device_type` netkb
 column (two separate-file precedents make it unnecessary) · Cortex `.csv.gz` export · PG-5 plugin
 system (folded into the P3-1 module contract).
+
+## Security review of `b624337` — 2026-08-05 (2 findings, neither fixed yet)
+
+Automated review of the pushed commit. Both are recorded here rather than patched on the spot;
+the first is a real defect in new code and should be Tier 1.
+
+1. **[Tier 1, S] SMTP fallback can deliver cracked credentials — and the mailbox password — over
+   an unencrypted connection.** `telegram_client.py::send_email` treats `SMTPNotSupportedError`
+   from `starttls()` as benign and continues on the plaintext socket (the comment reasons about a
+   LAN relay), then still calls `smtp.login(user, password)` and sends the payload. Two exposures
+   in one path: the report itself, which carries every cracked credential when
+   `telegram_include_creds` is on, and the user's own SMTP password. Telegram is HTTPS-only, so the
+   fallback is strictly weaker than the channel it stands in for — and it is reached exactly when
+   the network is hostile enough to have blocked Telegram. *Fix:* refuse to send when the
+   connection is not encrypted, rather than silently downgrading; if the LAN-relay case is worth
+   keeping, it needs its own explicit opt-in key, not a silent `pass`.
+2. **[Tier 3, M–L] The unauthenticated web UI serves secrets via `/load_config`.** The config
+   endpoint returns the whole JSON, including `telegram_bot_token`, `smtp_password` and
+   `wpasec_api_key`, to anyone who can reach port 8000. True, but **pre-existing and systemic
+   rather than new**: the same server offers Reboot/Shutdown, manual attacks, and pages that list
+   cracked credentials and stolen loot outright, so masking one endpoint fixes nothing. The real
+   item is "the web UI has no authentication at all", which is an M–L project (auth + session +
+   every page), not a patch. *(The Wave 4 `load_config` default-merge did not widen this: unset
+   keys are empty strings, and a key that has ever been saved was already in the file.)*
 
 ## Wave 3 — implemented 2026-08-03 (no hardware required)
 

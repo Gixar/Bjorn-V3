@@ -83,13 +83,28 @@ class Orchestrator:
         try:
             b_class = action["b_class"]
             action_instance = getattr(module, b_class)(self.shared_data)
+
+            # An action the orchestrator cannot call has no business in the work queue.
+            # actions/IDLE.py is a stub with no execute(): it was registered anyway, scored by the
+            # planner as "never tried" on every host, and then raised AttributeError every cycle —
+            # 7 errors and 7 failed netkb marks in a 10-minute run, for something that is not a
+            # real action. Checked at load, so any future stub is simply never registered rather
+            # than failing once per host per cycle.
+            if not callable(getattr(action_instance, "execute", None)):
+                logger.info(f"Skipping {b_class}: no execute() — not a runnable action.")
+                return
+
             action_instance.action_name = b_class
             action_instance.port = action.get("b_port")
             action_instance.b_parent_action = action.get("b_parent")
             # Module-level opt-in flag (part of the b_* contract): actions that call out to the
             # internet are skipped while offline instead of failing once per cycle.
             action_instance.needs_internet = getattr(module, "b_needs_internet", False)
-            if action_instance.port == 0:
+            # None means portless, not "some port". `None == 0` is False, so a b_port of None filed
+            # a portless action under the *host* actions, to be called with an ip and a port it
+            # never had. The manual-attack dropdown already works around this downstream
+            # (`port not in (0, None)`, utils.py); this is the same rule applied at the source.
+            if action_instance.port in (0, None):
                 self.standalone_actions.append(action_instance)
             else:
                 self.actions.append(action_instance)

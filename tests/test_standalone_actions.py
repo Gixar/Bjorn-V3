@@ -86,6 +86,72 @@ def test_online_runs_internet_actions_normally():
     assert report.calls == 1, "skipping must be offline-only, not a permanent gate"
 
 
+# --- loader: what may be registered as an action at all ------------------------------------
+
+class _FakeModule:
+    """Stand-in for an actions/*.py module. b_needs_internet is optional, as in the real ones."""
+    def __init__(self, cls, needs_internet=None):
+        self.Thing = cls
+        if needs_internet is not None:
+            self.b_needs_internet = needs_internet
+
+
+class _Runnable:
+    def __init__(self, shared_data):
+        self.shared_data = shared_data
+
+    def execute(self, *a, **k):
+        return 'success'
+
+
+class _Stub:
+    """actions/IDLE.py: a template with no execute()."""
+    def __init__(self, shared_data):
+        self.shared_data = shared_data
+
+
+def _load(cls, b_port, needs_internet=None):
+    """Drive the real load_action() against a fake actions module.
+
+    Registered in sys.modules rather than monkeypatched, so this file still runs as
+    `python tests/test_standalone_actions.py` (no pytest fixtures).
+    """
+    module = _FakeModule(cls, needs_internet)
+    module.Thing.__name__ = "Thing"
+    sys.modules["actions.thing"] = module
+    fake = types.SimpleNamespace(actions=[], standalone_actions=[], shared_data=object())
+    Orchestrator.load_action(fake, "thing", {"b_class": "Thing", "b_port": b_port})
+    return fake
+
+
+def test_an_action_without_execute_is_never_registered():
+    """The IDLE bug: a stub was queued as a host action, chosen by the planner on every host, and
+    raised AttributeError every cycle — 7 errors and 7 failed netkb marks per 10 minutes."""
+    fake = _load(_Stub, None)
+    assert fake.actions == [] and fake.standalone_actions == []
+
+
+def test_a_none_port_is_portless_not_a_host_action():
+    """`None == 0` is False, so b_port=None used to file a portless action under host actions and
+    call it with an ip and a port it never had."""
+    fake = _load(_Runnable, None)
+    assert len(fake.standalone_actions) == 1
+    assert fake.actions == []
+
+
+def test_a_real_port_still_makes_a_host_action():
+    fake = _load(_Runnable, 22)
+    assert len(fake.actions) == 1
+    assert fake.standalone_actions == []
+
+
+def test_needs_internet_defaults_off():
+    fake = _load(_Runnable, 0)
+    assert fake.standalone_actions[0].needs_internet is False
+    fake = _load(_Runnable, 0, needs_internet=True)
+    assert fake.standalone_actions[0].needs_internet is True
+
+
 def test_disabled_action_no_longer_starves_the_rest():
     """The regression: a disabled BLEScan returns 'success' and used to end the cycle."""
     disabled = FakeAction("BLEScan")          # switched off -> returns success immediately

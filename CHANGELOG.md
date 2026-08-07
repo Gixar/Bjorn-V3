@@ -230,6 +230,19 @@
   the seed DB (vsftpd/openssh/proftpd/unrealircd) even without a CPE.
 
 ### Fixed
+- **A module with no `execute()` is no longer registered as an action** (found in an on-Pi
+  diagnostic, 2026-08-07 — the only ERROR in an otherwise clean run). `actions/IDLE.py` is a
+  template stub: no `execute()`, and `b_port = None`. Because `None == 0` is False it was filed
+  under *host* actions rather than standalone, so the planner scored it "never tried" (+45) against
+  every alive host, ran it, and got `AttributeError: 'IDLE' object has no attribute 'execute'` —
+  **7 errors and 7 failed netkb marks in a 10-minute run**, plus a permanent `IDLE` column of
+  failures in `netkb.csv`, for something that is not an action at all. Two fixes, both at the
+  loader rather than at the symptom:
+  - `load_action()` skips any instance whose `execute` is not callable, logging it once. Any future
+    stub or half-written module is simply never registered.
+  - `b_port` of `None` now classifies as portless (`port in (0, None)`) like `0`. The
+    manual-attack dropdown already had to work around this same `None`-vs-`0` trap downstream
+    (`utils.py`); this applies the rule at the source, where both callers inherit it.
 - **Down interfaces are no longer scanned** (found in an on-Pi diagnostic, 2026-08-06) —
   `get_networks()` took every interface with an IPv4 address, and `netifaces` reports one whether
   or not the link is up. On the Pi the USB gadget `usb0` keeps `172.20.2.1/24` with **no carrier by

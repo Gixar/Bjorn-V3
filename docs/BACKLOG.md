@@ -141,8 +141,9 @@ against a real second radio:
 - `GET /wifi_ifaces` → `[{"wlan1", uplink:false}, {"wlan0", uplink:true}]`, so the dropdown greys
   out the right radio.
 
-**Still to verify:** `airodump-ng` actually captures into `wifi_aps.csv` / `wifi_clients.csv`, and
-`release()` returns `wlan1` to managed mode afterwards without disturbing `wlan0`.
+~~**Still to verify:** `airodump-ng` actually captures into `wifi_aps.csv` / `wifi_clients.csv`, and
+`release()` returns `wlan1` to managed mode afterwards without disturbing `wlan0`.~~
+✅ **Both confirmed 2026-08-07 — Wave 4 is fully verified.** See the sweep below.
 
 - **`iw` is present** (`/usr/sbin/iw`), so the guard's binary check passes and
   `check_usable()` reaches its uplink test rather than short-circuiting on a missing binary. Worth
@@ -156,10 +157,14 @@ against a real second radio:
   and `wlan0` is on `192.168.1.35/24`, SSID `Kiwifi`, channel 2.
 
 **Tier 3 — blocked on hardware, a target, or a live WebUI** (do opportunistically when the Pi is out):
-~~RTL8811AU driver for the dongle~~ ✅ done 2026-08-05 (`wlan1` present; `WiFiScan` itself still
-unverified — see the verification section above) · `rustscan_batch_size` tuning · #176/#155/#122 re-tests · #113 V4 panel · CVE + credential-reuse
-end-to-end (need a vulnerable/crackable host) · wpa-sec inject (needs an API key) · usb0 plugged-host
-test · BLE/Telegram on-Pi confirmation · `Thread-1` exception in `epd_test.py` (only if it recurs).
+~~RTL8811AU driver~~ ✅ 2026-08-05 · ~~`WiFiScan` capture + release~~ ✅ 2026-08-07 ·
+~~`rustscan_batch_size` tuning~~ ✅ 2026-08-07 (auto passed; re-check against a port-rich host) ·
+~~#176/#155/#122 re-tests~~ ✅ 2026-08-07 (#176's GUI *save* path still needs one manual comma edit) ·
+~~BLE on-Pi confirmation~~ ✅ 2026-08-07 · **#113 V4 panel — not testable on this device, it runs
+`epd2in13_V3`** · CVE + credential-reuse end-to-end (need a vulnerable/crackable host) · HTTP
+fingerprint / web templates / SNMP (need a host with those services) · wpa-sec inject (needs an API
+key) · Telegram/SMTP delivery (neither channel configured) · usb0 plugged-host test ·
+`Thread-1` exception in `epd_test.py` (only if it recurs).
 
 **Tier 4 — large / deliberately deferred:** Bettercap (`BETTERCAP_PLAN.md`) → Evil Twin (#8) →
 ESP32 fleet · Bluetooth PAN · BadUSB (a reversal of a past decision, needs a call before code) ·
@@ -170,6 +175,47 @@ tri-color panel (YAGNI, no panel) · Cortex export (YAGNI, no swarm).
 column (two separate-file precedents make it unnecessary) · Cortex `.csv.gz` export · PG-5 plugin
 system (folded into the P3-1 module contract) · **web UI authentication** (decided 2026-08-05 —
 single-user device on an operator-controlled network; see the security-review section above).
+
+## Tier-0 verification sweep — 2026-08-07 (12 PASS, 0 FAIL)
+
+Every "needs the Pi" item run in one pass via `scripts/bjorn_verify.sh` (untracked, one-shot: it
+drives the existing web API rather than re-implementing any action, so it verifies the real code
+path). Unlike `bjorn_diag.sh` it *acts* — real capture, real benchmark.
+
+**✅ Closed — Wave 4 is done, end to end:**
+- **`airodump-ng` captures.** 4 APs / 7 clients into `wifi_aps.csv` / `wifi_clients.csv` from a 30s
+  capture on `wlan1`. The two-tables-in-one-file parser works on real airodump output.
+- **`release()` restores the radio.** `wlan1` back to `type managed`, NetworkManager managing it
+  again (`nmcli state=disconnected`), and the uplink untouched: default route still `wlan0`, web
+  still 200 throughout. The guard also re-refused `wlan0` on the same run.
+- **`rustscan_batch_size` at auto (→1500 on this board) drops nothing.** 7 hosts / 41 ports: nmap
+  54.25s, rustscan 2.01s, **26.94× faster, 3 open ports found by both**. *Caveat kept deliberately:*
+  3 open ports is a thin sample, so this says "auto is not obviously dropping ports", not "auto is
+  proven at scale". Re-run the benchmark against a host with many open ports before treating the
+  batch value as settled.
+- **#155 web server** reachable (200 on :8000). **#122 framebuffer** renders (`/screen.png`, 2.1 KB).
+  **#176 portlist** round-trips from the API as a JSON array — only the GUI *save* path is untested.
+- **BLE recon confirmed on hardware** — `ble_devices.csv` written and fresh.
+- **#68 usb0** still holds `172.20.2.1/24` with `NO-CARRIER` across reboots.
+
+**Newly learned, worth recording:**
+- **This Pi runs `epd2in13_V3`, not the `epd2in13_V4` default — so #113 cannot be diagnosed on this
+  device at all.** The most-reported display bug needs a V4 panel that isn't here; it is not a
+  "check it next time the Pi is out" item, it is blocked on buying hardware.
+- **The deployed tree is not a git checkout**, as designed — `build_info` is the only commit stamp,
+  which is exactly why `e2a22c7` added it. Any script asking "what commit is running" must read it.
+- **Two bugs in the verification script itself, both worth knowing because they produce
+  *confident wrong answers*, not errors:** (1) deriving the repo path from the script's own location
+  breaks the moment the script is `scp`'d to `~` — every CSV read a nonexistent path and reported
+  "feature missing"; now resolved from the systemd unit's `WorkingDirectory`. (2) Python's
+  `csv.writer` emits `\r\n`, so the benchmark's last CSV field carried a CR and bash's `-eq` failed
+  on it — a passing comparison was reported as "no comparable row". Anything parsing Bjorn's CSVs
+  in shell needs `tr -d '\r'`.
+
+**Still open (all "needs a target or a config", none a defect):** HTTP fingerprint / web templates /
+SNMP / credential reuse — no rows, and this LAN offers 3 open ports total across 7 hosts, so there is
+nothing to fingerprint. CVE enrichment has 2 vuln files but no confirmed signature match yet.
+Telegram/SMTP and wpa-sec are unconfigured. usb0 lease still needs a plugged-in host.
 
 ## Security review of `b624337` — 2026-08-05 (2 findings, neither fixed yet)
 

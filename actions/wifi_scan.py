@@ -26,6 +26,7 @@ from shared import SharedData
 from logger import Logger
 from csv_safe import sanitize_row
 import monitor_mode
+import offline_mode
 
 logger = Logger(name="wifi_scan.py", level=logging.INFO)
 
@@ -59,11 +60,22 @@ class WiFiScan:
                 logger.info("airodump-ng not found (install aircrack-ng); skipping Wi-Fi scan.")
                 return 'skipped'
             interval = getattr(self.shared_data, "wifi_scan_interval", 900)
+            if not offline_mode.is_online():
+                # Offline, the survey IS the work — 15 minutes between captures is a cadence tuned
+                # for "don't disturb the real job", and there is no real job right now.
+                interval = getattr(self.shared_data, "wifi_scan_interval_offline", 120) or interval
             now = time.time()
             if not force and interval and (now - self._last_scan) < interval:
                 return 'skipped'  # throttled
 
-            iface = (getattr(self.shared_data, "wifi_scan_iface", "") or "").strip()
+            # Resolved, not read straight from config: with no uplink there is no radio to protect,
+            # so a Bjorn with no dongle falls back to the onboard one rather than skipping recon
+            # entirely. monitor_mode.acquire() still has the final say.
+            configured = (getattr(self.shared_data, "wifi_scan_iface", "") or "").strip()
+            iface = offline_mode.scan_iface(self.shared_data)
+            if iface and iface != configured:
+                logger.info(f"Using {iface} for this capture (configured: {configured or 'none'}, "
+                            f"no uplink to protect).")
             ok, detail = monitor_mode.acquire(iface)
             if not ok:
                 # A refused interface is a configuration error, not a transient failure — say so

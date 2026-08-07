@@ -319,6 +319,103 @@ function toggleDropdown(btn) {
     dd.classList.toggle("show");
 }
 
+/* ---------------------------------------------------------------------------
+ * Files panel — every page can show its own dumps and module logs.
+ *
+ * A page declares <div class="card" data-files-group="wifi"></div> and gets a table of that
+ * group's CSVs and .log files with view + download. The group name is a server-side whitelist key,
+ * never a path, so nothing here can ask for a file the backend didn't offer.
+ * ------------------------------------------------------------------------- */
+function _fmtBytes(n) {
+    if (!n) return "0 B";
+    const units = ["B", "KB", "MB"];
+    let i = 0;
+    while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+    return `${n < 10 && i > 0 ? n.toFixed(1) : Math.round(n)} ${units[i]}`;
+}
+
+function _fmtAge(iso) {
+    if (!iso) return "—";
+    const secs = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+    if (secs < 90) return `${Math.round(secs)}s ago`;
+    if (secs < 5400) return `${Math.round(secs / 60)}m ago`;
+    if (secs < 172800) return `${Math.round(secs / 3600)}h ago`;
+    return `${Math.round(secs / 86400)}d ago`;
+}
+
+async function viewModuleFile(group, key, name) {
+    const host = document.getElementById(`files-view-${group}`);
+    if (!host) return;
+    host.innerHTML = `<p class="card-subtitle">Loading ${escHtml(name)}…</p>`;
+    try {
+        const res = await fetch(`/module_file/${group}/${key}`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.message || "could not read file");
+        const pre = document.createElement("pre");
+        pre.className = "log-view";
+        pre.style.maxHeight = "18rem";
+        pre.style.overflow = "auto";
+        pre.textContent = data.content || "(empty)";
+        host.innerHTML = `<p class="card-subtitle">${escHtml(data.name)}${data.truncated ? " — last 400 lines" : ""}</p>`;
+        host.appendChild(pre);
+    } catch (e) {
+        host.innerHTML = `<p class="card-subtitle">${escHtml(e.message)}</p>`;
+    }
+}
+
+async function renderFilesPanel(container) {
+    const group = container.dataset.filesGroup;
+    if (!group) return;
+    let data;
+    try {
+        const res = await fetch(`/module_files/${group}`);
+        data = await res.json();
+        if (!res.ok) throw new Error(data.message || "unavailable");
+    } catch (e) {
+        container.innerHTML = `<p class="card-subtitle">Files unavailable: ${escHtml(e.message)}</p>`;
+        return;
+    }
+
+    const rows = data.files.map((f) => {
+        const detail = f.exists
+            ? `${f.lines} ${f.name.endsWith(".csv") ? "rows" : "lines"} · ${_fmtBytes(f.size)} · ${_fmtAge(f.modified)}`
+            : "not created yet";
+        // data-attributes + delegation rather than an inline onclick with the filename interpolated
+        // into it: these values are server-whitelisted, but a handler built by string concatenation
+        // is the pattern that stops being safe the day the source of the name changes.
+        const actions = f.exists
+            ? `<button type="button" class="btn btn-ghost" data-view-key="${escHtml(f.key)}">View</button>
+               <a class="btn btn-ghost" href="/module_file/${encodeURIComponent(group)}/${encodeURIComponent(f.key)}?download=1">Download</a>`
+            : "";
+        return `<tr><td>${escHtml(f.label)}</td><td><code>${escHtml(f.name)}</code></td>
+                <td>${escHtml(detail)}</td><td>${actions}</td></tr>`;
+    }).join("");
+
+    container.innerHTML = `
+        <div class="card-header">
+            <div>
+                <h2 class="card-title">Dumps &amp; logs</h2>
+                <p class="card-subtitle">Raw output written by this page's actions</p>
+            </div>
+        </div>
+        <table class="stats-breakdown">
+            <thead><tr><th>What</th><th>File</th><th>State</th><th></th></tr></thead>
+            <tbody>${rows}</tbody>
+        </table>
+        <div id="files-view-${group}"></div>`;
+
+    container.querySelectorAll("[data-view-key]").forEach((btn) => {
+        const file = data.files.find((f) => f.key === btn.dataset.viewKey);
+        btn.addEventListener("click", () => viewModuleFile(group, file.key, file.name));
+    });
+}
+
+function renderAllFilesPanels() {
+    document.querySelectorAll("[data-files-group]").forEach(renderFilesPanel);
+}
+
+document.addEventListener("DOMContentLoaded", renderAllFilesPanels);
+
 // Auto-render nav when DOM is ready (pages can still call renderNav() themselves for custom status).
 document.addEventListener("DOMContentLoaded", () => {
     if (document.getElementById("app-nav") || document.body.dataset.skipNav === "1") {

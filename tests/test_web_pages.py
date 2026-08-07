@@ -96,6 +96,33 @@ def test_docs_only_reference_scripts_that_exist():
     assert not missing, f"docs reference scripts that don't exist: {missing}"
 
 
+def test_files_panel_groups_are_all_reachable():
+    """Every group in the backend whitelist needs a page rendering it, or the dumps it exposes are
+    unreachable — the exact gap this panel was added to close."""
+    utils_py = (ROOT / "utils.py").read_text(encoding="utf-8")
+    block = utils_py.split("def _file_groups")[1].split("def _file_meta")[0]
+    groups = set(re.findall(r'^\s{12}"([a-z_]+)":\s*\[', block, re.M))
+    assert groups, "_file_groups() returned no parseable groups"
+
+    wired = set()
+    for page in WEB.glob("*.html"):
+        wired |= set(re.findall(r'data-files-group="([a-z_]+)"', page.read_text(encoding="utf-8")))
+
+    assert not groups - wired, f"file groups no page shows: {sorted(groups - wired)}"
+    assert not wired - groups, f"pages ask for unknown file groups: {sorted(wired - groups)}"
+
+
+def test_files_endpoint_takes_a_key_not_a_path():
+    """The panel must never accept a filesystem path from the client. A ?path= parameter would put
+    every dump on the device behind one sanitizer being right forever; a whitelist key cannot
+    traverse anywhere because it never becomes a path."""
+    utils_py = (ROOT / "utils.py").read_text(encoding="utf-8")
+    block = utils_py.split("def serve_module_file(")[1].split("def serve_netkb_data_json")[0]
+    assert "os.path.join" not in block, \
+        "serve_module_file builds a path from its arguments — it must only look one up by key"
+    assert "_file_groups()" in block, "serve_module_file bypasses the whitelist"
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

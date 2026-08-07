@@ -50,14 +50,22 @@ function wifiFillConfig(cfg) {
     document.getElementById("wifi-band").value = cfg.wifi_scan_band || "bg";
     document.getElementById("wifi-channel").value =
         cfg.wifi_scan_channel !== undefined ? cfg.wifi_scan_channel : 0;
+    document.getElementById("offline-enabled").checked = cfg.offline_mode_enabled !== false;
+    document.getElementById("offline-wifi-interval").value =
+        cfg.wifi_scan_interval_offline !== undefined ? cfg.wifi_scan_interval_offline : 120;
+    document.getElementById("offline-cycle").value =
+        cfg.offline_cycle_interval !== undefined ? cfg.offline_cycle_interval : 60;
+    document.getElementById("wifi-autojoin").checked = cfg.wifi_autojoin !== false;
+    document.getElementById("wifi-autojoin-open").checked = !!cfg.wifi_autojoin_open;
     wifiLoadIfaces(cfg.wifi_scan_iface || "");
 }
 
 async function wifiSave() {
     const iface = document.getElementById("wifi-iface").value;
+    // No longer a blocking error: with offline recon on, a Bjorn with no dongle still scans (on the
+    // onboard radio, only while there is no uplink). It just won't scan while connected.
     if (document.getElementById("wifi-enabled").checked && !iface) {
-        toast("Pick a monitor-mode interface first", "error");
-        return;
+        toast("No monitor interface picked — Bjorn will only scan while offline", "info");
     }
     const body = {
         wifi_scan_enabled: document.getElementById("wifi-enabled").checked,
@@ -66,6 +74,11 @@ async function wifiSave() {
         wifi_scan_interval: parseInt(document.getElementById("wifi-interval").value, 10) || 0,
         wifi_scan_band: document.getElementById("wifi-band").value,
         wifi_scan_channel: parseInt(document.getElementById("wifi-channel").value, 10) || 0,
+        offline_mode_enabled: document.getElementById("offline-enabled").checked,
+        wifi_scan_interval_offline: parseInt(document.getElementById("offline-wifi-interval").value, 10) || 0,
+        offline_cycle_interval: parseInt(document.getElementById("offline-cycle").value, 10) || 60,
+        wifi_autojoin: document.getElementById("wifi-autojoin").checked,
+        wifi_autojoin_open: document.getElementById("wifi-autojoin-open").checked,
     };
     try {
         await postJson("/save_config", body);

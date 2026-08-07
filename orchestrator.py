@@ -30,6 +30,7 @@ from init_shared import shared_data
 from logger import Logger
 from retry_policy import retry_wait_remaining
 from action_planner import Planner, load_service_hints, load_vuln_ips, plan_idle_seconds
+import offline_mode
 
 logger = Logger(name="orchestrator.py", level=logging.DEBUG)
 
@@ -49,6 +50,8 @@ class Orchestrator:
         logger.info(f"Actions loaded: {actions_loaded}")
         self.semaphore = threading.Semaphore(10)  # Limit the number of active threads to 10
         self.planner = Planner()  # knobs re-read from config each cycle via sync_config()
+        self.offline_since = None  # set on the cycle the uplink disappears, cleared when it returns
+        self.last_autojoin_detail = None  # dedupes the once-a-minute auto-join outcome in the log
 
     def load_actions(self):
         """Load all actions from the actions file"""
@@ -83,6 +86,9 @@ class Orchestrator:
             action_instance.action_name = b_class
             action_instance.port = action.get("b_port")
             action_instance.b_parent_action = action.get("b_parent")
+            # Module-level opt-in flag (part of the b_* contract): actions that call out to the
+            # internet are skipped while offline instead of failing once per cycle.
+            action_instance.needs_internet = getattr(module, "b_needs_internet", False)
             if action_instance.port == 0:
                 self.standalone_actions.append(action_instance)
             else:
@@ -210,7 +216,7 @@ class Orchestrator:
             self._record_result(action.action_name, False, error=e)
             return False
 
-    def run_standalone_actions(self, current_data):
+    def run_standalone_actions(self, current_data, offline=False):
         """Give every standalone action a turn this idle window. Returns the names that ran.
 
         These are recurring recon/reporting jobs that police their own cadence
@@ -220,10 +226,70 @@ class Orchestrator:
         whole cycle and starved every action registered after it."""
         ran = []
         for action in self.standalone_actions:
+            # Offline, a reporting action has nowhere to send and would fail once per cycle — at a
+            # 60s offline cadence that is the log flood the idle-loop fix already had to clean up
+            # once. Skipping is not throttling: the delta/interval logic is untouched, so the first
+            # cycle back online still sends.
+            if offline and getattr(action, "needs_internet", False):
+                continue
             with self.semaphore:
                 self.execute_standalone_action(action, current_data)
                 ran.append(action.action_name)
         return ran
+
+    def run_offline_cycle(self):
+        """Own this cycle when there is no uplink. Returns True if it did.
+
+        With no default route the IP pipeline has nothing to find — netkb is empty and every sweep
+        is a Pi Zero burning cycles on a network it isn't on. The wireless recon, by contrast, works
+        exactly as well offline: that is the whole point of carrying the thing around. So: survey
+        first, then try to get back on a network.
+
+        Order is load-bearing. A capture holds the radio in monitor mode, and nmcli cannot associate
+        such an interface — it fails quietly, which would look like "auto-join doesn't work" rather
+        than "auto-join ran too early". WiFiScan releases in a finally-block, so by the time
+        reconnect() runs the radio is managed again; reconnect() re-checks anyway."""
+        if not getattr(self.shared_data, "offline_mode_enabled", True):
+            return False
+        if offline_mode.is_online():
+            if self.offline_since:
+                logger.info("Uplink is back; resuming normal scanning.")
+                self.offline_since = None
+            return False
+
+        if self.offline_since is None:
+            self.offline_since = datetime.now()
+            logger.info("No uplink — IP scanning paused, running wireless recon instead.")
+        self.shared_data.bjornorch_status = "IDLE"
+        self.shared_data.bjornstatustext2 = "offline · surveying"
+
+        current_data = self.shared_data.read_data()
+        self.run_standalone_actions(current_data, offline=True)  # WiFiScan/BLEScan self-throttle
+        self.shared_data.write_data(current_data)
+
+        if getattr(self.shared_data, "wifi_autojoin", True):
+            self.shared_data.bjornstatustext2 = "offline · reconnecting"
+            ok, detail = offline_mode.reconnect_best(self.shared_data)
+            if ok:
+                logger.success(f"Back online: {detail}")
+                self.offline_since = None
+                self.last_autojoin_detail = None
+                return True
+            # Offline cycles repeat every 60s and this message is usually identical every time
+            # ("nothing joinable in range"). Log a change, not a heartbeat — the per-second idle
+            # notice that wrote 800 KB per window is the cautionary tale here.
+            if detail != self.last_autojoin_detail:
+                logger.info(f"Auto-join: {detail}")
+                self.last_autojoin_detail = detail
+            else:
+                logger.debug(f"Auto-join: {detail}")
+
+        wait = max(15, int(getattr(self.shared_data, "offline_cycle_interval", 60)))
+        self.shared_data.bjornstatustext2 = "offline · resting"
+        deadline = datetime.now() + timedelta(seconds=wait)
+        while datetime.now() < deadline and not self.shared_data.orchestrator_should_exit:
+            time.sleep(1)
+        return True
 
     def execute_standalone_action(self, action, current_data):
         """Execute a standalone action"""
@@ -290,6 +356,8 @@ class Orchestrator:
         self.network_scanner.scan()
         self.shared_data.bjornstatustext2 = ""
         while not self.shared_data.orchestrator_should_exit:
+            if self.run_offline_cycle():
+                continue
             current_data = self.shared_data.read_data()
             any_action_executed = False
             action_retry_pending = False

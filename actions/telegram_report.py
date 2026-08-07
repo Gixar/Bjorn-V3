@@ -17,6 +17,9 @@ b_class = "TelegramReport"
 b_module = "telegram_report"
 b_status = "telegram_report"
 b_port = 0  # standalone action
+# Needs the internet: skipped entirely while Bjorn has no uplink, rather than failing
+# once per offline cycle (see orchestrator.run_offline_cycle).
+b_needs_internet = True
 b_parent = None
 
 

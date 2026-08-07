@@ -3,6 +3,44 @@
 ## [Unreleased]
 
 ### Added
+- **Offline recon mode** (`offline_mode.py`, `offline_mode_enabled` default on) — the orchestrator
+  had no idea whether it was connected to anything: with no network it swept an empty netkb forever
+  on a Pi Zero. Offline is not a fault state, it is the state Bjorn is *carried around* in, and the
+  one where 802.11/BLE recon is the only work that still pays. With no default route it now pauses
+  the IP sweep, runs the wireless recon that needs no target (`wifi_scan_interval_offline`, 120 s
+  instead of 900 s), and tries to rejoin.
+  - **Radio choice** (`pick_scan_iface()`): the configured dongle if present, otherwise any radio
+    that is not the uplink. The onboard chip becomes eligible offline not through a special case
+    but because with no default route *nothing* is the uplink — the safety property is carried
+    entirely by `name != uplink`, which is also why `wifi_scan_iface` may now be left blank.
+  - **Order is load-bearing:** recon first, reconnect second. A capture holds the radio in monitor
+    mode and nmcli cannot associate such an interface — it fails *quietly*, which would read as
+    "auto-join doesn't work" rather than "auto-join ran too early". `reconnect()` re-checks.
+  - **Auto-join** (`wifi_autojoin`, default on): rejoins a saved network that comes back in range.
+    `wifi_autojoin_open` (default **off**) also joins open networks Bjorn has no profile for —
+    associating with someone else's AP is a posture decision, not a connectivity fix. A saved
+    network always beats a stronger open one.
+  - **No new log floods:** offline cycles repeat every 60 s, so actions needing the internet
+    (`TelegramReport`, `WpaSecImport`, flagged with a new `b_needs_internet` module attribute) are
+    skipped rather than failing once per cycle, and the repeating auto-join outcome logs on change
+    instead of every minute. Skipping is not throttling — the delta/interval logic is untouched, so
+    the first cycle back online still sends.
+- **Per-page dumps & logs panel** — each module page now lists its own CSVs and `.log` files with
+  view + download (`/module_files/{group}`, `/module_file/{group}/{key}`; wifi, ble, scan, web,
+  snmp, telegram). Previously `/download_file` was hardcoded to `data_stolen/`, so `wifi_aps.csv`,
+  `ble_devices.csv` and every module log were unreachable from the UI. The endpoint takes a
+  **whitelist key, never a path**: the obvious `?path=` version puts every dump on the device behind
+  one sanitizer being right forever, while a key cannot traverse anywhere because it never becomes a
+  path. A page opts in with one line — `<div class="card" data-files-group="wifi"></div>`.
+- **The e-Paper reports as well as jokes** (`comment_info_ratio`, default 3) — every third comment
+  slot shows live findings instead (`7 raids logged`, `2 keys on my belt`, `No uplink. Reading the
+  air.`). Counters still at zero are left out rather than becoming `0 creds` filler. Same slot, same
+  delay, one ratio knob (0 = jokes only, as before).
+- **74 new comment lines**, including themes for `WiFiScan`, `BLEScan`, `SNMPEnum`,
+  `HTTPFingerprint`, `WebTemplateScan`, `TelegramReport` and `WpaSecImport` — all seven Wave 2–4
+  actions had no theme, so each silently fell back to IDLE and logged a warning per comment.
+  `comments.json.cache` is no longer tracked: a checkout could carry a cache older than the JSON
+  beside it, hiding every newly added line.
 - **Service-aware planner weights** — `load_service_hints()` reads the `Server` / `X-Powered-By` /
   `<title>` that `HTTPFingerprint` already banked and boosts hosts that look like an *appliance*
   rather than a generic web server: NAS +30, camera +28, admin panel +26, router +22, embedded +20,

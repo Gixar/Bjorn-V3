@@ -28,10 +28,11 @@ class FakeAction:
     """Stands in for a standalone action. `result` mimics what the real ones return — note that
     BLEScan/WpaSecImport/TelegramReport all return 'success' when disabled or throttled."""
 
-    def __init__(self, name, result='success'):
+    def __init__(self, name, result='success', needs_internet=False):
         self.action_name = name
         self.result = result
         self.calls = 0
+        self.needs_internet = needs_internet
 
     def execute(self):
         self.calls += 1
@@ -61,6 +62,28 @@ def _run(fake, data):
 
 def _exec(fake, action, data):
     return Orchestrator.execute_standalone_action(fake, action, data)
+
+
+def test_offline_skips_internet_actions_but_runs_the_rest():
+    """Offline, a reporting action has nowhere to send. Skipping beats failing once every 60s —
+    that cadence is how the old idle loop produced 7000 log lines per window."""
+    wifi = FakeAction("WiFiScan")
+    report = FakeAction("TelegramReport", needs_internet=True)
+    fake = _fake_self([wifi, report])
+    data = []
+
+    ran = Orchestrator.run_standalone_actions(fake, data, offline=True)
+
+    assert wifi.calls == 1, "offline recon must still run — it is the only work left"
+    assert report.calls == 0, "TelegramReport ran with no uplink"
+    assert ran == ["WiFiScan"]
+
+
+def test_online_runs_internet_actions_normally():
+    report = FakeAction("TelegramReport", needs_internet=True)
+    fake = _fake_self([report])
+    Orchestrator.run_standalone_actions(fake, [], offline=False)
+    assert report.calls == 1, "skipping must be offline-only, not a permanent gate"
 
 
 def test_disabled_action_no_longer_starves_the_rest():

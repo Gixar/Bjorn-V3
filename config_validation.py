@@ -14,7 +14,8 @@ _BOOL_KEYS = ("manual_mode", "websrv", "debug_mode", "scan_vuln_running",
               "vuln_offline_cve", "use_rustscan", "rustscan_full_port",
               "credential_reuse", "telegram_enabled", "telegram_include_creds",
               "ble_scan_enabled", "smtp_enabled", "wifi_scan_enabled",
-              "adaptive_scan_interval")
+              "adaptive_scan_interval", "offline_mode_enabled", "wifi_autojoin",
+              "wifi_autojoin_open")
 # These must be non-negative integers (JSON bools are excluded — bool is an int subclass).
 _NONNEG_INT_KEYS = (
     "startup_delay", "scan_interval", "scan_vuln_interval",
@@ -23,6 +24,7 @@ _NONNEG_INT_KEYS = (
     "wpasec_interval", "telegram_min_interval",
     "ble_scan_duration", "ble_scan_interval", "smtp_port",
     "wifi_scan_duration", "wifi_scan_interval", "wifi_scan_channel",
+    "wifi_scan_interval_offline", "offline_cycle_interval", "comment_info_ratio",
 )
 # Planner knobs that divide or bound a loop: 0 is not a meaningful value for either (standalone_every
 # is a modulus), so they are checked separately from the non-negative keys above.

@@ -23,6 +23,9 @@ b_class = "WpaSecImport"
 b_module = "wpasec_import"
 b_status = "wpasec_import"
 b_port = 0  # standalone action
+# Needs the internet: skipped entirely while Bjorn has no uplink, rather than failing
+# once per offline cycle (see orchestrator.run_offline_cycle).
+b_needs_internet = True
 
 WPASEC_URL = "https://wpa-sec.stanev.org/?api&dl=1"
 NM_DIR = "/etc/NetworkManager/system-connections"

@@ -27,6 +27,7 @@ import logging
 from datetime import datetime, timezone
 from logger import Logger
 import monitor_mode
+import offline_mode
 from starlette.responses import JSONResponse, HTMLResponse, PlainTextResponse, Response, FileResponse
 from actions.nmap_vuln_scanner import NmapVulnScanner
 import telegram_client
@@ -178,7 +179,9 @@ class WebUtils:
         interval. Backgrounded like the benchmark — a capture is 30s+ and must not hold the HTTP
         request open. Overlap is refused by the radio lock in monitor_mode, not here: the scheduled
         WiFiScan can start at any moment, so a flag on this object would only cover half the race."""
-        iface = (getattr(self.shared_data, "wifi_scan_iface", "") or "").strip()
+        # Same resolver the scheduled action uses, so the button and the loop can never disagree
+        # about which radio is fair game (offline, that includes the onboard one).
+        iface = offline_mode.scan_iface(self.shared_data)
         problem = monitor_mode.check_usable(iface)
         if problem:
             return _err(problem)
@@ -259,6 +262,115 @@ class WebUtils:
         return JSONResponse({
             "running": getattr(self.shared_data, "benchmark_running", False),
             "results": rows[-limit:],
+        })
+
+    # ------------------------------------------------------------------
+    # Per-page dumps & logs — GET /module_files/{group}, GET /module_file/{group}/{key}
+    # ------------------------------------------------------------------
+    def _file_groups(self):
+        """Whitelist of what each page may expose: group -> [(key, label, absolute path)].
+
+        A registry rather than a path parameter on purpose. The obvious version of this endpoint
+        takes ?path= and sanitizes it, and then the security of every dump on the device rests on
+        that sanitizer being right forever. Here the client sends a key, never a path, so directory
+        traversal has nothing to traverse — and adding a file is one line, in one place."""
+        sd = self.shared_data
+        sr = sd.scan_results_dir
+        logs = sd.logsdir
+
+        def csvf(name):
+            return os.path.join(sr, name)
+
+        def logf(name):
+            return os.path.join(logs, name)
+
+        return {
+            "wifi": [
+                ("aps", "Access points (CSV)", csvf("wifi_aps.csv")),
+                ("clients", "Clients (CSV)", csvf("wifi_clients.csv")),
+                ("log", "wifi_scan log", logf("wifi_scan.py.log")),
+                ("monitor", "monitor_mode log", logf("monitor_mode.py.log")),
+                ("offline", "offline_mode log", logf("offline_mode.py.log")),
+            ],
+            "ble": [
+                ("devices", "BLE devices (CSV)", csvf("ble_devices.csv")),
+                ("log", "ble_scan log", logf("ble_scan.py.log")),
+            ],
+            "web": [
+                ("fingerprints", "HTTP fingerprints (CSV)", csvf("http_fingerprints.csv")),
+                ("findings", "Template findings (CSV)", csvf("web_template_findings.csv")),
+                ("fp_log", "http_fingerprint log", logf("http_fingerprint.py.log")),
+                ("tpl_log", "web_template_scan log", logf("web_template_scan.py.log")),
+            ],
+            "snmp": [
+                ("enum", "SNMP enumeration (CSV)", csvf("snmp_enum.csv")),
+                ("log", "snmp_enum log", logf("snmp_enum.py.log")),
+            ],
+            "scan": [
+                ("netkb", "netkb (CSV)", sd.netkbfile),
+                ("livestatus", "Live status (CSV)", sd.livestatusfile),
+                ("benchmark", "Scan engine benchmark (CSV)", os.path.join(sd.datadir,
+                                                                          "scan_engine_benchmark.csv")),
+                ("log", "scanning log", logf("scanning.py.log")),
+                ("orch_log", "orchestrator log", logf("orchestrator.py.log")),
+            ],
+            "telegram": [
+                ("log", "telegram_client log", logf("telegram_client.py.log")),
+                ("report_log", "telegram_report log", logf("telegram_report.py.log")),
+            ],
+        }
+
+    @staticmethod
+    def _file_meta(path):
+        try:
+            st = os.stat(path)
+        except OSError:
+            return {"exists": False, "size": 0, "modified": None, "lines": 0}
+        lines = 0
+        try:
+            with open(path, "rb") as f:
+                lines = sum(1 for _ in f)
+        except OSError:
+            pass
+        return {
+            "exists": True,
+            "size": st.st_size,
+            "modified": datetime.fromtimestamp(st.st_mtime, timezone.utc).isoformat(),
+            # CSVs carry a header row; a "0 rows" file and a missing file are different states and
+            # the panel says which.
+            "lines": max(0, lines - 1) if path.endswith(".csv") else lines,
+        }
+
+    def serve_module_files(self, group):
+        entries = self._file_groups().get(group)
+        if entries is None:
+            return _err(f"unknown file group {group!r}", status_code=404)
+        return JSONResponse({"group": group, "files": [
+            dict(key=key, label=label, name=os.path.basename(path), **self._file_meta(path))
+            for key, label, path in entries
+        ]})
+
+    def serve_module_file(self, group, key, download=False, tail=400):
+        entry = next((e for e in self._file_groups().get(group, []) if e[0] == key), None)
+        if not entry:
+            return _err("unknown file", status_code=404)
+        path = entry[2]
+        if not os.path.isfile(path):
+            return _err("file does not exist yet", status_code=404)
+        if download:
+            return FileResponse(path, filename=os.path.basename(path))
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                lines = f.readlines()
+        except OSError as e:
+            return _err(e)
+        # Tail, not whole file: orchestrator.py.log has been 800 KB before, and the viewer is a
+        # panel on a page, not a log tool.
+        truncated = len(lines) > tail
+        return JSONResponse({
+            "name": os.path.basename(path),
+            "truncated": truncated,
+            "content": "".join(lines[-tail:]),
         })
 
     def serve_netkb_data_json(self):

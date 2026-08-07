@@ -206,6 +206,16 @@ def network_data():
     return web_utils.serve_network_data()
 
 
+@app.get("/module_files/{group}")
+def module_files(group: str):
+    return web_utils.serve_module_files(group)
+
+
+@app.get("/module_file/{group}/{key}")
+def module_file(group: str, key: str, download: int = 0):
+    return web_utils.serve_module_file(group, key, download=bool(download))
+
+
 @app.get("/netkb_data")
 def netkb_data():
     return web_utils.serve_netkb_data()

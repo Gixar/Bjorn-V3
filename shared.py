@@ -136,6 +136,7 @@ class SharedData:
             "screen_delay": 1,
             "comment_delaymin": 15,
             "comment_delaymax": 30,
+            "comment_info_ratio": 3,   # every Nth comment slot shows live findings instead of a joke (0 = jokes only)
             "livestatus_delay": 8,
             "image_display_delaymin": 2,
             "image_display_delaymax": 8,
@@ -173,6 +174,11 @@ class SharedData:
             "wifi_scan_interval": 900,        # min seconds between Wi-Fi scans
             "wifi_scan_band": "bg",           # airodump --band: bg = 2.4GHz (its default), a = 5GHz, abg = both
             "wifi_scan_channel": 0,           # 0 = hop channels; a channel number locks to it (overrides band)
+            "wifi_scan_interval_offline": 120,  # min seconds between Wi-Fi scans while there is NO uplink (survey is the only work left)
+            "offline_mode_enabled": True,     # with no default route: pause IP scanning, run wireless recon, try to rejoin
+            "offline_cycle_interval": 60,     # seconds between offline recon/reconnect cycles
+            "wifi_autojoin": True,            # while offline, rejoin a saved network that comes back in range
+            "wifi_autojoin_open": False,      # ALSO join open networks Bjorn has no profile for — off by default: joining someone's open AP is a posture decision, not a connectivity fix
             "telegram_enabled": False,        # auto-send raw target data to Telegram when it changes
             "telegram_bot_token": "",         # Telegram bot token (secret, user-supplied)
             "telegram_chat_id": "",           # Telegram chat/channel id to deliver to

@@ -133,6 +133,33 @@
                     Locking a channel catches far more on that one channel and nothing anywhere else.
                     Overrides the band setting.
                 </p>
+
+                <h3 class="card-title" style="margin-top:1.5rem">When there is no uplink</h3>
+                <p class="card-subtitle">
+                    With no network to scan, Bjorn pauses the IP sweep and surveys the air instead.
+                    With no dongle it will use the onboard radio for this — safe only because there
+                    is no connection left to lose; the radio carrying an active uplink is never taken.
+                </p>
+                <label class="tg-check">
+                    <input type="checkbox" id="offline-enabled"> Offline recon mode
+                </label>
+                <label class="tg-field">Wi-Fi scan interval while offline (seconds)
+                    <input type="number" id="offline-wifi-interval" min="0" value="120">
+                </label>
+                <label class="tg-field">Offline cycle interval (seconds)
+                    <input type="number" id="offline-cycle" min="15" value="60">
+                </label>
+                <label class="tg-check">
+                    <input type="checkbox" id="wifi-autojoin"> Rejoin saved networks automatically
+                </label>
+                <label class="tg-check">
+                    <input type="checkbox" id="wifi-autojoin-open"> Also join open networks
+                </label>
+                <p class="card-subtitle">
+                    Joining an open network Bjorn has no profile for is a posture decision, not a
+                    connectivity fix — it associates with someone else's AP. Off by default; saved
+                    networks always win over a stronger open one.
+                </p>
             </div>
             <div class="log-toolbar">
                 <button type="button" class="btn" onclick="wifiSave()">Save</button>
@@ -168,6 +195,7 @@
                 <tbody id="wifi-client-body"></tbody>
             </table>
         </div>
+        <div class="card" data-files-group="wifi"></div>
     </main>
 </body>
 </html>

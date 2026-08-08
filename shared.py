@@ -76,6 +76,10 @@ class SharedData:
         self.zombiesdir = os.path.join(self.output_dir, 'zombies')
         self.vulnerabilities_dir = os.path.join(self.output_dir, 'vulnerabilities')
         self.scan_results_dir = os.path.join(self.output_dir, "scan_results")
+        # Handshake Hunter loot (docs/BETTERCAP_PLAN.md Stage C). Derived, not configurable: every
+        # other output path is, and a configurable one is just another path to validate. The dated
+        # subdirectory under raw/ is computed per capture, so it is not a fixed attribute.
+        self.handshakes_dir = os.path.join(self.output_dir, "handshakes")
         # Directories under resourcesdir
         self.picdir = os.path.join(self.resourcesdir, 'images')
         self.fontdir = os.path.join(self.resourcesdir, 'fonts')

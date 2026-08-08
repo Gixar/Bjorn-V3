@@ -261,6 +261,24 @@
   - Bug caught while writing it: `grep -c` prints `0` **and** exits 1 on no-match, so the obvious
     `|| echo 0` appends a second line and every numeric comparison on the result silently fails.
     `bjorn_diag.sh` shipped this exact bug once already.
+- **Handshake Hunter radio + process lifecycle** (`bettercap_pwn.Hunter`, Stage C step C2).
+  `start()` takes the radio as owner `pwn` and spawns bettercap; `stop()` ends the process and
+  gives the radio back. Still nothing calls it automatically — that is C4.
+  - **`stop()`'s success reports the RADIO, not the process.** A bettercap that needed `kill()` is
+    untidy; a radio left in monitor mode is what takes Bjorn off the air. It relies on the
+    `release()` verification added the same day — before that fix, `stop()` could not have told the
+    difference between the two.
+  - **A failed spawn never strands the radio.** `start()` releases in an exception path, so a
+    bettercap that cannot exec does not leave the interface in monitor mode — the fault the
+    2026-08-08 run found in `WiFiScan`, pre-empted here rather than rediscovered.
+  - Handshakes land in `data/output/handshakes/raw/YYYY-MM-DD/`, one PCAP per AP
+    (`wifi.handshakes.aggregate false`): the shape hashcat wants, and a corrupt capture costs one
+    network rather than all of them.
+  - **Two planned artefacts dropped as unnecessary:** the `bjorn-pwn.cap` caplet (the handshake
+    path carries today's date, and a static caplet has no clean way to take one — the statements go
+    on the command line instead) and a second systemd profile (the Stage B unit is the long-lived
+    managed daemon with a poller attached; the hunter's bettercap lives exactly as long as its
+    radio lease).
 - **Handshake Hunter admission guard** (`bettercap_pwn.can_start`, Stage C step C1). Nothing hunts
   yet — this is only the decision about whether hunting may begin, written first because it is the
   safety property the rest depends on.

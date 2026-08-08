@@ -15,14 +15,21 @@
 # trigger it.
 #
 # Pure decision logic over injected state, so every refusal is testable without a radio.
+import os
 import shutil
 import logging
+import subprocess
+from datetime import datetime
 
 import monitor_mode
 import offline_mode
 from logger import Logger
 
 logger = Logger(name="bettercap_pwn.py", level=logging.INFO)
+
+# The owner label this module takes the radio under. Distinct from WiFiScan's "scan" so a blocked
+# consumer can say who is holding it, and so release() refuses a cross-owner hand-back.
+RADIO_OWNER = "pwn"
 
 # Below this many wireless interfaces the hunter never runs. Not a tunable: with a single radio
 # there is no arrangement in which hunting and staying reachable are both possible, so exposing it
@@ -88,6 +95,130 @@ def can_start(shared_data, wireless=None, uplink=None, holder=None, binary=None)
         return False, f"the radio is currently held by {holder} — try again once it is free", ""
 
     return True, f"ready to hunt on {iface}", iface
+
+
+def handshake_dir(shared_data, when=None):
+    """Where this session's captures land: <output>/handshakes/raw/YYYY-MM-DD/. Created on demand.
+
+    Dated because a flat directory of PCAPs is unusable after a week of carrying the thing around,
+    and because "what did I catch on Tuesday" is the question people actually ask of this loot.
+    """
+    base = getattr(shared_data, "handshakes_dir", None) or os.path.join("data", "output", "handshakes")
+    path = os.path.join(base, "raw", (when or datetime.now()).strftime("%Y-%m-%d"))
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def build_cmd(iface, outdir, binary="bettercap"):
+    """The bettercap argv for a hunting session. Pure/testable.
+
+    `-eval` rather than a caplet file: the handshake path contains today's date, and a caplet is a
+    static file with no clean way to take one. Passing the same statements on the command line
+    removes the file, the templating and the question of where it was installed.
+
+    `wifi.handshakes.aggregate false` writes one PCAP per AP instead of a single growing file —
+    per-AP is what hashcat wants, and it means a corrupt capture costs one network, not all of them.
+    """
+    eval_stmts = "; ".join([
+        f"set wifi.handshakes.file {outdir}",
+        "set wifi.handshakes.aggregate false",
+        "wifi.recon on",
+    ])
+    return [binary, "-no-colors", "-iface", iface, "-eval", eval_stmts]
+
+
+class Hunter:
+    """Owns the radio and the bettercap process for one hunting session.
+
+    The two lifetimes are deliberately identical. bettercap here is NOT the systemd unit that
+    Stage B provisions — that one is the long-lived managed-mode daemon, and it must not be
+    reconfigured underneath its own poller. The hunter's process lives exactly as long as its radio
+    lease, which is what makes "stop() puts the radio back" a statement about one object rather
+    than a coordination problem between systemd and a lock.
+    """
+
+    def __init__(self, shared_data, spawn=None):
+        self.shared_data = shared_data
+        self._spawn = spawn or (lambda cmd: subprocess.Popen(
+            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+        self.proc = None
+        self.iface = ""
+        self.started_at = None
+
+    def is_running(self):
+        return self.proc is not None and self.proc.poll() is None
+
+    def start(self):
+        """Begin a session. Returns (ok, detail). Never leaves the radio held on failure."""
+        if self.is_running():
+            return False, f"already hunting on {self.iface}"
+
+        ok, reason, iface = can_start(self.shared_data)
+        if not ok:
+            return False, reason
+
+        got, detail, _why = monitor_mode.acquire(iface, owner=RADIO_OWNER)
+        if not got:
+            return False, detail
+
+        # Everything from here holds the radio, so every failure path must give it back. Without
+        # this the first bettercap that fails to exec would strand the radio in monitor mode — the
+        # exact fault the 2026-08-08 run found in WiFiScan's release path.
+        try:
+            outdir = handshake_dir(self.shared_data)
+            cmd = build_cmd(iface, outdir)
+            self.proc = self._spawn(cmd)
+            self.iface = iface
+            self.started_at = datetime.now()
+            logger.info(f"Hunting on {iface}; handshakes -> {outdir}")
+            return True, f"hunting on {iface}"
+        except Exception as e:
+            monitor_mode.release(iface, owner=RADIO_OWNER)
+            self.proc, self.iface = None, ""
+            logger.error(f"Could not start bettercap: {e}")
+            return False, f"could not start bettercap: {e}"
+
+    def stop(self, timeout=10):
+        """End the session and give the radio back. Returns (ok, detail).
+
+        `ok` reflects the RADIO, not the process: a bettercap that needed killing is untidy, but a
+        radio left in monitor mode is what takes Bjorn off the air. release() verifies the mode
+        itself now, so this reports what actually happened rather than that it tried.
+        """
+        iface = self.iface
+        try:
+            if self.proc is not None and self.proc.poll() is None:
+                self.proc.terminate()
+                try:
+                    self.proc.wait(timeout=timeout)
+                except subprocess.TimeoutExpired:
+                    logger.warning("bettercap ignored SIGTERM; killing it.")
+                    self.proc.kill()
+                    self.proc.wait(timeout=timeout)
+        except Exception as e:                  # noqa: BLE001 - the radio still has to come back
+            logger.error(f"Error stopping bettercap: {e}")
+        finally:
+            self.proc = None
+            self.iface = ""
+            self.started_at = None
+            restored = monitor_mode.release(iface, owner=RADIO_OWNER) if iface else True
+
+        if not iface:
+            return True, "was not running"
+        return (True, f"stopped; {iface} back in managed mode") if restored \
+            else (False, f"stopped, but {iface} is STILL in monitor mode — see monitor_mode log")
+
+    def status(self):
+        """Measured, not remembered: `is_running` polls the process rather than trusting a flag
+        set at start time. A status that cannot report its own failure is the defect this codebase
+        keeps rediscovering."""
+        running = self.is_running()
+        return {
+            "running": running,
+            "iface": self.iface if running else "",
+            "since": self.started_at.isoformat(timespec="seconds") if running and self.started_at else "",
+            "holder": monitor_mode.holder(),
+        }
 
 
 def describe(shared_data):

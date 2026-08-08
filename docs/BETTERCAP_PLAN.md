@@ -200,7 +200,7 @@ happens, because it fixes a real per-cycle error the moment any long-lived consu
 | # | Step | Files | Done when |
 |---|---|---|---|
 | C1 | ✅ **DONE.** `bettercap_pwn.can_start(shared_data)` → `(ok, reason, iface)` + `describe()`. Refuses when fewer than two radios exist, when a *named* radio is absent or is the uplink, when managed-mode Bettercap is on, when bettercap is missing, or when the radio is held. Pure decision logic over injected state. | `bettercap_pwn.py`, `tests/test_bettercap_pwn.py` | Single-radio refusal covered, online **and** offline |
-| C2 | Radio + daemon lifecycle: `start()` takes `monitor_mode.acquire(iface, owner="pwn")`, launches the pwn profile, and `stop()` releases in a `finally` after the radio is back to managed. Handshake output dir derived in `SharedData` (`data/output/handshakes/raw/YYYY-MM-DD/`). | `bettercap_pwn.py`, `shared.py`, caplet `config/bjorn-pwn.cap` | `stop()` leaves `iw dev` reporting `type managed` and `holder()` empty |
+| C2 | ✅ **DONE.** `Hunter.start()/stop()/status()`: takes `monitor_mode.acquire(iface, owner="pwn")`, spawns bettercap, and `stop()` releases in a `finally` after verifying the radio is managed. Output dir derived in `SharedData` (`data/output/handshakes/raw/YYYY-MM-DD/`). | `bettercap_pwn.py`, `shared.py` | `stop()` leaves `iw dev` reporting `type managed` and `holder()` empty |
 | C3 | Handshake watcher: scan the output dir, dedupe by `(BSSID, kind)`, maintain `index.json` (bssid, essid, kind, path, first_seen). Parsing is pure and fixture-tested; no live capture needed. | `bettercap_pwn.py`, `tests/test_bettercap_pwn.py` | Re-running over the same files adds no duplicate entries |
 | C4 | **Offline integration.** `run_offline_cycle()` starts the hunter after wireless recon and **stops it before `reconnect_best()`**, then restarts it if still offline. No new "am I offline" logic anywhere. | `orchestrator.py`, `offline_mode.py` | Auto-join still works with the hunter enabled — the acceptance test that matters most |
 | C5 | Epoch loop: recon → pick targets → assoc/deauth → sleep `bettercap_pwn_epoch`. Rule-based selection only (RSSI floor, unseen-BSSID first, per-BSSID cooldown). | `bettercap_pwn.py` | One epoch runs end to end on the Pi and writes at least one PCAP |
@@ -223,6 +223,25 @@ happens, because it fixes a real per-cycle error the moment any long-lived consu
   is safe) and wrong here: silently hunting on a different radio than the configured one hides the
   mistake. Blank still means "pick one for me". Same precedent `WiFiScan` set for the moved-USB-port
   case.
+
+**C2 notes — two deviations, both simplifications:**
+- **No caplet file, and no systemd unit for the hunter.** The plan called for `config/bjorn-pwn.cap`
+  and a second profile on `bettercap.service`. Both were dropped:
+  - The handshake path contains today's date and a caplet is a static file with no clean way to
+    take one, so the same statements go on the command line via `-eval`. That removes the file, the
+    templating, and the question of where it was installed.
+  - The Stage B systemd unit is the **long-lived managed-mode daemon** with a poller attached to
+    it; reconfiguring it into monitor mode underneath its own poller is a coordination problem with
+    no upside. The hunter spawns its own bettercap whose lifetime is exactly the radio lease, which
+    is what makes "`stop()` puts the radio back" a statement about one object.
+- **`wifi.handshakes.aggregate false`** → one PCAP per AP rather than a single growing file. That
+  is the shape hashcat wants, and it means a corrupt capture costs one network instead of all of
+  them.
+- **`stop()`'s `ok` reports the RADIO, not the process.** A bettercap that needed `kill()` is
+  untidy; a radio left in monitor mode is what takes Bjorn off the air. It leans on the `release()`
+  verification added the same day — before that fix, `stop()` could not have told the difference.
+- Still no config keys and no UI: nothing calls `start()` automatically until C4, and a toggle that
+  starts nothing would be the inert-control problem C1 already avoided.
 
 ### Stage D — visible, downloadable, rewarded (~1–2 sessions)
 

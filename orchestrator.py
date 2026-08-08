@@ -31,6 +31,7 @@ from logger import Logger
 from retry_policy import retry_wait_remaining
 from action_planner import Planner, load_service_hints, load_vuln_ips, plan_idle_seconds
 import offline_mode
+import bettercap_client
 
 logger = Logger(name="orchestrator.py", level=logging.DEBUG)
 
@@ -231,6 +232,21 @@ class Orchestrator:
             self._record_result(action.action_name, False, error=e)
             return False
 
+    def merge_bettercap_hosts(self, current_data):
+        """Fold anything the Bettercap poller has seen into this cycle's netkb rows.
+
+        Called immediately before each write_data, which is what keeps the orchestrator the single
+        writer to netkb: the poller thread only buffers, so there is no second read-modify-write
+        cycle to interleave with this one and silently lose rows."""
+        poller = getattr(self.shared_data, "bettercap_poller", None)
+        if poller is None:
+            return
+        hosts = poller.drain()
+        if not hosts:
+            return
+        added = bettercap_client.merge_into_netkb(current_data, hosts)
+        logger.info(f"Bettercap: {len(hosts)} host(s) from events, {added} new to netkb.")
+
     def run_standalone_actions(self, current_data, offline=False):
         """Give every standalone action a turn this idle window. Returns the names that ran.
 
@@ -280,6 +296,7 @@ class Orchestrator:
 
         current_data = self.shared_data.read_data()
         self.run_standalone_actions(current_data, offline=True)  # WiFiScan/BLEScan self-throttle
+        self.merge_bettercap_hosts(current_data)
         self.shared_data.write_data(current_data)
 
         if getattr(self.shared_data, "wifi_autojoin", True):
@@ -382,6 +399,7 @@ class Orchestrator:
             any_action_executed = self.process_alive_ips(current_data, idle_boost=idle_boost)
 
             # P3: one netkb write per cycle here — execute_action no longer writes per action.
+            self.merge_bettercap_hosts(current_data)
             self.shared_data.write_data(current_data)
 
             if not any_action_executed:
@@ -448,6 +466,7 @@ class Orchestrator:
                     # (post-scan action pass + vuln scan + standalone) instead of after every
                     # action. ponytail: mid-cycle results are lost on a crash, but the actions
                     # just re-run next cycle.
+                    self.merge_bettercap_hosts(current_data)
                     self.shared_data.write_data(current_data)
                     idle_start_time = datetime.now()
                     idle_seconds = self.shared_data.scan_interval

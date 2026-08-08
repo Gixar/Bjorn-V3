@@ -22,6 +22,7 @@ import time
 import sys
 import subprocess
 import battery
+import bettercap_client
 from init_shared import shared_data
 from display import Display, handle_exit_display
 from comment import Commentaireia
@@ -181,6 +182,11 @@ if __name__ == "__main__":
         if shared_data.config["websrv"]:
             logger.info("Starting the web server...")
             web_thread.start()
+
+        # Bettercap poller (docs/BETTERCAP_PLAN.md B2). No-op unless bettercap_enabled, which
+        # defaults false — so an install that never touched the Bettercap page starts no thread
+        # and makes no requests. It only buffers; the orchestrator does the netkb write.
+        shared_data.bettercap_poller = bettercap_client.start_poller(shared_data)
 
         signal.signal(signal.SIGINT, lambda sig, frame: handle_exit(sig, frame, display_thread, bjorn_thread, web_thread))
         signal.signal(signal.SIGTERM, lambda sig, frame: handle_exit(sig, frame, display_thread, bjorn_thread, web_thread))

@@ -139,6 +139,90 @@ def test_no_url_configured_is_handled():
     assert not ok and "bettercap_api_url" in detail
 
 
+def _netkb_row(mac, ip="", ports="", **extra):
+    row = {"MAC Address": mac, "IPs": ip, "Hostnames": "", "Alive": "0", "Ports": ports}
+    row.update(extra)
+    return row
+
+
+def test_merge_adds_new_hosts_and_marks_them_alive():
+    rows = []
+    added = bc.merge_into_netkb(rows, [{"mac": "AA:BB:CC:DD:EE:01", "ip": "10.0.0.5",
+                                        "hostname": "nas", "lost": False}])
+    assert added == 1
+    assert rows[0]["MAC Address"] == "AA:BB:CC:DD:EE:01"
+    assert rows[0]["IPs"] == "10.0.0.5" and rows[0]["Alive"] == "1"
+    assert rows[0]["Ports"] == "", "a bettercap host has no port knowledge"
+
+
+def test_merge_never_clobbers_ports_or_action_columns():
+    """Bettercap knows a host exists. It knows nothing about what has been scanned or attacked on
+    it, so blanking Ports or an action column would throw away the scanner's work."""
+    rows = [_netkb_row("AA:BB:CC:DD:EE:01", ip="10.0.0.5", ports="22;80",
+                       SSHBruteforce="success_20260808_010101")]
+    added = bc.merge_into_netkb(rows, [{"mac": "AA:BB:CC:DD:EE:01", "ip": "10.0.0.5",
+                                        "hostname": "nas", "lost": False}])
+    assert added == 0 and len(rows) == 1
+    assert rows[0]["Ports"] == "22;80"
+    assert rows[0]["SSHBruteforce"] == "success_20260808_010101"
+    assert rows[0]["Hostnames"] == "nas", "an empty hostname should still get filled in"
+
+
+def test_endpoint_lost_does_not_mark_an_existing_host_dead():
+    """Bettercap losing sight of a host and the host being down are different claims. The scanner
+    owns aliveness; a poller overruling it would flap netkb every time ARP went quiet."""
+    rows = [_netkb_row("AA:BB:CC:DD:EE:01", ip="10.0.0.5")]
+    rows[0]["Alive"] = "1"
+    bc.merge_into_netkb(rows, [{"mac": "AA:BB:CC:DD:EE:01", "ip": "10.0.0.5", "lost": True}])
+    assert rows[0]["Alive"] == "1"
+
+
+def test_merge_ignores_the_standalone_row_and_macless_hosts():
+    rows = [_netkb_row("STANDALONE")]
+    added = bc.merge_into_netkb(rows, [{"mac": "STANDALONE", "ip": "x"}, {"mac": "", "ip": "y"}])
+    assert added == 0 and len(rows) == 1
+
+
+class _FakeClient:
+    def __init__(self, batches):
+        self.batches = list(batches)
+
+    def events(self, clear=False):
+        return self.batches.pop(0) if self.batches else (True, [])
+
+
+def test_poller_buffers_and_drain_empties():
+    """The poller never writes netkb — the orchestrator is the single writer, so a second
+    read-modify-write cycle would silently lose rows whenever the two interleaved."""
+    poller = bc.BettercapPoller.__new__(bc.BettercapPoller)
+    poller.shared_data = None
+    poller._buffer, poller._lock = {}, __import__("threading").Lock()
+    poller._schema_reported, poller.polls, poller.errors = True, 0, 0
+    poller.client = _FakeClient([(True, SAMPLE_EVENTS), (True, [])])
+
+    assert poller.poll_once() == 2
+    hosts = poller.drain()
+    assert {h["mac"] for h in hosts} == {"AA:BB:CC:DD:EE:01", "AA:BB:CC:DD:EE:02"}
+    assert poller.drain() == [], "a drained buffer must not replay"
+    assert poller.poll_once() == 0
+
+
+def test_poller_reports_a_daemon_that_does_not_answer():
+    poller = bc.BettercapPoller.__new__(bc.BettercapPoller)
+    poller.shared_data = None
+    poller._buffer, poller._lock = {}, __import__("threading").Lock()
+    poller._schema_reported, poller.polls, poller.errors = True, 0, 0
+    poller.client = _FakeClient([(False, "connection refused")])
+    assert poller.poll_once() == -1 and poller.errors == 1
+
+
+def test_start_poller_is_a_noop_when_disabled():
+    """Off by default has to mean no thread and no requests, not a thread that finds nothing."""
+    from types import SimpleNamespace
+    assert bc.start_poller(SimpleNamespace(bettercap_enabled=False)) is None
+    assert bc.start_poller(SimpleNamespace()) is None
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

@@ -134,7 +134,7 @@ happens, because it fixes a real per-cycle error the moment any long-lived consu
 |---|---|---|---|
 | B0 | ⏳ **BLOCKED ON THE PI — the only step that needs hardware.** `apt install bettercap`; run with `api.rest on`; curl `/api/session` and `/api/events`. **Confirm the event tags and field names** against `bettercap_client.FIELDS` / `HOST_EVENT_TAGS`, and replace `SAMPLE_EVENTS` in the test with a real dump. | — | The test's fixture came off the target box |
 | B1 | ✅ **DONE (pending B0 confirmation).** `BettercapClient(base_url, user, password)`: `session()`, `events(clear)`, `run(cmd)`, `is_reachable()`, and pure `parse_hosts(events)`. No threads, no SharedData. | `bettercap_client.py`, `tests/test_bettercap_client.py` | 8 tests green with no daemon |
-| B2 | Poller thread started in `Bjorn.py` only when `bettercap_enabled`; **batches** events into the existing once-per-cycle netkb write (mirror the P3 discipline — never write per event); stops on the existing stop-flag. | `Bjorn.py`, `bettercap_client.py` | Disabled → thread never starts; enabled → hosts merge by MAC |
+| B2 | ✅ **DONE.** `BettercapPoller` thread started in `Bjorn.py` only when `bettercap_enabled`; buffers hosts, and `orchestrator.merge_bettercap_hosts()` folds them in immediately before each netkb write. | `Bjorn.py`, `bettercap_client.py`, `orchestrator.py` | Disabled → no thread, no requests; enabled → hosts merge by MAC |
 | B3 | ✅ **DONE.** Config keys + validation, incl. the **string-key validation** `config_validation.py` did not have, and a URL check on `bettercap_api_url`. | `shared.py`, `config_validation.py`, `tests/test_config_validation.py` | Defaults keep everything off; a missing key fails fast |
 | B4 | ✅ **DONE.** Web panel: `web/bettercap.html` + `web/scripts/bettercap.js`, `bettercap` in `_PAGES`, nav entry, `bettercap_` in `PAGE_OWNED_KEYS`, `GET /bettercap_status`, a `bettercap` file group, and Help-page entries. Password masked with the existing reveal control. | `webapp.py`, `utils.py`, `web/*`, `web/scripts/common.js` | `test_every_hidden_key_is_settable_on_its_page` passes |
 | B5 | ✅ **DONE.** Installer: optional block — `apt install bettercap`, write `bettercap.service` with a **generated** password bound to `127.0.0.1`, land it in both unit and config. Written but **never enabled**. Non-fatal if unavailable. Teardown in `uninstall_bjorn.sh`. | `install_bjorn.sh`, `uninstall_bjorn.sh` | `--dry-run` reports presence; a re-run keeps existing credentials |
@@ -156,6 +156,24 @@ happens, because it fixes a real per-cycle error the moment any long-lived consu
 - `bettercap_api_url` is validated as a real http(s) URL, and — only when `bettercap_enabled` —
   must be loopback. It is where Basic-Auth credentials get sent; off-device is a legitimate setup
   but never an acceptable typo.
+
+**B2 notes:**
+- **The poller does not write netkb.** The orchestrator is the single writer (the P3/P5 discipline:
+  one batched write per cycle, lockless *because* there is exactly one writer). A second writer
+  would not corrupt the file — `write_data` is atomic — but it would silently lose rows whenever the
+  two read-modify-write cycles interleaved. So the poller buffers into a dict keyed by MAC, and
+  `merge_bettercap_hosts()` drains it immediately before each of the three `write_data` calls.
+- **Merge rules, both about not fighting the scanner:** an existing MAC keeps its `Ports` and every
+  action column (bettercap knows a host *exists*; it knows nothing about what has been scanned or
+  attacked on it), and `endpoint.lost` never marks a host dead (losing sight of a host and the host
+  being down are different claims, and the scanner owns the second one).
+- **B0 is now something the device does for itself.** On the first non-empty poll the poller logs
+  the distinct event tags it saw, and warns loudly if events arrived but produced *no* hosts —
+  which is exactly the signature of a wrong `FIELDS`/`HOST_EVENT_TAGS` mapping. The failure mode
+  this replaces is silence: events flowing, zero hosts, nothing logged, indistinguishable from an
+  idle network. A manual curl spike is still welcome, but no longer the only way to find out.
+- Poll interval is a fixed 10s constant, not a config key: it is one localhost GET, and the Pi Zero
+  load risk is handled by batching the *write*, not by polling less often.
 
 **B4/B5 notes:**
 - **`install_bettercap` runs from `setup_services` (step 7), not `install_dependencies` (step 2)**,

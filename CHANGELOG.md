@@ -261,6 +261,22 @@
   - Bug caught while writing it: `grep -c` prints `0` **and** exits 1 on no-match, so the obvious
     `|| echo 0` appends a second line and every numeric comparison on the result silently fails.
     `bjorn_diag.sh` shipped this exact bug once already.
+- **Bettercap event poller — Stage B is complete** (`BettercapPoller`, step B2). Off unless
+  `bettercap_enabled`: no thread is started and no request is made on a default install.
+  - **It does not write netkb.** The orchestrator is the single writer (that discipline is lockless
+    *because* there is exactly one), so the poller buffers hosts by MAC and
+    `merge_bettercap_hosts()` drains it immediately before each `write_data`. A second writer
+    wouldn't corrupt the file — `write_data` is atomic — but it would silently lose rows whenever
+    the two read-modify-write cycles interleaved.
+  - **Merge rules, both about not fighting the scanner:** an existing MAC keeps its `Ports` and
+    every action column (bettercap knows a host *exists*, not what has been scanned or attacked on
+    it), and `endpoint.lost` never marks a host dead — losing sight of a host and the host being
+    down are different claims, and the scanner owns the second one.
+  - **B0 is now self-reporting.** On its first non-empty poll the poller logs the distinct event
+    tags bettercap actually sent, and warns loudly when events arrive but produce *no* hosts — the
+    exact signature of a wrong `FIELDS` mapping for this bettercap version. The failure mode it
+    replaces is silence: events flowing, zero hosts, nothing logged, indistinguishable from an idle
+    network.
 - **Bettercap web panel + installer provisioning** (Stage B steps B4/B5). Still inert: the daemon is
   installed and configured but **never enabled**, and nothing polls it until B2.
   - New `/bettercap` page — enable switch, API URL/user/password (masked, with the existing reveal

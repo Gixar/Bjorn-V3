@@ -199,11 +199,30 @@ happens, because it fixes a real per-cycle error the moment any long-lived consu
 
 | # | Step | Files | Done when |
 |---|---|---|---|
-| C1 | `bettercap_pwn.py` controller skeleton: `can_start(shared_data)` → `(ok, reason)`, `start()`, `stop()`, `status()`. **`can_start` refuses when fewer than two wireless interfaces exist**, when the only free radio is the uplink, or when managed-mode Bettercap is active. Pure guard logic, testable without hardware. | `bettercap_pwn.py`, `tests/test_bettercap_pwn.py` | Single-radio refusal is covered by a test |
+| C1 | ✅ **DONE.** `bettercap_pwn.can_start(shared_data)` → `(ok, reason, iface)` + `describe()`. Refuses when fewer than two radios exist, when a *named* radio is absent or is the uplink, when managed-mode Bettercap is on, when bettercap is missing, or when the radio is held. Pure decision logic over injected state. | `bettercap_pwn.py`, `tests/test_bettercap_pwn.py` | Single-radio refusal covered, online **and** offline |
 | C2 | Radio + daemon lifecycle: `start()` takes `monitor_mode.acquire(iface, owner="pwn")`, launches the pwn profile, and `stop()` releases in a `finally` after the radio is back to managed. Handshake output dir derived in `SharedData` (`data/output/handshakes/raw/YYYY-MM-DD/`). | `bettercap_pwn.py`, `shared.py`, caplet `config/bjorn-pwn.cap` | `stop()` leaves `iw dev` reporting `type managed` and `holder()` empty |
 | C3 | Handshake watcher: scan the output dir, dedupe by `(BSSID, kind)`, maintain `index.json` (bssid, essid, kind, path, first_seen). Parsing is pure and fixture-tested; no live capture needed. | `bettercap_pwn.py`, `tests/test_bettercap_pwn.py` | Re-running over the same files adds no duplicate entries |
 | C4 | **Offline integration.** `run_offline_cycle()` starts the hunter after wireless recon and **stops it before `reconnect_best()`**, then restarts it if still offline. No new "am I offline" logic anywhere. | `orchestrator.py`, `offline_mode.py` | Auto-join still works with the hunter enabled — the acceptance test that matters most |
 | C5 | Epoch loop: recon → pick targets → assoc/deauth → sleep `bettercap_pwn_epoch`. Rule-based selection only (RSSI floor, unseen-BSSID first, per-BSSID cooldown). | `bettercap_pwn.py` | One epoch runs end to end on the Pi and writes at least one PCAP |
+
+**C1 notes:**
+- **Returns `(ok, reason, iface)`, not `(ok, reason)`** as this file first specified — the caller
+  needs the radio the decision was made about, and the 3-tuple matches `monitor_mode.acquire()`,
+  which is already the house shape for "did it work, why not, and what".
+- **No `start()`/`stop()` stub.** A `start()` that returned success without starting anything would
+  be the fourth instance of this codebase's recurring defect — a status generated rather than
+  measured (`WiFiScan: success=4`; the skipped-scan reported as success; `release()` claiming a
+  radio came back). The lifecycle lands in C2, with the thing it reports on.
+- **The `bettercap_pwn_*` config keys are deferred to C2/C5, deliberately.** `can_start` reads its
+  two via `getattr` defaults, and `tests/test_web_pages.py` correctly refused nine keys that the
+  `bettercap_` prefix hides from the generic config form but that no page offers yet: a key hidden
+  from one UI and absent from the other is unreachable. Each key now lands with the code that reads
+  it and the field that sets it.
+- **A named radio is never routed around.** `offline_mode.pick_scan_iface` deliberately falls back
+  to any other non-uplink radio, which is right for the scheduled capture (offline, take whatever
+  is safe) and wrong here: silently hunting on a different radio than the configured one hides the
+  mistake. Blank still means "pick one for me". Same precedent `WiFiScan` set for the moved-USB-port
+  case.
 
 ### Stage D — visible, downloadable, rewarded (~1–2 sessions)
 

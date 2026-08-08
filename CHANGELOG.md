@@ -261,6 +261,20 @@
   - Bug caught while writing it: `grep -c` prints `0` **and** exits 1 on no-match, so the obvious
     `|| echo 0` appends a second line and every numeric comparison on the result silently fails.
     `bjorn_diag.sh` shipped this exact bug once already.
+- **Handshake Hunter admission guard** (`bettercap_pwn.can_start`, Stage C step C1). Nothing hunts
+  yet — this is only the decision about whether hunting may begin, written first because it is the
+  safety property the rest depends on.
+  - **The refusal that matters: fewer than two radios.** `offline_mode` warns that nmcli cannot
+    associate an interface still in monitor mode and that it fails *quietly*, so a hunter holding
+    the only usable radio doesn't merely fail to reconnect — Bjorn stays offline forever and never
+    delivers the handshakes it just captured. Keyed on how many radios *exist*, not on which is the
+    uplink, because offline there is no uplink and that is exactly when a single-radio device would
+    give away its only way back.
+  - Also refuses managed-mode Bettercap running concurrently (one profile at a time), a missing
+    bettercap binary, a radio another consumer holds, and a *named* radio that is absent or is the
+    uplink — the last one deliberately not routed around, since silently hunting on a different
+    radio than the configured one hides the mistake.
+  - Pure decision logic over injected state: 10 tests, no radio, no daemon, no Pi.
 - **Bettercap event poller — Stage B is complete** (`BettercapPoller`, step B2). Off unless
   `bettercap_enabled`: no thread is started and no request is made on a default install.
   - **It does not write netkb.** The orchestrator is the single writer (that discipline is lockless

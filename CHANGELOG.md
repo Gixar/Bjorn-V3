@@ -167,6 +167,24 @@
   a Pi Zero. Fails **open** — no `match_server`, or no known Server header, still fires the template
   (a missed finding is worse than a spare request). `apache-status` is gated to `["apache"]`.
 
+### Fixed
+- **`apt install bettercap` left a root daemon enabled at boot** (found on-Pi 2026-08-08 by the
+  verification run — the single FAIL in an otherwise-green sweep). Debian's debhelper enables
+  **and starts** a packaged service at install time; `install_bettercap` never called
+  `systemctl enable`, so nothing in Bjorn's code suggested the unit would be active. Result: a
+  bettercap process with a REST API running at every boot, on a device carried onto other people's
+  networks, with Bjorn not talking to it at all (`bettercap_enabled` defaults false). Now
+  `systemctl disable --now bettercap` runs unconditionally after the apt step — before the
+  already-provisioned early return, so it also repairs an install that already went out.
+  **On an existing install, run `sudo systemctl disable --now bettercap` now.**
+- **`bjorn_verify` skipped the Wi-Fi capture and the Stage A radio test when `wifi_scan_iface` was
+  blank** — while Bjorn itself would have captured happily, because `offline_mode.pick_scan_iface`
+  falls back to any non-uplink radio. The verifier was more pessimistic than the code it verifies,
+  which is its own kind of wrong answer: on the 2026-08-08 run it skipped the *one* check that most
+  needed running. `pick_monitor_iface()` now mirrors the fallback, and says which radio it picked
+  and why. A configured radio that is missing or is the uplink still refuses rather than falling
+  back silently.
+
 ### Added
 - **The verification script is now Python** (`scripts/bjorn_verify.py`, replacing the shell
   version). The reason is narrow and evidenced: **every bug this script has ever had was a silent

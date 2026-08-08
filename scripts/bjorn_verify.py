@@ -125,6 +125,31 @@ def engine_from_log(log_text):
     return engine
 
 
+def pick_monitor_iface(payload):
+    """(iface, why) the capture would actually use, from a /wifi_ifaces response. Pure/testable.
+
+    Mirrors offline_mode.pick_scan_iface: the configured radio if it is present and is not the
+    uplink, else ANY other non-uplink radio. Reading only `configured` — as the shell version did —
+    made the script more pessimistic than the code it verifies: on a box with wifi_scan_iface blank
+    and a dongle plugged in, Bjorn captures happily while the verifier skipped the capture *and*
+    the Stage A radio-ownership test, which is the one that most needed running.
+    """
+    if not isinstance(payload, dict):
+        return "", "no /wifi_ifaces response"
+    interfaces = payload.get("interfaces") or []
+    names = {i.get("name"): bool(i.get("uplink")) for i in interfaces if isinstance(i, dict)}
+    configured = (payload.get("configured") or "").strip()
+    if configured:
+        if configured not in names:
+            return "", f"configured radio {configured} is not present"
+        if names[configured]:
+            return "", f"configured radio {configured} is the uplink"
+        return configured, "configured"
+    spare = next((n for n, uplink in names.items() if not uplink), "")
+    return (spare, "unconfigured — Bjorn falls back to any non-uplink radio") if spare \
+        else ("", "no non-uplink radio present")
+
+
 def file_group_count(payload):
     """Entries in a /module_files/<group> response, tolerating both shapes and an error body."""
     if isinstance(payload, dict):
@@ -326,20 +351,20 @@ class Verifier:
         self.r.section("1. Wi-Fi recon end-to-end (Wave 4)")
         self.uplink = parse_default_route(run(["ip", "route", "show", "default"])[1])
         ifaces = self.api.get("/wifi_ifaces") or {}
-        self.mon_iface = ifaces.get("configured") or ""
+        self.mon_iface, why = pick_monitor_iface(ifaces)
         self.r.info("uplink (default route)", self.uplink or "none")
         self.r.info("wireless interfaces", json.dumps(ifaces.get("interfaces", [])))
-        self.r.info("configured monitor iface", self.mon_iface or "<unset>")
+        self.r.info("configured monitor iface", ifaces.get("configured") or "<unset>")
+        self.r.info("radio the capture will use", f"{self.mon_iface or 'none'} ({why})")
 
         if not self.mon_iface:
-            self.r.verdict(SKIP, "Wi-Fi capture", "wifi_scan_iface unset - set it on /wifi first")
+            if ifaces.get("configured"):
+                self.r.verdict(FAIL, "Wi-Fi radio present",
+                               f"{why} (dongle moved USB port? the INNER micro-USB is the data one)")
+            else:
+                self.r.verdict(SKIP, "Wi-Fi capture", why)
             return
-        if ifaces.get("configured_missing"):
-            self.r.verdict(FAIL, "Wi-Fi radio present",
-                           f"{self.mon_iface} configured but absent (dongle moved USB port? the "
-                           f"INNER micro-USB is the data one)")
-            return
-        self.r.verdict(PASS, "Wi-Fi radio present", f"{self.mon_iface} enumerated")
+        self.r.verdict(PASS, "Wi-Fi radio present", f"{self.mon_iface} enumerated ({why})")
 
         # Guard regression - must REFUSE the uplink. Read-only, so it costs nothing to check, and
         # a guard bug found here cannot take the uplink with it.

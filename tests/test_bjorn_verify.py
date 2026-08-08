@@ -109,6 +109,27 @@ def test_engine_from_log_reads_the_last_line():
     assert bv.engine_from_log("nothing relevant\n") == ""
 
 
+def test_pick_monitor_iface_falls_back_like_the_code_it_verifies():
+    """On the 2026-08-08 Pi run this skipped the capture AND the Stage A radio test because
+    wifi_scan_iface was blank — while Bjorn itself would have used wlan1 quite happily. A verifier
+    that is more pessimistic than the code under-reports, which is its own kind of wrong answer."""
+    both = {"interfaces": [{"name": "wlan1", "uplink": False}, {"name": "wlan0", "uplink": True}],
+            "configured": ""}
+    iface, why = bv.pick_monitor_iface(both)
+    assert iface == "wlan1" and "unconfigured" in why
+
+    configured = dict(both, configured="wlan1")
+    assert bv.pick_monitor_iface(configured) == ("wlan1", "configured")
+
+    # a configured radio that is the uplink, or absent, must NOT silently fall back
+    assert bv.pick_monitor_iface(dict(both, configured="wlan0"))[0] == ""
+    assert bv.pick_monitor_iface(dict(both, configured="wlan7"))[0] == ""
+    # only the uplink present -> nothing usable
+    assert bv.pick_monitor_iface({"interfaces": [{"name": "wlan0", "uplink": True}],
+                                  "configured": ""})[0] == ""
+    assert bv.pick_monitor_iface(None)[0] == ""
+
+
 def test_file_group_count_tolerates_both_shapes_and_errors():
     assert bv.file_group_count({"group": "wifi", "files": [{"key": "a"}, {"key": "b"}]}) == 2
     assert bv.file_group_count([{"key": "a"}]) == 1

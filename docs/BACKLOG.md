@@ -235,6 +235,45 @@ SNMP / credential reuse — no rows, and this LAN offers 3 open ports total acro
 nothing to fingerprint. CVE enrichment has 2 vuln files but no confirmed signature match yet.
 Telegram/SMTP and wpa-sec are unconfigured. usb0 lease still needs a plugged-in host.
 
+## On-Pi verification sweep — 2026-08-08 (22 PASS, 1 FAIL, 3 WARN, 5 SKIP)
+
+First hardware run of everything merged since the 2026-08-07 sweep: the collect-by-default flips,
+Stage A radio ownership, the Bettercap plumbing, and the whole never-yet-run Unreleased wave.
+
+**✅ Confirmed on hardware:**
+- **The three default flips all took.** `ble_scan_enabled` / `wifi_scan_enabled` / `use_rustscan`
+  all true on a real saved config, `ble_scan_interval_offline=60`, and — the check that matters —
+  the log line says `Port discovery engine: rustscan`, so the binary was actually found rather than
+  the toggle merely being on. **BLE recon wrote `ble_devices.csv` unprompted** (1 device, 5m old),
+  which is the pocket-carry behaviour the flip existed for.
+- **RustScan-as-default holds up:** 8 hosts / 41 ports, nmap 48.39s vs rustscan 1.65s = **29.33×**,
+  4 open ports found by both. *Same caveat as before:* 4 ports is still a thin sample.
+- **The Unreleased wave works.** Planner picking work by score (`WpaSecImport - never ran
+  (score=48)`), 4 idle lines total (the P1 flood wrote 7000+), offline mode had run, all seven
+  per-page file groups resolve, `/help` serves, no comment-theme misses.
+- **Bettercap plumbing:** panel reachable, generated 24-char password in sync between the unit and
+  the config. `usb0`, `/screen.png`, `#176` portlist all still good.
+
+**❌ The one FAIL — a real bug, fixed:** `apt install bettercap` **enabled and started** the unit.
+debhelper does that for packaged services; `install_bettercap` never called `systemctl enable`, so
+nothing in Bjorn's own code hinted the daemon would be live. A root process with a REST API running
+at every boot, on a carried device, that Bjorn wasn't even talking to. Installer now disables it
+unconditionally. **Existing installs: `sudo systemctl disable --now bettercap`.**
+
+**⚠️ A gap in the verifier itself, also fixed:** `wifi_scan_iface` is blank on this device, so the
+script skipped the capture *and* the Stage A radio-ownership test — while Bjorn would have used
+`wlan1` fine, since `pick_scan_iface` falls back to any non-uplink radio. **The verifier was more
+pessimistic than the code it verifies, and skipped the one check that most needed running.** Now
+mirrors the fallback. Re-run to actually close Stage A.
+
+**Still open (needs a target or a plug, none a defect):** web templates / SNMP / credential reuse ·
+usb0 lease · Telegram/SMTP unconfigured · `#113` still undiagnosable (this panel is `epd2in13_V3`).
+
+**Worth recording:** `build_info` says `source_commit=unknown (source was not a git checkout)`, so
+the sweep could not name the commit under test. The installer's stamp only resolves when it is run
+from a git checkout — worth fixing before the next sweep, since "which code produced this report"
+is exactly what a report is for.
+
 ## Security review of `b624337` — 2026-08-05 (2 findings, neither fixed yet)
 
 Automated review of the pushed commit. Both are recorded here rather than patched on the spot;

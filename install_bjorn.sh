@@ -298,6 +298,17 @@ install_bettercap() {
         return 0
     fi
 
+    # UNDO DEBIAN'S AUTO-ENABLE. Found on-Pi 2026-08-08: the verification run reported the unit
+    # enabled on a box where this installer had demonstrably written its own (the generated
+    # password matched the config), and nothing here ever calls `systemctl enable`. debhelper
+    # enables AND starts a packaged service at apt-install time, so `apt install bettercap` left a
+    # root daemon with a REST API running at every boot on a device that is carried onto other
+    # people's networks — with Bjorn not even talking to it (bettercap_enabled defaults false).
+    # Unconditional and before the early return below, so it also fixes an install that already
+    # went out. Idempotent: disabling an already-disabled unit is a no-op.
+    systemctl disable --now bettercap >/dev/null 2>&1
+    log "INFO" "bettercap left installed but disabled (apt enables it by default; Bjorn does not)."
+
     # Already provisioned? Leave the existing password alone — regenerating it on every re-run
     # would silently break a working install by desynchronising the unit from the saved config.
     if [ -f /etc/systemd/system/bettercap.service ]; then

@@ -167,6 +167,30 @@
   a Pi Zero. Fails **open** — no `match_server`, or no known Server header, still fires the template
   (a missed finding is worse than a spare request). `apache-status` is gated to `["apache"]`.
 
+### Added
+- **Bettercap config surface + REST client** (`bettercap_client.py`, Stage B steps B1/B3 of
+  [`docs/BETTERCAP_PLAN.md`](docs/BETTERCAP_PLAN.md)). Nothing calls it yet — `bettercap_enabled`
+  defaults off, no process is started, no unit is installed. Stdlib only (urllib + base64).
+  - `BettercapClient` (`session` / `events` / `run` / `is_reachable`) never raises: the caller will
+    be a poller living for the whole process against a daemon that restarts, so a refused
+    connection is a `False`, not an exception. A 401 is reported as "check bettercap_user /
+    bettercap_password" — bettercap ships weak default credentials, so it nearly always means the
+    generated password never reached the config.
+  - `parse_hosts()` is pure and deliberately tolerant. **Every field read goes through one `FIELDS`
+    table**, so confirming bettercap's version-specific event schema on the Pi (step B0, the one
+    part that needs hardware) is a table edit rather than a rewrite. Malformed events are skipped,
+    not raised.
+  - **MACs are upper-cased on the way in.** nmap writes upper-case and netkb is keyed by MAC;
+    bettercap emits lower-case, so without normalising, every bettercap host would become a second
+    netkb row for a host Bjorn already knew.
+  - `config_validation.py` gains **string-key validation**, which it had no notion of, plus a real
+    URL check on `bettercap_api_url` — it is where Basic-Auth credentials get sent, so a malformed
+    value fails at startup instead of on the first poll, and an off-device host is refused while
+    the feature is enabled.
+  - The key is **`bettercap_password`, not `bettercap_pass`**: `_SECRET_KEY_PARTS` redacts by
+    substring and `..._pass` matches none of them, so the credential would have been logged in
+    plaintext on every config save — which `bjorn_diag.sh` then tails into a shareable report.
+
 ### Changed
 - **The monitor-mode radio has an owner, and a busy radio is no longer an error**
   (`monitor_mode.py`, Stage A of [`docs/BETTERCAP_PLAN.md`](docs/BETTERCAP_PLAN.md)) — groundwork

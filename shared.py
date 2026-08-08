@@ -191,6 +191,15 @@ class SharedData:
             "smtp_user": "",                  # SMTP login / From address
             "smtp_password": "",              # SMTP password (secret, user-supplied)
             "smtp_to": "",                    # recipient(s), comma-separated
+            # Bettercap (docs/BETTERCAP_PLAN.md Stage B) — managed mode only: recon on the network
+            # Bjorn has already joined. Entirely off until switched on; nothing is installed or
+            # enabled at install time. The hunter's own keys (bettercap_pwn_*) arrive in Stage C.
+            "bettercap_enabled": False,       # master switch — the poller thread AND bettercap.service
+            "bettercap_api_url": "http://127.0.0.1:8081",  # api.rest endpoint; keep it on loopback
+            "bettercap_user": "bjorn",        # api.rest Basic-Auth user
+            "bettercap_password": "",             # api.rest Basic-Auth password (secret, generated at install)
+            "bettercap_arp_spoof": False,     # active ARP spoofing (off = passive recon only)
+            "bettercap_sniff": False,         # passive traffic sniff
             "steal_file_names": ["ssh.csv","hack.txt"],
             "steal_file_extensions": [".bjorn",".hack",".flag"],
             

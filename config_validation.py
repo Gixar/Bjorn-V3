@@ -2,6 +2,7 @@
 # Fail-fast validation for shared_config.json (PRD §9 step 4 / P1-6). Kept dependency-free
 # and separate from shared.py so it can be unit-tested without constructing SharedData
 # (which pulls in PIL and the e-Paper stack).
+import urllib.parse
 
 # epd_type values with a driver module in resources/waveshare_epd/ (+ the mock backend and
 # "auto", which probes the real-panel drivers at startup — see SharedData._auto_detect_epd).
@@ -15,7 +16,13 @@ _BOOL_KEYS = ("manual_mode", "websrv", "debug_mode", "scan_vuln_running",
               "credential_reuse", "telegram_enabled", "telegram_include_creds",
               "ble_scan_enabled", "smtp_enabled", "wifi_scan_enabled",
               "adaptive_scan_interval", "offline_mode_enabled", "wifi_autojoin",
-              "wifi_autojoin_open")
+              "wifi_autojoin_open", "bettercap_enabled", "bettercap_arp_spoof",
+              "bettercap_sniff")
+# Keys that must be present and a string. Deliberately only the new Bettercap credentials for now:
+# folding the older string keys (wifi_scan_iface, telegram_bot_token, smtp_host, ...) in here would
+# turn a saved config holding a JSON null into a startup failure on upgrade, for no benefit anyone
+# asked for. Add them one at a time when something actually depends on the type.
+_STR_KEYS = ("bettercap_api_url", "bettercap_user", "bettercap_password")
 # These must be non-negative integers (JSON bools are excluded — bool is an int subclass).
 _NONNEG_INT_KEYS = (
     "startup_delay", "scan_interval", "scan_vuln_interval",
@@ -78,6 +85,26 @@ def validate_config(config):
     chan = config.get("wifi_scan_channel")
     if isinstance(chan, int) and not isinstance(chan, bool) and chan and not (1 <= chan <= 196):
         errors.append(f"'wifi_scan_channel' must be 0 (hop) or a valid channel 1-196, got {chan}")
+
+    for key in _STR_KEYS:
+        if key not in config:
+            errors.append(f"missing required key: {key!r}")
+        elif not isinstance(config[key], str):
+            errors.append(f"{key!r} must be a string, got {type(config[key]).__name__}")
+
+    # A trust boundary, not a style check: this URL is where Bjorn sends its api.rest Basic-Auth
+    # credentials. A typo'd scheme or a stray host means shipping them somewhere unintended, so a
+    # malformed value fails at startup rather than on the first poll. Non-loopback is allowed but
+    # called out — bettercap on another box is a real setup, doing it by accident is not.
+    url = config.get("bettercap_api_url")
+    if isinstance(url, str) and url:
+        parsed = urllib.parse.urlparse(url)
+        if parsed.scheme not in ("http", "https") or not parsed.hostname:
+            errors.append(f"'bettercap_api_url' must be http(s)://host[:port], got {url!r}")
+        elif config.get("bettercap_enabled") and parsed.hostname not in ("127.0.0.1", "localhost", "::1"):
+            errors.append(f"'bettercap_api_url' points off-device ({parsed.hostname}) — api.rest "
+                          f"credentials would leave the box. Use loopback, or clear this check "
+                          f"knowingly by editing config_validation.py.")
 
     if "portlist" not in config:
         errors.append("missing required key: 'portlist'")

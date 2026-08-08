@@ -34,6 +34,9 @@ def _good_config():
         "planner_max_host_actions": 4, "planner_standalone_every": 3,
         "adaptive_scan_interval": True,
         "use_rustscan": False, "rustscan_batch_size": 0, "rustscan_full_port": False,
+        "bettercap_enabled": False, "bettercap_arp_spoof": False, "bettercap_sniff": False,
+        "bettercap_api_url": "http://127.0.0.1:8081", "bettercap_user": "bjorn",
+        "bettercap_password": "",
     }
 
 
@@ -177,6 +180,32 @@ def test_rejects_out_of_range_channel_but_allows_zero():
     assert validate_config(cfg) is None
     cfg["wifi_scan_channel"] = 250
     _assert_raises(cfg, "wifi_scan_channel")
+
+
+def test_bettercap_api_url_must_be_a_wellformed_http_url():
+    """A trust boundary: this URL is where Bjorn sends its api.rest Basic-Auth credentials, so a
+    malformed value has to fail at startup rather than on the first poll."""
+    cfg = _good_config()
+    cfg["bettercap_api_url"] = "127.0.0.1:8081"  # no scheme
+    _assert_raises(cfg, "bettercap_api_url")
+    cfg["bettercap_api_url"] = "ftp://127.0.0.1"
+    _assert_raises(cfg, "bettercap_api_url")
+
+
+def test_enabled_bettercap_must_stay_on_loopback():
+    """Off-device means the credentials leave the box. Allowed knowingly, never by typo — and only
+    checked when the feature is actually on, so a stale value can't block an unrelated startup."""
+    cfg = _good_config()
+    cfg["bettercap_api_url"] = "http://192.168.1.50:8081"
+    assert validate_config(cfg) is None, "disabled: not our problem yet"
+    cfg["bettercap_enabled"] = True
+    _assert_raises(cfg, "off-device")
+
+
+def test_bettercap_credentials_must_be_strings():
+    cfg = _good_config()
+    cfg["bettercap_password"] = None
+    _assert_raises(cfg, "bettercap_password")
 
 
 def _assert_raises(cfg, expected_substr):

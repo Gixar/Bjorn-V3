@@ -167,6 +167,7 @@
                     <tr><th><a href="/telegram.html">Telegram</a></th><td>Report delivery: Telegram bot and the SMTP email fallback. Config, manual, test and send-now.</td></tr>
                     <tr><th><a href="/ble.html">BLE</a></th><td>Bluetooth recon: config, manual, and the discovered-device table with tracker flags.</td></tr>
                     <tr><th><a href="/wifi.html">Wi-Fi</a></th><td>802.11 AP/client survey: config, manual, the monitor-mode test, and the AP and client tables.</td></tr>
+                    <tr><th><a href="/bettercap.html">Bettercap</a></th><td>The optional bettercap daemon: config, live status, and what passive recon vs. ARP spoofing actually do.</td></tr>
                     <tr><th><a href="/bjorn.html">Screen</a></th><td>A live mirror of the e-Paper display.</td></tr>
                     <tr><th><a href="/logs.html">Logs</a></th><td>Full log viewer with level filtering.</td></tr>
                 </table>
@@ -200,6 +201,11 @@
                         <td><a href="/wifi.html">Wi-Fi survey</a></td>
                         <td><strong>A second radio</strong> — a USB dongle. Never the uplink.</td>
                         <td>Nearby access points and their clients: BSSID, channel, encryption, signal.</td>
+                    </tr>
+                    <tr>
+                        <td><a href="/bettercap.html">Bettercap</a></td>
+                        <td>The <code>bettercap</code> package (optional step in the installer). No extra radio for passive recon.</td>
+                        <td>Hosts seen by watching ARP traffic rather than knocking — including ones that answer no port scan. ARP spoofing and sniffing are available but off.</td>
                     </tr>
                     <tr>
                         <td><a href="/telegram.html">Reporting</a></td>

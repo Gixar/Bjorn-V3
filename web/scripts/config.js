@@ -9,6 +9,7 @@ const PAGE_OWNED_KEYS = [
     { prefix: "wifi_scan_", href: "/wifi.html", label: "Wi-Fi" },
     { prefix: "wifi_autojoin", href: "/wifi.html", label: "Wi-Fi" },
     { prefix: "offline_", href: "/wifi.html", label: "Wi-Fi" },
+    { prefix: "bettercap_", href: "/bettercap.html", label: "Bettercap" },
     { prefix: "telegram_", href: "/telegram.html", label: "Telegram" },
     { prefix: "smtp_", href: "/telegram.html", label: "Telegram" },
 ];

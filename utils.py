@@ -31,6 +31,7 @@ import offline_mode
 from starlette.responses import JSONResponse, HTMLResponse, PlainTextResponse, Response, FileResponse
 from actions.nmap_vuln_scanner import NmapVulnScanner
 import telegram_client
+import bettercap_client
 
 
 logger = Logger(name="utils.py", level=logging.DEBUG)
@@ -207,6 +208,30 @@ class WebUtils:
         return _ok(message=f"{iface} supports monitor mode and is safe to use.")
 
     # ------------------------------------------------------------------
+    # Bettercap — GET /bettercap_status
+    # ------------------------------------------------------------------
+    def bettercap_status(self):
+        """One sentence describing the daemon's state, for the panel's status line.
+
+        Always HTTP 200, including for "not reachable": this is a *status* probe on a feature that
+        is off by default, so an unreachable daemon is the expected answer, not a server error. The
+        wording lives here rather than in the JS so there is one place that can describe a state
+        wrongly instead of two."""
+        if not getattr(self.shared_data, "bettercap_enabled", False):
+            return _ok(message="disabled", payload={"state": "disabled"})
+        client = bettercap_client.BettercapClient.from_config(self.shared_data)
+        ok, obj = client.session()
+        if not ok:
+            # `obj` is already plain language from the client ("unauthorized (check ...)"), so it
+            # is passed through rather than restated.
+            return _ok(message=str(obj), payload={"state": "unreachable"})
+        version = ""
+        if isinstance(obj, dict):
+            version = str((obj.get("version") or obj.get("Version") or "")).strip()
+        return _ok(message=f"running{' ' + version if version else ''}",
+                   payload={"state": "running", "version": version})
+
+    # ------------------------------------------------------------------
     # Report delivery (Telegram, SMTP fallback) — POST /telegram_test, POST /telegram_send
     # ------------------------------------------------------------------
     def telegram_test(self):
@@ -317,6 +342,9 @@ class WebUtils:
             "telegram": [
                 ("log", "telegram_client log", logf("telegram_client.py.log")),
                 ("report_log", "telegram_report log", logf("telegram_report.py.log")),
+            ],
+            "bettercap": [
+                ("log", "bettercap_client log", logf("bettercap_client.py.log")),
             ],
         }
 

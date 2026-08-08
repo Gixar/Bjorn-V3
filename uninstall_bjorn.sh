@@ -67,6 +67,15 @@ stop_services() {
         systemctl disable usb-gadget
     fi
 
+    # Stop and disable bettercap (optional; the installer writes the unit but never enables it,
+    # so on most installs there is nothing here to stop). `is-enabled` as well as `is-active`:
+    # a unit enabled but not currently running would otherwise come back on the next boot.
+    if systemctl list-unit-files 2>/dev/null | grep -q '^bettercap\.service'; then
+        log "INFO" "Stopping bettercap service..."
+        systemctl stop bettercap 2>/dev/null
+        systemctl disable bettercap 2>/dev/null
+    fi
+
     # Kill any processes on port 8000
     if lsof -i:8000 > /dev/null; then
         log "INFO" "Killing processes on port 8000..."
@@ -81,6 +90,7 @@ remove_service_files() {
     log "INFO" "Removing service files..."
     rm -f /etc/systemd/system/bjorn.service
     rm -f /etc/systemd/system/usb-gadget.service
+    rm -f /etc/systemd/system/bettercap.service  # holds the generated api.rest password
     rm -f /usr/local/bin/usb-gadget.sh
     systemctl daemon-reload
     log "SUCCESS" "Service files removed"

@@ -168,6 +168,27 @@
   (a missed finding is worse than a spare request). `apache-status` is gated to `["apache"]`.
 
 ### Added
+- **Bettercap web panel + installer provisioning** (Stage B steps B4/B5). Still inert: the daemon is
+  installed and configured but **never enabled**, and nothing polls it until B2.
+  - New `/bettercap` page — enable switch, API URL/user/password (masked, with the existing reveal
+    control), ARP-spoof and sniff toggles, and a live status line from `GET /bettercap_status`.
+    The page explains the difference between passive recon and ARP spoofing, because one of those
+    transmits nothing and the other puts Bjorn in the middle of other machines' traffic.
+  - `GET /bettercap_status` always answers **200**, including for "unreachable": it is a status
+    probe on a feature that is off by default, so a down daemon is the expected answer rather than
+    a server error. The per-state wording lives in the handler, not the JS — two copies are two
+    chances to describe a state wrongly.
+  - Installer: optional `apt install bettercap`, a `bettercap.service` bound to `127.0.0.1:8081`,
+    and **a password generated per install** written into both the unit (`chmod 600`) and the
+    config. bettercap's `api.rest` ships a documented default `user`/`pass`, which on a device
+    whose job is to sit on other people's networks would hand out a root-equivalent local API.
+    A re-run keeps existing credentials — regenerating would silently desynchronise a working
+    install. Non-fatal throughout; `--dry-run` reports what it would do; teardown in
+    `uninstall_bjorn.sh` removes the unit (it holds the password).
+  - The installer block runs from `setup_services` (step 7), not `install_dependencies` (step 2):
+    it writes the *installed* config at `$BJORN_PATH`, which `setup_bjorn` only creates at step 5.
+    Run earlier it would have found no config, or written to the source tree and had `cp -r`
+    overwrite it.
 - **Bettercap config surface + REST client** (`bettercap_client.py`, Stage B steps B1/B3 of
   [`docs/BETTERCAP_PLAN.md`](docs/BETTERCAP_PLAN.md)). Nothing calls it yet — `bettercap_enabled`
   defaults off, no process is started, no unit is installed. Stdlib only (urllib + base64).

@@ -85,6 +85,7 @@ _PAGES = {
     "telegram",  # new — Telegram reporting config + test/send
     "ble",       # new — BLE recon config + results
     "wifi",      # new — Wi-Fi (airodump-ng) recon config + results
+    "bettercap", # new — Bettercap daemon config + live status
     "help",      # new — usage + configuration manual (static, no API)
 }
 
@@ -143,6 +144,11 @@ def wifi_scan_now():
 async def wifi_monitor_test(request: Request):
     body = await request.json()
     return web_utils.wifi_monitor_test((body.get("iface") or "").strip())
+
+
+@app.get("/bettercap_status")
+def bettercap_status():
+    return web_utils.bettercap_status()
 
 
 @app.post("/telegram_test")

@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bjorn Cyberviking — Bettercap</title>
+    <link rel="icon" href="web/images/favicon.ico" type="image/x-icon">
+    <link rel="stylesheet" href="web/css/styles.css">
+    <link rel="manifest" href="manifest.json">
+    <link rel="apple-touch-icon" sizes="192x192" href="web/images/icon-192x192.png">
+    <script src="web/scripts/common.js" defer></script>
+    <script src="web/scripts/bettercap.js" defer></script>
+</head>
+<body>
+    <nav id="app-nav" class="topnav"></nav>
+
+    <main class="page">
+        <div class="card">
+            <div class="card-header">
+                <div>
+                    <h2 class="card-title">Bettercap</h2>
+                    <p class="card-subtitle" id="bc-status">Checking…</p>
+                </div>
+                <button type="button" class="btn btn-sm btn-ghost" onclick="bcRefreshStatus()">Refresh</button>
+            </div>
+
+            <p>
+                <a href="https://www.bettercap.org/">Bettercap</a> is a network attack framework that
+                runs as its own service alongside Bjorn — the same arrangement Bjorn already has with
+                nmap and nmcli. Bjorn talks to it over a local HTTP API and folds the hosts it
+                discovers into the same <code>netkb.csv</code> everything else writes to. It is a
+                second pair of eyes on the network you are <em>already joined to</em>: it sees hosts
+                that never answer a port scan, because it watches ARP traffic rather than knocking.
+            </p>
+
+            <div class="note warn">
+                <strong>Not installed by default.</strong> Nothing here does anything until you
+                install bettercap and switch it on. ARP spoofing puts Bjorn in the middle of other
+                machines' traffic — only use it on a network you own or have written permission to
+                test.
+            </div>
+
+            <details class="manual">
+                <summary>Manual — setup, the two modes, and what to expect</summary>
+                <div class="prose">
+                    <h3>Setting it up</h3>
+                    <ol>
+                        <li>Install bettercap on the Pi (<code>sudo apt install bettercap</code>), or
+                            re-run <code>install_bjorn.sh</code> and accept the optional step — it
+                            writes the service and generates a password for you.</li>
+                        <li>Fill in the API URL, user and password so they match the service, tick
+                            <strong>Enable Bettercap</strong>, and press <em>Save</em>.</li>
+                        <li>The status line above should turn <strong>running</strong>. If it says
+                            <em>unauthorized</em>, the password here and the one in
+                            <code>/etc/systemd/system/bettercap.service</code> disagree.</li>
+                    </ol>
+
+                    <h3>The two modes</h3>
+                    <table>
+                        <tr><th>Passive recon<br>(default)</th><td>Bettercap watches the network and reports the hosts it sees. It transmits nothing at anyone. This is the safe default and is useful on its own — ARP-visible hosts show up without a single port being touched.</td></tr>
+                        <tr><th>ARP spoofing</th><td>Tells other machines that Bjorn is the router, so their traffic passes through it. This is an <em>active attack</em>: it is noisy, it appears in any monitoring worth the name, and a mistake can disrupt the network for everyone on it. Off unless you turn it on deliberately.</td></tr>
+                        <tr><th>Passive sniff</th><td>Records traffic that passes through. Only sees other machines' traffic when ARP spoofing is also on — on a switched network, without it, Bjorn sees only its own.</td></tr>
+                    </table>
+
+                    <h3>The settings</h3>
+                    <table>
+                        <tr><th>API URL</th><td>Where bettercap's REST API listens. Keep it on <code>127.0.0.1</code>: this is where Bjorn sends the API password, and an off-device address means those credentials leave the Pi. Bjorn refuses to start with a non-loopback address while Bettercap is enabled.</td></tr>
+                        <tr><th>User / Password</th><td>Must match the <code>api.rest</code> credentials in the service file. Bettercap ships with a well-known default pair — if you set this up by hand, change it.</td></tr>
+                    </table>
+
+                    <div class="note">
+                        Monitor mode, deauthentication and handshake capture are a separate, later
+                        feature (the Handshake Hunter) and need a <strong>second radio</strong>.
+                        Nothing on this page touches the radio carrying Bjorn's own connection.
+                    </div>
+                </div>
+            </details>
+
+            <div class="tg-form">
+                <label class="tg-check"><input type="checkbox" id="bc-enabled"> Enable Bettercap</label>
+                <label class="tg-field">API URL
+                    <input type="text" id="bc-url" autocomplete="off" placeholder="http://127.0.0.1:8081">
+                </label>
+                <label class="tg-field">User
+                    <input type="text" id="bc-user" autocomplete="off" placeholder="bjorn">
+                </label>
+                <label class="tg-field">Password
+                    <span class="tg-inline">
+                        <input type="password" id="bc-password" autocomplete="off">
+                        <button type="button" class="btn btn-sm btn-ghost" onclick="bcToggleReveal('bc-password')">reveal</button>
+                    </span>
+                </label>
+                <label class="tg-check"><input type="checkbox" id="bc-arp"> ARP spoofing (active attack — off by default)</label>
+                <label class="tg-check"><input type="checkbox" id="bc-sniff"> Passive traffic sniff</label>
+            </div>
+            <div class="log-toolbar">
+                <button type="button" class="btn" onclick="bcSave()">Save</button>
+                <button type="button" class="btn btn-ghost" onclick="bcRefreshStatus()">Test connection</button>
+            </div>
+        </div>
+
+        <div class="card" data-files-group="bettercap"></div>
+    </main>
+</body>
+</html>

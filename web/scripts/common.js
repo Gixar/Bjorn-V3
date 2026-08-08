@@ -21,6 +21,11 @@ const WIFI_SVG = `<svg width="28" height="28" viewBox="0 0 24 24" fill="none" st
   <circle cx="12" cy="19" r="1.2" fill="currentColor" stroke="none"/>
 </svg>`;
 
+const BETTERCAP_SVG = `<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+  <circle cx="12" cy="12" r="3"/>
+  <path d="M12 2v4M12 18v4M2 12h4M18 12h4M5 5l2.5 2.5M16.5 16.5L19 19M19 5l-2.5 2.5M7.5 16.5L5 19" stroke-linecap="round"/>
+</svg>`;
+
 const HELP_SVG = `<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
   <circle cx="12" cy="12" r="9"/>
   <path d="M9.5 9a2.5 2.5 0 1 1 3.2 2.4c-.6.2-1.2.8-1.2 1.6v.5" stroke-linecap="round"/>
@@ -40,6 +45,7 @@ const BJORN_NAV = [
     { href: "/telegram.html", label: "Telegram", svg: TELEGRAM_SVG, match: ["/telegram.html"] },
     { href: "/ble.html", label: "BLE", svg: BLE_SVG, match: ["/ble.html"] },
     { href: "/wifi.html", label: "Wi-Fi", svg: WIFI_SVG, match: ["/wifi.html"] },
+    { href: "/bettercap.html", label: "Bettercap", svg: BETTERCAP_SVG, match: ["/bettercap.html"] },
     { href: "/help.html", label: "Help", svg: HELP_SVG, match: ["/help.html"] },
 ];
 

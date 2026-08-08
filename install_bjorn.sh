@@ -278,6 +278,79 @@ install_dependencies() {
     check_success "Dependencies installation completed"
 }
 
+# Install bettercap and write its systemd unit (optional — docs/BETTERCAP_PLAN.md Stage B).
+#
+# THE POINT OF THIS FUNCTION IS THE PASSWORD. bettercap's api.rest ships a documented default
+# user/pass ("user"/"pass"); shipping that on a device whose whole job is to sit on other people's
+# networks would be handing out a root-equivalent local API. So we generate one per install and
+# write it into both the unit and Bjorn's config, which is also the only way the two can agree
+# without the operator typing it twice.
+#
+# The unit is written but NOT enabled: bettercap_enabled defaults to false, and a daemon nobody
+# asked for should not be running. Enabling it is a deliberate act on the Bettercap web page.
+#
+# Called from setup_services, NOT install_dependencies: it writes into the *installed* config at
+# $BJORN_PATH, which setup_bjorn only creates at step 5. Run earlier, it would either find no
+# config or write to the source tree and have the copy overwrite it.
+install_bettercap() {
+    if ! apt-get install -y bettercap >/dev/null 2>&1; then
+        log "WARNING" "bettercap not available from apt — skipping (optional; Bjorn is unaffected)."
+        return 0
+    fi
+
+    # Already provisioned? Leave the existing password alone — regenerating it on every re-run
+    # would silently break a working install by desynchronising the unit from the saved config.
+    if [ -f /etc/systemd/system/bettercap.service ]; then
+        log "INFO" "bettercap.service already present — keeping its existing credentials."
+        return 0
+    fi
+
+    local bc_pass
+    bc_pass="$(head -c 24 /dev/urandom | base64 | tr -d '/+=' | head -c 24)"
+
+    cat > /etc/systemd/system/bettercap.service << EOF
+[Unit]
+Description=bettercap (Bjorn managed-mode recon)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/bettercap -eval "set api.rest.address 127.0.0.1; set api.rest.port 8081; set api.rest.username bjorn; set api.rest.password ${bc_pass}; api.rest on"
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    chmod 600 /etc/systemd/system/bettercap.service  # the password is in it
+
+    # Land the same password in Bjorn's config. python3 rather than sed: the value is random
+    # base64 and sed would treat a stray character in it as syntax. The password arrives as argv,
+    # never interpolated into the (quoted) heredoc, so no quoting of it can go wrong.
+    local bc_config="${BJORN_PATH}/config/shared_config.json"
+    if [ -f "$bc_config" ]; then
+        python3 - "$bc_config" "$bc_pass" << 'PYEOF'
+import json, sys
+path, password = sys.argv[1], sys.argv[2]
+with open(path) as f:
+    cfg = json.load(f)
+cfg["bettercap_password"] = password
+cfg["bettercap_user"] = "bjorn"
+cfg["bettercap_api_url"] = "http://127.0.0.1:8081"
+with open(path, "w") as f:
+    json.dump(cfg, f, indent=4)
+PYEOF
+        chown "$BJORN_USER:$BJORN_USER" "$bc_config"
+        check_success "Wrote generated bettercap credentials into shared_config.json"
+    else
+        log "WARNING" "$bc_config not found — set bettercap_password by hand: ${bc_pass}"
+    fi
+
+    systemctl daemon-reload
+    log "SUCCESS" "bettercap installed (service written, NOT enabled — turn it on from the web UI)."
+}
+
 # Install RustScan (optional — port-discovery speedup, off by default via the use_rustscan config
 # toggle). Not in apt. On 64-bit ARM / amd64 we drop the official prebuilt static binary into
 # /usr/local/bin (no Rust toolchain, no compile). RustScan ships no 32-bit ARM binary; there we
@@ -548,6 +621,10 @@ EOF
     # Enable and start services
     systemctl daemon-reload
     systemctl enable bjorn.service
+
+    # Optional network-attack daemon (docs/BETTERCAP_PLAN.md). Installed and configured but never
+    # enabled; Bjorn works exactly as before without it, so this never aborts the install.
+    install_bettercap
 
     check_success "Services setup completed"
 }
@@ -859,10 +936,19 @@ dry_run() {
     else
         echo "  tool rustscan: not installed (optional — installer adds the prebuilt binary on arm64/amd64, compiles from source on 32-bit ARM)"
     fi
+    if command -v bettercap >/dev/null 2>&1; then
+        if [ -f /etc/systemd/system/bettercap.service ]; then
+            echo "  tool bettercap: found, service present (credentials kept as-is on re-run)"
+        else
+            echo "  tool bettercap: found, no service yet (installer would write one + generate a password)"
+        fi
+    else
+        echo "  tool bettercap: not installed (optional — installer adds it from apt; off until enabled in the web UI)"
+    fi
     echo
     echo "Full install would run these steps (as root):"
     echo "  1. Check system compatibility"
-    echo "  2. Install system dependencies (apt-get) + optional RustScan binary"
+    echo "  2. Install system dependencies (apt-get) + optional RustScan binary + optional bettercap"
     echo "  3. Configure system limits"
     echo "  4. Configure interfaces"
     echo "  5. Set up BJORN (${BJORN_PATH})"

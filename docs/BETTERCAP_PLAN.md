@@ -136,8 +136,8 @@ happens, because it fixes a real per-cycle error the moment any long-lived consu
 | B1 | ✅ **DONE (pending B0 confirmation).** `BettercapClient(base_url, user, password)`: `session()`, `events(clear)`, `run(cmd)`, `is_reachable()`, and pure `parse_hosts(events)`. No threads, no SharedData. | `bettercap_client.py`, `tests/test_bettercap_client.py` | 8 tests green with no daemon |
 | B2 | Poller thread started in `Bjorn.py` only when `bettercap_enabled`; **batches** events into the existing once-per-cycle netkb write (mirror the P3 discipline — never write per event); stops on the existing stop-flag. | `Bjorn.py`, `bettercap_client.py` | Disabled → thread never starts; enabled → hosts merge by MAC |
 | B3 | ✅ **DONE.** Config keys + validation, incl. the **string-key validation** `config_validation.py` did not have, and a URL check on `bettercap_api_url`. | `shared.py`, `config_validation.py`, `tests/test_config_validation.py` | Defaults keep everything off; a missing key fails fast |
-| B4 | Web panel: `web/bettercap.html` + `web/scripts/bettercap.js`, `bettercap` in `_PAGES`, nav entry, `bettercap_` in `PAGE_OWNED_KEYS`, and `GET /bettercap_status` (reachable / running / version). Password masked with the existing reveal control. | `webapp.py`, `utils.py`, `web/*`, `web/scripts/common.js` | `test_every_hidden_key_is_settable_on_its_page` passes |
-| B5 | Installer: optional block (like RustScan) — `apt install bettercap`, write `bettercap.service` with a **generated** password bound to `127.0.0.1`, land it in both unit and config. Do **not** `systemctl enable` unless enabled. Non-fatal if unavailable. Teardown in `uninstall_bjorn.sh`. | `install_bjorn.sh`, `uninstall_bjorn.sh` | `--dry-run` reports presence; a decline leaves no unit behind |
+| B4 | ✅ **DONE.** Web panel: `web/bettercap.html` + `web/scripts/bettercap.js`, `bettercap` in `_PAGES`, nav entry, `bettercap_` in `PAGE_OWNED_KEYS`, `GET /bettercap_status`, a `bettercap` file group, and Help-page entries. Password masked with the existing reveal control. | `webapp.py`, `utils.py`, `web/*`, `web/scripts/common.js` | `test_every_hidden_key_is_settable_on_its_page` passes |
+| B5 | ✅ **DONE.** Installer: optional block — `apt install bettercap`, write `bettercap.service` with a **generated** password bound to `127.0.0.1`, land it in both unit and config. Written but **never enabled**. Non-fatal if unavailable. Teardown in `uninstall_bjorn.sh`. | `install_bjorn.sh`, `uninstall_bjorn.sh` | `--dry-run` reports presence; a re-run keeps existing credentials |
 
 **B1/B3 notes:**
 - **B0 was not skipped, it was *designed around*.** Every field read goes through one `FIELDS`
@@ -156,6 +156,26 @@ happens, because it fixes a real per-cycle error the moment any long-lived consu
 - `bettercap_api_url` is validated as a real http(s) URL, and — only when `bettercap_enabled` —
   must be loopback. It is where Basic-Auth credentials get sent; off-device is a legitimate setup
   but never an acceptable typo.
+
+**B4/B5 notes:**
+- **`install_bettercap` runs from `setup_services` (step 7), not `install_dependencies` (step 2)**,
+  where it was first written. It writes into the *installed* config at `$BJORN_PATH`, which
+  `setup_bjorn` only creates at step 5 — run earlier it would have found no config, or written to
+  the source tree and had `cp -r` overwrite it. Anything in the installer that touches the config
+  belongs after step 5.
+- **The generated password is the point of the installer block.** bettercap's `api.rest` ships a
+  documented default `user`/`pass`; shipping that on a device whose job is to sit on other people's
+  networks hands out a root-equivalent local API. The password is generated per install and written
+  to both the unit (`chmod 600`) and the config — the only way the two can agree without the
+  operator typing it twice. A re-run **keeps** existing credentials: regenerating would silently
+  desynchronise a working install.
+- The unit is written but **never enabled**. `bettercap_enabled` defaults false; enabling is a
+  deliberate act on the web page.
+- **`GET /bettercap_status` always answers 200**, including for "unreachable" — it is a status probe
+  on a feature that is off by default, so a down daemon is the expected answer, not a server error.
+  The per-state wording lives in the handler, not the JS: two copies are two chances to describe a
+  state wrongly.
+- `tests/test_web_pages.py` caught a missing Help-page link automatically, which is what it is for.
 
 ### Stage C — the hunter (monitor mode, ~2–3 sessions)
 

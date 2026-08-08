@@ -106,14 +106,27 @@ Each step is meant to be one sitting, independently mergeable, and green on `pyt
 the next. **Stage A ships today and needs no Bettercap** — do it first regardless of when the rest
 happens, because it fixes a real per-cycle error the moment any long-lived consumer appears.
 
-### Stage A — radio ownership (no new dependency, ~1 session)
+### Stage A — radio ownership ✅ **DONE 2026-08-07**
 
 | # | Step | Files | Done when |
 |---|---|---|---|
-| A1 | `acquire(iface, owner="scan")` records the holder; add `holder()` returning the owner or `""`. Lock stays non-blocking. | `monitor_mode.py` | `holder()` reports the owner while held, `""` after `release()` |
-| A2 | A blocked acquire is distinguishable from a refused one: return `(False, detail, reason)` where reason ∈ `busy` / `unsafe` / `missing`. | `monitor_mode.py` | Existing callers still work on the 2-tuple or are updated in the same commit |
-| A3 | `WiFiScan` returns `'skipped'` on `busy` (no netkb mark, no run-report row, log at INFO naming the holder) and keeps `'failed'` + ERROR on `unsafe`/`missing` with a configured iface. | `actions/wifi_scan.py` | A held lock produces no error line and no failed-retry backoff |
-| A4 | Test both paths. | `tests/test_monitor_mode.py`, `tests/test_wifi_scan.py` | Second consumer gets `busy`; uplink still refused; `release()` frees the lock in `finally` |
+| A1 | ✅ `acquire(iface, owner="scan")` records the holder; `holder()` returns the owner or `""`. Lock stays non-blocking. | `monitor_mode.py` | `holder()` reports the owner while held, `""` after `release()` |
+| A2 | ✅ A blocked acquire is distinguishable from a refused one: `(ok, detail, reason)` with `reason ∈ BUSY / UNSAFE / FAILED`. | `monitor_mode.py` | The one caller (`wifi_scan.py`) updated in the same commit |
+| A3 | ✅ `WiFiScan` returns `'skipped'` on `BUSY` (no netkb mark, no run-report row, INFO naming the holder) and keeps `'failed'` + ERROR otherwise. | `actions/wifi_scan.py` | A held lock produces no error line and no failed-retry backoff |
+| A4 | ✅ Tests for both paths. | `tests/test_wifi_scan.py` | Second consumer gets `BUSY`; uplink still refused; a non-owner cannot release |
+
+**Deviations from the plan as written, all deliberate:**
+- Reasons are `BUSY` / `UNSAFE` / `FAILED`, not `busy`/`unsafe`/`missing`. `FAILED` (a command
+  broke mid-configuration) is the real third case; splitting "missing `iw`" from "not a wireless
+  interface" would have added a distinction no caller consumes — both already arrive as an
+  `UNSAFE` detail string from `check_usable()`.
+- Tests went into `tests/test_wifi_scan.py`, where the monitor-mode guard tests already live,
+  rather than a new `tests/test_monitor_mode.py`.
+- **One fix the plan missed:** `release()` freed the lock unconditionally, so any consumer could
+  hand back a radio another was mid-capture on — and drop its lock doing so, the exact interleaving
+  the lock exists to prevent. Harmless while both consumers were the same 30-second capture;
+  a latent bug the moment a second owner label exists. `release(iface, owner)` now ignores a
+  non-owner. Covered by `test_a_non_owner_cannot_release_the_radio`.
 
 ### Stage B — Bettercap exists (managed mode, ~2–3 sessions)
 

@@ -3,6 +3,7 @@ guard. No radio, no subprocesses — the parsers are pure and the guard is drive
 fakes. Heavy imports stubbed via _stubs.
 """
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -11,6 +12,7 @@ import _stubs  # noqa: E402
 _stubs.install()
 
 import monitor_mode  # noqa: E402
+import actions.wifi_scan as wifi_scan_mod  # noqa: E402
 from actions.wifi_scan import WiFiScan  # noqa: E402
 
 parse = WiFiScan.parse_airodump_csv
@@ -167,17 +169,93 @@ def test_radio_lock_refuses_a_second_capture():
     saved_run = monitor_mode._run
     monitor_mode._run = lambda *a, **k: (0, "")  # every ip/iw/nmcli call "succeeds"
     try:
-        ok, _ = monitor_mode.acquire("wlan1")
+        ok, _, _ = monitor_mode.acquire("wlan1")
         assert ok, "first acquire must win the radio"
 
-        ok2, detail = monitor_mode.acquire("wlan1")
-        assert not ok2 and "already running" in detail, "second acquire must be refused"
+        ok2, detail, reason = monitor_mode.acquire("wlan1")
+        assert not ok2 and reason == monitor_mode.BUSY, "second acquire must be refused as busy"
+        assert "scan" in detail, "the refusal must name who holds the radio"
 
         monitor_mode.release("wlan1")
-        ok3, _ = monitor_mode.acquire("wlan1")
+        ok3, _, _ = monitor_mode.acquire("wlan1")
         assert ok3, "the radio must be acquirable again after release"
         monitor_mode.release("wlan1")
     finally:
+        monitor_mode._run = saved_run
+        _restore(saved)
+
+
+def test_holder_names_the_owner_and_clears_on_release():
+    """A turned-away consumer needs to know *who* has the radio: the hunter holds it for a whole
+    session, so 'busy' has to be distinguishable from 'your config is wrong'."""
+    saved = _guard_with("wlan0", ["wlan0", "wlan1"])
+    saved_run = monitor_mode._run
+    monitor_mode._run = lambda *a, **k: (0, "")
+    try:
+        assert monitor_mode.holder() == ""
+        ok, _, reason = monitor_mode.acquire("wlan1", owner="pwn")
+        assert ok and reason == ""
+        assert monitor_mode.holder() == "pwn"
+        monitor_mode.release("wlan1", owner="pwn")
+        assert monitor_mode.holder() == ""
+    finally:
+        monitor_mode._run = saved_run
+        _restore(saved)
+
+
+def test_a_non_owner_cannot_release_the_radio():
+    """Without this, the scheduled scan could hand back a radio the hunter is mid-capture on — and
+    drop its lock doing so, which is the exact interleaving the lock exists to prevent."""
+    saved = _guard_with("wlan0", ["wlan0", "wlan1"])
+    saved_run = monitor_mode._run
+    monitor_mode._run = lambda *a, **k: (0, "")
+    try:
+        monitor_mode.acquire("wlan1", owner="pwn")
+        monitor_mode.release("wlan1", owner="scan")      # not the owner — must be ignored
+        assert monitor_mode.holder() == "pwn", "a non-owner must not free the radio"
+        ok, _, reason = monitor_mode.acquire("wlan1", owner="scan")
+        assert not ok and reason == monitor_mode.BUSY, "the radio must still be held"
+        monitor_mode.release("wlan1", owner="pwn")       # the owner can
+        assert monitor_mode.holder() == ""
+    finally:
+        monitor_mode._run = saved_run
+        _restore(saved)
+
+
+def test_unsafe_and_busy_are_different_reasons():
+    """The distinction Stage A exists for: WiFiScan skips on busy and reports on unsafe."""
+    saved = _guard_with("wlan0", ["wlan0", "wlan1"])
+    saved_run = monitor_mode._run
+    monitor_mode._run = lambda *a, **k: (0, "")
+    try:
+        ok, _, reason = monitor_mode.acquire("wlan0")  # the uplink
+        assert not ok and reason == monitor_mode.UNSAFE
+        assert monitor_mode.holder() == "", "a refused acquire must not take the lock"
+    finally:
+        monitor_mode._run = saved_run
+        _restore(saved)
+
+
+def test_wifi_scan_skips_rather_than_fails_when_the_radio_is_busy():
+    """The behaviour that matters on a Pi: a held radio must leave no netkb mark, no retry backoff
+    and no ERROR line — a hunt running for hours would otherwise log one every cycle."""
+    import types
+    saved = _guard_with("wlan0", ["wlan0", "wlan1"])
+    saved_run = monitor_mode._run
+    saved_which = wifi_scan_mod.shutil.which
+    monitor_mode._run = lambda *a, **k: (0, "")
+    wifi_scan_mod.shutil.which = lambda _n: "/usr/sbin/airodump-ng"
+    try:
+        monitor_mode.acquire("wlan1", owner="pwn")  # the hunter owns the radio
+        cfg = types.SimpleNamespace(scan_results_dir=tempfile.mkdtemp(prefix="bjorn_wifi_test_"),
+                                    wifi_scan_enabled=True, wifi_scan_iface="wlan1",
+                                    wifi_scan_interval=0)
+        scanner = WiFiScan(cfg)
+        assert scanner.execute() == 'skipped'
+        assert scanner._last_scan == 0.0, "a skipped scan must not start the throttle clock"
+    finally:
+        monitor_mode.release("wlan1", owner="pwn")
+        wifi_scan_mod.shutil.which = saved_which
         monitor_mode._run = saved_run
         _restore(saved)
 

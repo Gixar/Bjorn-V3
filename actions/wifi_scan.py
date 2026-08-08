@@ -37,6 +37,10 @@ b_status = "wifi_scan"
 b_port = 0  # standalone action (an AP is not an IP/port target)
 b_parent = None
 
+# Both consumers of the radio on this side — the scheduled scan and the web "Scan now" button —
+# run the same execute(), so they share one owner label. The Bettercap hunter is the other one.
+RADIO_OWNER = "scan"
+
 AP_COLS = ["BSSID", "ESSID", "Channel", "Privacy", "Cipher", "Auth", "Power", "Beacons",
            "FirstSeen", "LastSeen"]
 CLIENT_COLS = ["Station", "BSSID", "Power", "Packets", "ProbedESSIDs", "FirstSeen", "LastSeen"]
@@ -89,8 +93,15 @@ class WiFiScan:
                     return 'failed'
                 logger.debug("No non-uplink radio free for a capture; skipping Wi-Fi scan.")
                 return 'skipped'
-            ok, detail = monitor_mode.acquire(iface)
+            ok, detail, reason = monitor_mode.acquire(iface, owner=RADIO_OWNER)
             if not ok:
+                if reason == monitor_mode.BUSY:
+                    # Someone else is legitimately using the radio — the web "Scan now" button, or
+                    # the Bettercap hunter holding it for a whole session. That is a normal state,
+                    # not a fault: a 'failed' here would mark netkb, start a 10-minute retry
+                    # backoff and log an ERROR on every cycle of a perfectly healthy hunt.
+                    logger.info(f"Wi-Fi scan skipped: {detail}.")
+                    return 'skipped'
                 # A refused interface is a configuration error, not a transient failure — say so
                 # loudly rather than silently scanning nothing every cycle. The interval clock is
                 # deliberately NOT started here: a fix (plug the dongle back in, pick the right
@@ -105,7 +116,7 @@ class WiFiScan:
                                              getattr(self.shared_data, "wifi_scan_band", "bg"),
                                              getattr(self.shared_data, "wifi_scan_channel", 0))
             finally:
-                monitor_mode.release(iface)
+                monitor_mode.release(iface, owner=RADIO_OWNER)
 
             if aps or clients:
                 self._record(aps, clients)

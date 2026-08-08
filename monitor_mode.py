@@ -30,6 +30,23 @@ logger = Logger(name="monitor_mode.py", level=logging.INFO)
 # 30s+ capture holding an HTTP request open.
 _radio_lock = threading.Lock()
 
+# Who holds it. A bare lock answers "is it taken?"; that was enough while both consumers were
+# 30-second captures, but the Bettercap hunter holds the radio for hours (docs/BETTERCAP_PLAN.md
+# Stage A), and a consumer turned away needs to know *by whom* — to log something useful, and to
+# tell "someone else is working" apart from "your config is wrong". Written while the lock is held,
+# cleared before it is dropped, so a plain read is a consistent snapshot.
+_radio_owner = ""
+
+# acquire() reasons. The split callers actually consume is busy-vs-not: a held radio is a normal
+# state to skip on, everything else is a real problem to report. "unsafe" and "failed" are kept
+# apart because one means "this interface must never be used" and the other "this attempt broke".
+BUSY, UNSAFE, FAILED = "busy", "unsafe", "failed"
+
+
+def holder():
+    """Which consumer holds the radio ("scan", "pwn", ...), or "" when it is free."""
+    return _radio_owner
+
 
 def _run(args, timeout=15):
     """Run a command, return (rc, stdout+stderr). rc=-1 when the binary is missing."""
@@ -126,18 +143,26 @@ def check_usable(iface):
     return ""
 
 
-def acquire(iface):
-    """Put `iface` into monitor mode. Returns (ok, detail). Refuses the uplink interface.
+def acquire(iface, owner="scan"):
+    """Put `iface` into monitor mode for `owner`. Returns (ok, detail, reason), where reason is
+    "" on success or one of BUSY / UNSAFE / FAILED. Refuses the uplink interface.
+
+    The reason exists so a caller can tell a *busy* radio (someone else is legitimately working —
+    come back later, say nothing alarming) from an *unsafe* one (this interface must never be used;
+    the operator has to fix something). Collapsing both into "it didn't work" is what made a
+    dongle-less Pi log an error every cycle.
 
     NetworkManager is told to stop managing the interface first, otherwise it races us back to
     managed mode mid-capture. Only this interface is touched — the uplink keeps its manager.
 
     Holds the radio until release(); a second caller is refused rather than queued."""
+    global _radio_owner
     problem = check_usable(iface)
     if problem:
-        return False, problem
+        return False, problem, UNSAFE
     if not _radio_lock.acquire(blocking=False):
-        return False, "another Wi-Fi capture is already running — wait for it to finish"
+        return False, f"the radio is in use by {holder() or 'another consumer'}", BUSY
+    _radio_owner = owner
     if shutil.which("nmcli"):
         _run(["nmcli", "device", "set", iface, "managed", "no"])
     for args in (["ip", "link", "set", iface, "down"],
@@ -145,18 +170,26 @@ def acquire(iface):
                  ["ip", "link", "set", iface, "up"]):
         rc, out = _run(args)
         if rc != 0:
-            release(iface)  # don't strand the radio half-configured
-            return False, f"{' '.join(args)} failed: {out.strip()[:200]}"
-    logger.info(f"{iface} is in monitor mode.")
-    return True, "monitor mode enabled"
+            release(iface, owner)  # don't strand the radio half-configured
+            return False, f"{' '.join(args)} failed: {out.strip()[:200]}", FAILED
+    logger.info(f"{iface} is in monitor mode (held by {owner}).")
+    return True, "monitor mode enabled", ""
 
 
-def release(iface):
+def release(iface, owner="scan"):
     """Return `iface` to managed mode, hand it back to NetworkManager, and free the radio lock.
     Best-effort: this runs in a finally-block after a capture, so it never raises. Always the
     counterpart of a successful acquire() — releasing the lock last means the radio is fully back
-    in managed mode before the next caller can take it."""
+    in managed mode before the next caller can take it.
+
+    Only the owner may release. Without that check, a consumer that never acquired could hand back
+    a radio another one is mid-capture on — and would drop that one's lock in the process, which is
+    the exact interleaving the lock was added to prevent."""
+    global _radio_owner
     if not iface:
+        return
+    if _radio_owner and _radio_owner != owner:
+        logger.warning(f"{owner} tried to release {iface}, but {_radio_owner} holds it — ignoring.")
         return
     try:
         for args in (["ip", "link", "set", iface, "down"],
@@ -167,5 +200,6 @@ def release(iface):
             _run(["nmcli", "device", "set", iface, "managed", "yes"])
         logger.info(f"{iface} returned to managed mode.")
     finally:
+        _radio_owner = ""  # cleared before the lock drops, so holder() never names a stale owner
         if _radio_lock.locked():
             _radio_lock.release()

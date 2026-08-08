@@ -168,6 +168,22 @@
   (a missed finding is worse than a spare request). `apache-status` is gated to `["apache"]`.
 
 ### Changed
+- **The monitor-mode radio has an owner, and a busy radio is no longer an error**
+  (`monitor_mode.py`, Stage A of [`docs/BETTERCAP_PLAN.md`](docs/BETTERCAP_PLAN.md)) — groundwork
+  for the Bettercap hunter, but it fixes a problem that exists today.
+  - `acquire(iface, owner="scan")` records the holder and `holder()` reports it. A bare lock
+    answers "is it taken?", which was enough while both consumers were 30-second captures; the
+    hunter will hold the radio for hours, and a consumer turned away needs to know by whom.
+  - `acquire()` now returns `(ok, detail, reason)` with `reason ∈ BUSY / UNSAFE / FAILED`. **This
+    is the point of the change:** `WiFiScan` returns `'skipped'` on `BUSY` — no netkb mark, no
+    run-report row, no failed-retry backoff, INFO not ERROR — and keeps `'failed'` for a genuinely
+    unusable interface. Without it, a long-running hunt would log a Wi-Fi scan error every single
+    cycle, on every device, since `wifi_scan_enabled` went on by default.
+  - **Latent bug fixed while there:** `release()` freed the lock unconditionally, so any caller
+    could return a radio another consumer was mid-capture on and drop its lock in the process —
+    exactly the interleaving the lock was added to prevent. It was unreachable while both consumers
+    ran the same code path; it stops being unreachable the moment a second owner exists.
+    `release(iface, owner)` now ignores a non-owner.
 - **RustScan is now the default port-discovery engine** (`use_rustscan: true`) — the on-Pi benchmark
   that gated this ran on 2026-08-07: **2.01s vs nmap's 54.25s over 7 hosts / 41 ports (26.94x), the
   same 3 open ports found by both**. Every fallback the opt-in version shipped with is unchanged and

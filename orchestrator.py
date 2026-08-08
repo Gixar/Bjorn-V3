@@ -53,6 +53,7 @@ class Orchestrator:
         self.planner = Planner()  # knobs re-read from config each cycle via sync_config()
         self.offline_since = None  # set on the cycle the uplink disappears, cleared when it returns
         self.last_autojoin_detail = None  # dedupes the once-a-minute auto-join outcome in the log
+        self.last_hunt_detail = None      # same, for the hunter's refusal reason
 
     def load_actions(self):
         """Load all actions from the actions file"""
@@ -316,12 +317,59 @@ class Orchestrator:
             else:
                 logger.debug(f"Auto-join: {detail}")
 
-        wait = max(15, int(getattr(self.shared_data, "offline_cycle_interval", 60)))
-        self.shared_data.bjornstatustext2 = "offline · resting"
-        deadline = datetime.now() + timedelta(seconds=wait)
-        while datetime.now() < deadline and not self.shared_data.orchestrator_should_exit:
-            time.sleep(1)
+        self._offline_idle(max(15, int(getattr(self.shared_data, "offline_cycle_interval", 60))))
         return True
+
+    def _hunter(self):
+        """The Handshake Hunter, created on first use and shared via SharedData so the web panel
+        can read its status without the orchestrator handing it around."""
+        hunter = getattr(self.shared_data, "hunter", None)
+        if hunter is None:
+            hunter = bettercap_pwn.Hunter(self.shared_data)
+            self.shared_data.hunter = hunter
+        return hunter
+
+    def _offline_idle(self, seconds):
+        """Spend the offline idle window hunting handshakes, or sleeping if the hunter cannot run.
+
+        THE RULE THIS METHOD ENFORCES: the hunter is started and stopped inside this window and
+        never outlives it. reconnect_best() runs near the top of the *next* cycle, by which point
+        the radio is verifiably back in managed mode. nmcli cannot associate an interface still in
+        monitor mode and it fails *quietly* — so without this the symptom would be "auto-join
+        stopped working", not "the hunter is still holding the radio", and Bjorn would sit offline
+        forever with a growing pile of handshakes it could never deliver.
+
+        Sleeping was the alternative use of this window, so hunting costs nothing that was being
+        spent on something else.
+        """
+        started = False
+        hunter = None
+        if getattr(self.shared_data, "bettercap_pwn_enabled", False):
+            hunter = self._hunter()
+            ok, detail = hunter.start()
+            started = ok
+            if ok:
+                self.shared_data.bjornorch_status = "BettercapPwn"
+                self.shared_data.bjornstatustext2 = detail[:40]
+                self.last_hunt_detail = None
+            elif detail != self.last_hunt_detail:
+                # Offline cycles repeat every 60s and a refusal ("only 1 wireless radio") is
+                # identical every time. Log the change, not the heartbeat.
+                logger.info(f"Hunter not started: {detail}")
+                self.last_hunt_detail = detail
+        if not started:
+            self.shared_data.bjornstatustext2 = "offline · resting"
+
+        try:
+            deadline = datetime.now() + timedelta(seconds=seconds)
+            while datetime.now() < deadline and not self.shared_data.orchestrator_should_exit:
+                time.sleep(1)
+        finally:
+            # finally, not after the loop: a shutdown mid-window must still hand the radio back,
+            # or Bjorn restarts into an interface nothing can associate.
+            if started:
+                ok, detail = hunter.stop()
+                (logger.info if ok else logger.error)(f"Hunter: {detail}")
 
     def execute_standalone_action(self, action, current_data):
         """Execute a standalone action"""

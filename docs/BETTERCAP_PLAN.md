@@ -202,7 +202,7 @@ happens, because it fixes a real per-cycle error the moment any long-lived consu
 | C1 | ✅ **DONE.** `bettercap_pwn.can_start(shared_data)` → `(ok, reason, iface)` + `describe()`. Refuses when fewer than two radios exist, when a *named* radio is absent or is the uplink, when managed-mode Bettercap is on, when bettercap is missing, or when the radio is held. Pure decision logic over injected state. | `bettercap_pwn.py`, `tests/test_bettercap_pwn.py` | Single-radio refusal covered, online **and** offline |
 | C2 | ✅ **DONE.** `Hunter.start()/stop()/status()`: takes `monitor_mode.acquire(iface, owner="pwn")`, spawns bettercap, and `stop()` releases in a `finally` after verifying the radio is managed. Output dir derived in `SharedData` (`data/output/handshakes/raw/YYYY-MM-DD/`). | `bettercap_pwn.py`, `shared.py` | `stop()` leaves `iw dev` reporting `type managed` and `holder()` empty |
 | C3 | ✅ **DONE.** `update_index()` walks `raw/`, keys by path, preserves `first_seen`, and writes `index.json` atomically only when something changed. Called from `Hunter.stop()`. | `bettercap_pwn.py`, `tests/test_bettercap_pwn.py` | Re-running over the same files adds no duplicate entries |
-| C4 | **Offline integration.** `run_offline_cycle()` starts the hunter after wireless recon and **stops it before `reconnect_best()`**, then restarts it if still offline. No new "am I offline" logic anywhere. | `orchestrator.py`, `offline_mode.py` | Auto-join still works with the hunter enabled — the acceptance test that matters most |
+| C4 | ✅ **DONE.** `_offline_idle()` spends the offline wait hunting instead of sleeping, and **always stops the hunter before returning** — so `reconnect_best()`, near the top of the next cycle, always finds a managed radio. No new "am I offline" logic. | `orchestrator.py`, `shared.py`, `web/bettercap.*` | Auto-join still works with the hunter enabled — asserted in `tests/test_offline_hunting.py` |
 | C5 | Epoch loop: recon → pick targets → assoc/deauth → sleep `bettercap_pwn_epoch`. Rule-based selection only (RSSI floor, unseen-BSSID first, per-BSSID cooldown). | `bettercap_pwn.py` | One epoch runs end to end on the Pi and writes at least one PCAP |
 
 **C1 notes:**
@@ -260,6 +260,28 @@ happens, because it fixes a real per-cycle error the moment any long-lived consu
 - bettercap's per-AP naming is still unconfirmed on hardware, like the event schema was. This
   parser is deliberately tolerant and lives in one place; a file with no MAC in its name is still
   indexed rather than dropped.
+
+**C4 notes:**
+- **Hunting replaces the offline *sleep*, it does not run alongside the cycle.** The plan said
+  "start after recon, stop before reconnect", which taken literally gives the hunter a few
+  milliseconds of air time — recon and reconnect are adjacent. The window that was already being
+  spent doing nothing is the one worth using, so `_offline_idle()` hunts for
+  `offline_cycle_interval` seconds and then stops.
+- **The invariant is "the hunter never outlives one idle window"**, enforced in a `finally`. That
+  is strictly stronger than "stop before reconnect" and easier to verify: whatever happens inside
+  the window — including `orchestrator_should_exit` firing mid-wait — the radio is handed back
+  before the method returns, so the next cycle's `reconnect_best()` cannot meet a monitor-mode
+  interface.
+- **Disabled means the hunter is never constructed or asked.** Calling `start()` unconditionally
+  and letting `can_start` refuse would log a refusal every 60 seconds on every device without a
+  second radio.
+- **`bettercap_pwn_enabled` / `bettercap_pwn_iface` land here**, with fields on `/bettercap`,
+  because this is the step where the toggle finally does something. The other seven keys from the
+  table above still wait for C5. The panel's hunter line comes from `can_start()` itself, so the
+  page cannot disagree with the code about why nothing is happening.
+- **The test that matters asserts `monitor_mode.holder() == ""` at the moment `reconnect_best` is
+  called**, with a fake hunter that takes the *real* lock — otherwise the assertion passes for any
+  ordering, which is the same "a count is not a check" trap C3 hit.
 
 ### Stage D — visible, downloadable, rewarded (~1–2 sessions)
 

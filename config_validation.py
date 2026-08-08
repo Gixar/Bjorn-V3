@@ -17,12 +17,13 @@ _BOOL_KEYS = ("manual_mode", "websrv", "debug_mode", "scan_vuln_running",
               "ble_scan_enabled", "smtp_enabled", "wifi_scan_enabled",
               "adaptive_scan_interval", "offline_mode_enabled", "wifi_autojoin",
               "wifi_autojoin_open", "bettercap_enabled", "bettercap_arp_spoof",
-              "bettercap_sniff")
+              "bettercap_sniff", "bettercap_pwn_enabled")
 # Keys that must be present and a string. Deliberately only the new Bettercap credentials for now:
 # folding the older string keys (wifi_scan_iface, telegram_bot_token, smtp_host, ...) in here would
 # turn a saved config holding a JSON null into a startup failure on upgrade, for no benefit anyone
 # asked for. Add them one at a time when something actually depends on the type.
-_STR_KEYS = ("bettercap_api_url", "bettercap_user", "bettercap_password")
+_STR_KEYS = ("bettercap_api_url", "bettercap_user", "bettercap_password",
+             "bettercap_pwn_iface")
 # These must be non-negative integers (JSON bools are excluded — bool is an int subclass).
 _NONNEG_INT_KEYS = (
     "startup_delay", "scan_interval", "scan_vuln_interval",

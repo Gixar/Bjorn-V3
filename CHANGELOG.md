@@ -261,6 +261,23 @@
   - Bug caught while writing it: `grep -c` prints `0` **and** exits 1 on no-match, so the obvious
     `|| echo 0` appends a second line and every numeric comparison on the result silently fails.
     `bjorn_diag.sh` shipped this exact bug once already.
+- **The hunter runs while Bjorn is offline** (Stage C step C4) — `bettercap_pwn_enabled`, off by
+  default, with fields on `/bettercap`. This is the step where the feature becomes real: the idle
+  wait between reconnection attempts is spent listening for handshakes instead of sleeping.
+  - **The invariant: the hunter never outlives one idle window**, enforced in a `finally`. That is
+    stronger than the planned "stop before reconnect" and much easier to verify — whatever happens
+    inside the window, including a shutdown mid-wait, the radio is handed back before the method
+    returns, so `reconnect_best()` can never meet a monitor-mode interface. nmcli fails *quietly*
+    on one, so the bug this prevents would have looked like "auto-join stopped working", with
+    Bjorn sitting offline forever next to a growing pile of undeliverable handshakes.
+  - Hunting **replaces** the sleep rather than running alongside the cycle. Taken literally, "start
+    after recon, stop before reconnect" gives the hunter milliseconds — those two steps are
+    adjacent. The window already being spent on nothing is the one worth using.
+  - Disabled means the hunter is never constructed or asked: letting `can_start` refuse on every
+    cycle would log a refusal every 60 seconds on every device without a second radio.
+  - The panel's hunter line comes from `can_start()` itself, so the page cannot disagree with the
+    code about why nothing is happening — `only 1 wireless radio` and `ready to hunt on wlan1` are
+    the two answers that matter.
 - **Handshake loot index** (`update_index`, Stage C step C3) — walks `handshakes/raw/`, records
   BSSID / ESSID / size / first-seen per capture, and writes `index.json` atomically. Called from
   `Hunter.stop()` once bettercap has closed its files.

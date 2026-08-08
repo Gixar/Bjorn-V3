@@ -37,6 +37,7 @@ def _good_config():
         "bettercap_enabled": False, "bettercap_arp_spoof": False, "bettercap_sniff": False,
         "bettercap_api_url": "http://127.0.0.1:8081", "bettercap_user": "bjorn",
         "bettercap_password": "",
+        "bettercap_pwn_enabled": False, "bettercap_pwn_iface": "",
     }
 
 

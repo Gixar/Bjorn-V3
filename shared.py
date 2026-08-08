@@ -204,6 +204,10 @@ class SharedData:
             "bettercap_password": "",             # api.rest Basic-Auth password (secret, generated at install)
             "bettercap_arp_spoof": False,     # active ARP spoofing (off = passive recon only)
             "bettercap_sniff": False,         # passive traffic sniff
+            # Handshake Hunter (Stage C): monitor mode on a SECOND radio, during offline cycles.
+            # Refuses to start on a single-radio device — it would hold the only path back online.
+            "bettercap_pwn_enabled": False,   # hunt for handshakes while there is no uplink
+            "bettercap_pwn_iface": "",        # radio to hunt on; blank = any non-uplink radio
             "steal_file_names": ["ssh.csv","hack.txt"],
             "steal_file_extensions": [".bjorn",".hack",".flag"],
             

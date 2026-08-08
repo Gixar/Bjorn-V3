@@ -32,6 +32,7 @@ from starlette.responses import JSONResponse, HTMLResponse, PlainTextResponse, R
 from actions.nmap_vuln_scanner import NmapVulnScanner
 import telegram_client
 import bettercap_client
+import bettercap_pwn
 
 
 logger = Logger(name="utils.py", level=logging.DEBUG)
@@ -217,19 +218,27 @@ class WebUtils:
         is off by default, so an unreachable daemon is the expected answer, not a server error. The
         wording lives here rather than in the JS so there is one place that can describe a state
         wrongly instead of two."""
+        # The hunter's line is reported whatever managed mode is doing — they are separate
+        # features on one page, and "disabled" for one must not hide the other's reason.
+        hunter = bettercap_pwn.describe(self.shared_data)
+        running = getattr(self.shared_data, "hunter", None)
+        if running is not None and running.is_running():
+            status = running.status()
+            hunter = f"hunting on {status['iface']} since {status['since']}"
+
         if not getattr(self.shared_data, "bettercap_enabled", False):
-            return _ok(message="disabled", payload={"state": "disabled"})
+            return _ok(message="disabled", payload={"state": "disabled", "hunter": hunter})
         client = bettercap_client.BettercapClient.from_config(self.shared_data)
         ok, obj = client.session()
         if not ok:
             # `obj` is already plain language from the client ("unauthorized (check ...)"), so it
             # is passed through rather than restated.
-            return _ok(message=str(obj), payload={"state": "unreachable"})
+            return _ok(message=str(obj), payload={"state": "unreachable", "hunter": hunter})
         version = ""
         if isinstance(obj, dict):
             version = str((obj.get("version") or obj.get("Version") or "")).strip()
         return _ok(message=f"running{' ' + version if version else ''}",
-                   payload={"state": "running", "version": version})
+                   payload={"state": "running", "version": version, "hunter": hunter})
 
     # ------------------------------------------------------------------
     # Report delivery (Telegram, SMTP fallback) — POST /telegram_test, POST /telegram_send

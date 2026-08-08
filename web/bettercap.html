@@ -99,6 +99,41 @@
             </div>
         </div>
 
+        <div class="card">
+            <div class="card-header">
+                <div>
+                    <h2 class="card-title">Handshake Hunter</h2>
+                    <p class="card-subtitle" id="bc-hunter-status">Checking…</p>
+                </div>
+            </div>
+
+            <p>
+                While Bjorn has <strong>no network</strong>, it can spend the idle time between
+                reconnection attempts listening for WPA handshakes on a second radio, instead of
+                simply waiting. Captures land in
+                <code>data/output/handshakes/raw/</code>, one file per access point.
+            </p>
+
+            <div class="note warn">
+                <strong>Needs a second radio, and refuses to run without one.</strong> Monitor mode
+                takes a radio off the network entirely. On a single-radio device the hunter would
+                hold the only way back online — Bjorn could never rejoin a network, and so could
+                never deliver anything it captured. It also stops itself before every reconnection
+                attempt, for the same reason.
+            </div>
+
+            <div class="tg-form">
+                <label class="tg-check"><input type="checkbox" id="bc-pwn-enabled"> Hunt handshakes while offline</label>
+                <label class="tg-field">Radio (blank = any radio that is not the uplink)
+                    <input type="text" id="bc-pwn-iface" autocomplete="off" placeholder="wlan1">
+                </label>
+            </div>
+            <div class="log-toolbar">
+                <button type="button" class="btn" onclick="bcSave()">Save</button>
+                <button type="button" class="btn btn-ghost" onclick="bcRefreshStatus()">Refresh</button>
+            </div>
+        </div>
+
         <div class="card" data-files-group="bettercap"></div>
     </main>
 </body>

@@ -168,6 +168,26 @@
   (a missed finding is worse than a spare request). `apache-status` is gated to `["apache"]`.
 
 ### Added
+- **`scripts/bjorn_verify.sh` is now tracked, and verifies this whole batch** — it was living
+  untracked on the device, which is exactly how `bjorn_doctor.sh` drifted from the code it
+  inspected. New **section 8**, covering everything with no hardware confirmation yet:
+  - **8a — the collect-by-default flips.** Checks the *effective* config, because a saved
+    `shared_config.json` from before the upgrade overrides a changed default silently: everything
+    keeps working, it just collects nothing. Also reads the `Port discovery engine:` log line
+    rather than trusting `use_rustscan`, since the toggle being on is not proof the binary was
+    found.
+  - **8b — the Stage A rule.** Fires two overlapping captures and asserts the second is declined
+    with **no new ERROR** in `wifi_scan.py.log`. That is the regression that would otherwise appear
+    only once the hunter holds the radio for hours.
+  - **8c — Bettercap plumbing.** Panel reachable, unit present but **not** enabled, and the
+    generated password in sync between the unit and the config — a mismatch surfaces as a bare
+    "unauthorized" with no hint as to which side is wrong.
+  - **8d — the Unreleased wave**, none of which has run on hardware: planner activity, idle-notice
+    volume (the P1 flood wrote 7000+ lines), offline mode, per-page file groups, help page,
+    comment-theme misses.
+  - Bug caught while writing it: `grep -c` prints `0` **and** exits 1 on no-match, so the obvious
+    `|| echo 0` appends a second line and every numeric comparison on the result silently fails.
+    `bjorn_diag.sh` shipped this exact bug once already.
 - **Bettercap web panel + installer provisioning** (Stage B steps B4/B5). Still inert: the daemon is
   installed and configured but **never enabled**, and nothing polls it until B2.
   - New `/bettercap` page — enable switch, API URL/user/password (masked, with the existing reveal

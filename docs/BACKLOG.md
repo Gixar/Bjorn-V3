@@ -180,9 +180,18 @@ single-user device on an operator-controlled network; see the security-review se
 
 ## Tier-0 verification sweep — 2026-08-07 (12 PASS, 0 FAIL)
 
-Every "needs the Pi" item run in one pass via `scripts/bjorn_verify.sh` (untracked, one-shot: it
-drives the existing web API rather than re-implementing any action, so it verifies the real code
-path). Unlike `bjorn_diag.sh` it *acts* — real capture, real benchmark.
+Every "needs the Pi" item run in one pass via `scripts/bjorn_verify.sh` (it drives the existing web
+API rather than re-implementing any action, so it verifies the real code path). Unlike
+`bjorn_diag.sh` it *acts* — real capture, real benchmark.
+
+> **Now tracked in the repo** (2026-08-08) and extended with **section 8**, covering everything
+> merged since this sweep: the collect-by-default flips (BLE / Wi-Fi / RustScan, and that the
+> engine actually *selected* is rustscan rather than the toggle merely being on), the Stage A
+> radio-ownership rule (two overlapping captures must produce a clean skip and **no new ERROR**),
+> Bettercap plumbing (panel reachable, unit present but **not** enabled, generated password in sync
+> between the unit and the config), and the never-yet-run Unreleased wave (planner, idle-notice
+> volume, offline mode, per-page file groups, help page, comment themes). It was untracked before,
+> which is how it drifted from the code it inspects.
 
 **✅ Closed — Wave 4 is done, end to end:**
 - **`airodump-ng` captures.** 4 APs / 7 clients into `wifi_aps.csv` / `wifi_clients.csv` from a 30s

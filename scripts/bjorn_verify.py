@@ -462,6 +462,11 @@ class Verifier:
         else:
             self.r.verdict(FAIL, f"release() restored {self.mon_iface}",
                            f"type={mode} - radio stranded")
+            # acquire()/release() log to monitor_mode, not wifi_scan — showing the wrong log here
+            # is how you conclude "nothing was logged" about a failure that was logged elsewhere.
+            print("  --- tail of monitor_mode.py.log ---")
+            for line in _read(self.log("monitor_mode.py.log")).splitlines()[-6:]:
+                print("  " + line)
             print(f"  recover: sudo iw dev {self.mon_iface} set type managed && "
                   f"sudo nmcli device set {self.mon_iface} managed yes")
         # NB: no early return above — the uplink check below is the most important verdict in this

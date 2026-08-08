@@ -15,6 +15,7 @@
 #
 # Kept dependency-free and separate from shared.py so the parsing/guard logic is unit-testable
 # without constructing SharedData (which pulls in PIL / the e-Paper stack).
+import time
 import shutil
 import logging
 import threading
@@ -143,6 +144,21 @@ def check_usable(iface):
     return ""
 
 
+def parse_iface_mode(iw_info_output):
+    """802.11 mode ("managed" / "monitor") from `iw dev <if> info`, or "". Pure/testable."""
+    for line in iw_info_output.splitlines():
+        parts = line.split()
+        if parts[:1] == ["type"]:
+            return parts[1] if len(parts) > 1 else ""
+    return ""
+
+
+def current_mode(iface):
+    """The interface's current 802.11 mode, or "" when it cannot be read."""
+    rc, out = _run(["iw", "dev", iface, "info"])
+    return parse_iface_mode(out) if rc == 0 else ""
+
+
 def acquire(iface, owner="scan"):
     """Put `iface` into monitor mode for `owner`. Returns (ok, detail, reason), where reason is
     "" on success or one of BUSY / UNSAFE / FAILED. Refuses the uplink interface.
@@ -191,15 +207,44 @@ def release(iface, owner="scan"):
     if _radio_owner and _radio_owner != owner:
         logger.warning(f"{owner} tried to release {iface}, but {_radio_owner} holds it — ignoring.")
         return
+    restored = False
     try:
-        for args in (["ip", "link", "set", iface, "down"],
-                     ["iw", "dev", iface, "set", "type", "managed"],
-                     ["ip", "link", "set", iface, "up"]):
-            _run(args)
+        # Verify, then retry once, then shout. This used to run the three commands ignoring every
+        # return code and log "returned to managed mode" unconditionally — so on 2026-08-08 a radio
+        # left in monitor mode was reported as restored, and the only reason anyone noticed was the
+        # verification script checking `iw dev` itself. Same class as the run report claiming
+        # `WiFiScan: success=4` for an action that had never captured anything: a status line that
+        # cannot fail tells you nothing. `iw set type` commonly fails with EBUSY for a moment after
+        # a capture, which is exactly the case a single blind attempt loses.
+        for attempt in (1, 2):
+            for args in (["ip", "link", "set", iface, "down"],
+                         ["iw", "dev", iface, "set", "type", "managed"],
+                         ["ip", "link", "set", iface, "up"]):
+                _run(args)
+            if current_mode(iface) in ("managed", ""):
+                restored = True
+                break
+            if attempt == 1:
+                logger.warning(f"{iface} is still in monitor mode after release; retrying.")
+                time.sleep(2)
+
         if shutil.which("nmcli"):
             _run(["nmcli", "device", "set", iface, "managed", "yes"])
-        logger.info(f"{iface} returned to managed mode.")
+
+        if restored:
+            logger.info(f"{iface} returned to managed mode.")
+        else:
+            # Loud on purpose: the radio is off the network until someone fixes it, and the next
+            # acquire() will happily re-monitor an interface that never came back.
+            logger.error(f"{iface} is STILL in monitor mode after two release attempts — it is out "
+                         f"of service until restored. Recover with: "
+                         f"sudo iw dev {iface} set type managed && "
+                         f"sudo nmcli device set {iface} managed yes")
     finally:
         _radio_owner = ""  # cleared before the lock drops, so holder() never names a stale owner
         if _radio_lock.locked():
             _radio_lock.release()
+    # The lock is freed either way: a radio stuck in monitor mode must not also deadlock every
+    # future consumer. acquire() re-runs `iw set type monitor` anyway, so the next capture can
+    # still succeed on an interface that never came back.
+    return restored

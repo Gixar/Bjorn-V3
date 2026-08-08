@@ -287,6 +287,28 @@ depend on.
 - `bettercap stays off until asked` — the known apt auto-enable, already fixed in the installer;
   this device still needs `sudo systemctl disable --now bettercap`.
 
+### Third run — `release()` was lying, and only the verifier caught it
+
+Guard now PASSes (*"refusing to use wlan0: it carries Bjorn's default route"*), so the Wi-Fi
+section ran to completion for the first time and immediately found a real defect.
+
+- **`release()` reported success on a radio it had not restored.** `wlan1` was left `type=monitor`
+  while `monitor_mode.py.log` said *"returned to managed mode"*: the function ran its three
+  commands ignoring every return code and logged success unconditionally. **This is the third
+  instance of the same defect class in this codebase** (`WiFiScan: success=4`; `release()`; the
+  status line that cannot fail) — worth treating as a pattern rather than three accidents. Fixed:
+  verify, retry once on EBUSY, ERROR with the recovery command otherwise, and return a bool.
+- **`airodump capture — no fresh AP rows`** is a *real* FAIL and is still **unexplained**: the
+  capture logged `WiFiScan initialized.` and then nothing at all — no SUCCESS, no error — and the
+  CSVs stayed 11 minutes old. The stranded radio is the visible half; why the capture produced
+  nothing is not yet known. **Next run should include `monitor_mode.py.log`**, which is where
+  `acquire`/`release` record what actually happened (the verifier now tails it automatically on a
+  release failure). Prime suspect: the capture and the release raced, leaving `iw` unable to change
+  the type.
+- Unrelated but worth noting: `http_fingerprints.csv` went from 2 rows to missing, and the planner
+  now says `HTTPFingerprint@192.168.1.2 - never tried`. Consistent with the data having been
+  cleared from the UI between runs, not a regression.
+
 **Worth recording:** `build_info` says `source_commit=unknown (source was not a git checkout)`, so
 the sweep could not name the commit under test. The installer's stamp only resolves when it is run
 from a git checkout — worth fixing before the next sweep, since "which code produced this report"

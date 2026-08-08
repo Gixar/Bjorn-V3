@@ -260,6 +260,39 @@ def test_wifi_scan_skips_rather_than_fails_when_the_radio_is_busy():
         _restore(saved)
 
 
+def test_release_reports_failure_instead_of_claiming_success():
+    """2026-08-08 on-Pi: wlan1 was left in monitor mode while release() logged 'returned to managed
+    mode'. It ran three commands ignoring every return code and reported success unconditionally —
+    a status line that cannot fail tells you nothing (cf. `WiFiScan: success=4`)."""
+    saved = _guard_with("wlan0", ["wlan0", "wlan1"])
+    saved_run = monitor_mode._run
+    mode = {"value": "monitor"}   # the radio never comes back
+
+    def fake_run(args, **kwargs):
+        if args[:2] == ["iw", "dev"] and args[-1] == "info":
+            return 0, f"\ttype {mode['value']}\n"
+        return 0, ""
+
+    monitor_mode._run = fake_run
+    try:
+        monitor_mode.acquire("wlan1")
+        assert monitor_mode.release("wlan1") is False, "a stranded radio must not report success"
+        assert monitor_mode.holder() == "", "the lock must be freed even when the radio is stuck"
+
+        mode["value"] = "managed"  # and a radio that does come back reports True
+        monitor_mode.acquire("wlan1")
+        assert monitor_mode.release("wlan1") is True
+    finally:
+        monitor_mode._run = saved_run
+        _restore(saved)
+
+
+def test_parse_iface_mode():
+    assert monitor_mode.parse_iface_mode("\tifindex 4\n\ttype monitor\n") == "monitor"
+    assert monitor_mode.parse_iface_mode("\ttype managed\n") == "managed"
+    assert monitor_mode.parse_iface_mode("no type line here\n") == ""
+
+
 def test_guard_rejects_blank_and_unknown_interfaces():
     saved = _guard_with("wlan0", ["wlan0"])
     try:

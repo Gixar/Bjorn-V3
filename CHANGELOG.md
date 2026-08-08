@@ -168,6 +168,22 @@
   (a missed finding is worse than a spare request). `apache-status` is gated to `["apache"]`.
 
 ### Fixed
+- **`monitor_mode.release()` claimed success even when the radio never came back** (found on-Pi
+  2026-08-08: `wlan1` was left in monitor mode while the log said *"returned to managed mode"*).
+  It ran `ip link down` / `iw set type managed` / `ip link up` **ignoring every return code** and
+  then logged success unconditionally — a status line that cannot fail tells you nothing. Exactly
+  the class of defect `BACKLOG.md` already records for `WiFiScan: success=4`, and the only reason
+  it surfaced at all is that the verification script checks `iw dev` itself rather than trusting
+  the log.
+  - Now verifies the mode afterwards, **retries once** (`iw set type` commonly returns EBUSY for a
+    moment right after a capture — the case a single blind attempt loses), and on a second failure
+    logs at **ERROR** with the recovery command. Returns `True`/`False` so callers can react.
+  - The lock is still freed on failure: a radio stuck in monitor mode must not also deadlock every
+    future consumer, and `acquire()` re-runs `iw set type monitor` anyway.
+  - `parse_iface_mode()` / `current_mode()` added alongside, both pure and tested.
+  - The verifier now tails `monitor_mode.py.log` on this failure — `acquire`/`release` log there,
+    not to `wifi_scan.py.log`, and showing the wrong log is how you conclude "nothing was logged"
+    about a failure that was logged elsewhere.
 - **`bjorn_verify.py` reported a *working* uplink guard as broken** (2026-08-08 Pi run, the port's
   worst bug). Bjorn's handlers signal a refusal with `_err()` — HTTP **500** plus a JSON
   `{"status": "error"}` body. `curl`, in the shell version, printed that body regardless of status

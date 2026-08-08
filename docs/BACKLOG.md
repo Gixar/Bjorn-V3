@@ -269,6 +269,24 @@ mirrors the fallback. Re-run to actually close Stage A.
 **Still open (needs a target or a plug, none a defect):** web templates / SNMP / credential reuse ·
 usb0 lease · Telegram/SMTP unconfigured · `#113` still undiagnosable (this panel is `epd2in13_V3`).
 
+### Second run, same day — the Python port (24 PASS, 2 FAIL)
+
+Re-run after the `pick_monitor_iface` fix. **Stage A is now verified on hardware:** with `wlan1`
+resolved, two overlapping captures produced *"second capture declined, no new ERROR"* — the
+busy-radio-is-a-skip rule holds on a real radio, which is the property the Bettercap hunter will
+depend on.
+
+**Both FAILs were about the verifier or a known bug, not new defects:**
+- ~~`guard refuses the uplink — ACCEPTED wlan0`~~ ❌ **The verifier was wrong, the guard was fine.**
+  `_err()` answers HTTP 500 with a JSON error body; `curl` printed it regardless of status, but
+  `urllib` raises `HTTPError` and the client swallowed it as `None` — so a *correct* refusal read
+  as the guard accepting the uplink. Fixed: an error body is the answer. And a request that never
+  lands is now WARN "could not ask", never FAIL "ACCEPTED". **Lesson worth keeping: the port
+  reintroduced exactly the silent-wrong-answer class it was written to remove. What changed is the
+  time-to-detection — one run, not one sweep — and that it now has a test.**
+- `bettercap stays off until asked` — the known apt auto-enable, already fixed in the installer;
+  this device still needs `sudo systemctl disable --now bettercap`.
+
 **Worth recording:** `build_info` says `source_commit=unknown (source was not a git checkout)`, so
 the sweep could not name the commit under test. The installer's stamp only resolves when it is run
 from a git checkout — worth fixing before the next sweep, since "which code produced this report"

@@ -130,6 +130,44 @@ def test_pick_monitor_iface_falls_back_like_the_code_it_verifies():
     assert bv.pick_monitor_iface(None)[0] == ""
 
 
+def test_an_http_error_body_is_the_answer_not_a_failure():
+    """Bjorn's handlers signal a refusal with _err() = HTTP 500 + {"status": "error"}. urllib
+    raises on that; curl (the shell version) printed the body regardless. Swallowing it made a
+    CORRECT uplink refusal report as 'ACCEPTED wlan0 - check_usable is broken' on the 2026-08-08
+    Pi run — the verifier screaming that a working safety guard had failed."""
+    import io
+    import json as _json
+    saved = bv.urllib.request.urlopen
+
+    def refusing(req, timeout=None):
+        raise bv.urllib.error.HTTPError(
+            req.full_url, 500, "err", {},
+            io.BytesIO(_json.dumps({"status": "error", "message": "carries the default route"}).encode()))
+
+    bv.urllib.request.urlopen = refusing
+    try:
+        answer = bv.Api("127.0.0.1:8000").post("/wifi_monitor_test", {"iface": "wlan0"})
+    finally:
+        bv.urllib.request.urlopen = saved
+    assert answer is not None, "an error body must not be swallowed"
+    assert answer.get("status") == "error"
+
+
+def test_an_unreachable_endpoint_is_none_not_an_empty_answer():
+    """None and {} must stay distinguishable: 'could not ask the guard' is a WARN, 'the guard said
+    yes' is a catastrophic FAIL, and conflating them invents the catastrophe."""
+    saved = bv.urllib.request.urlopen
+
+    def refused(req, timeout=None):
+        raise bv.urllib.error.URLError("Connection refused")
+
+    bv.urllib.request.urlopen = refused
+    try:
+        assert bv.Api("127.0.0.1:8000").post("/wifi_monitor_test", {"iface": "wlan0"}) is None
+    finally:
+        bv.urllib.request.urlopen = saved
+
+
 def test_file_group_count_tolerates_both_shapes_and_errors():
     assert bv.file_group_count({"group": "wifi", "files": [{"key": "a"}, {"key": "b"}]}) == 2
     assert bv.file_group_count([{"key": "a"}]) == 1

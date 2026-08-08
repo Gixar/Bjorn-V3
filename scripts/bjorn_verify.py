@@ -241,10 +241,24 @@ class Api:
             method="POST" if data is not None or payload == {} else "GET")
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
-                body = resp.read().decode("utf-8", errors="replace")
-            return json.loads(body) if body.strip() else {}
+                return self._decode(resp.read())
+        except urllib.error.HTTPError as e:
+            # Bjorn's own handlers signal a refusal with `_err()`, which is HTTP 500 plus a JSON
+            # {"status": "error"} body. urllib raises on that; curl (the shell version) printed the
+            # body regardless of status. Swallowing it as None made a *correct* uplink refusal read
+            # as "ACCEPTED wlan0 — check_usable is broken", i.e. the verifier screaming that a
+            # working safety guard had failed. An error body IS the answer here, so read it.
+            return self._decode(e.read()) if hasattr(e, "read") else None
         except (urllib.error.URLError, OSError, json.JSONDecodeError):
-            return None
+            return None   # genuinely no answer — distinct from an error answer
+
+    @staticmethod
+    def _decode(raw):
+        body = (raw or b"").decode("utf-8", errors="replace")
+        try:
+            return json.loads(body) if body.strip() else {}
+        except json.JSONDecodeError:
+            return {}
 
     def get(self, path, timeout=30):
         return self._call(path, None, timeout)
@@ -369,7 +383,14 @@ class Verifier:
         # Guard regression - must REFUSE the uplink. Read-only, so it costs nothing to check, and
         # a guard bug found here cannot take the uplink with it.
         if self.uplink:
-            guard = self.api.post("/wifi_monitor_test", {"iface": self.uplink}) or {}
+            guard = self.api.post("/wifi_monitor_test", {"iface": self.uplink})
+            if guard is None:
+                # No answer is NOT the same as "it accepted". Claiming a safety guard is broken
+                # when the question never got asked is the worst lie this script could tell — it
+                # would send someone hunting a catastrophic bug that does not exist.
+                self.r.verdict(WARN, "guard refuses the uplink",
+                               "no answer from /wifi_monitor_test — could not ask; guard NOT tested")
+                return
             if guard.get("status") == "error":
                 self.r.verdict(PASS, "guard refuses the uplink", str(guard.get("message"))[:60])
             else:
@@ -708,8 +729,11 @@ class Verifier:
         self.r.section("8d. The Unreleased wave")
         orch = self.log("orchestrator.py.log")
         planner = last_matching(orch, "Planner chose")
+        # From the marker, not the tail: a [-70:] slice cut the log's own timestamp/module prefix
+        # mid-word and printed "strator.py - INFO - Planner chose: ...".
+        detail = planner[planner.index("Planner chose"):] if planner else ""
         self.r.verdict(PASS if planner else WARN, "scored work selection runs",
-                       planner[-70:] if planner
+                       detail[:80] if detail
                        else "no 'Planner chose' line yet - needs an alive host with work to rank")
         idle = count_matching(orch, "idling")
         self.r.verdict(PASS if idle < 200 else WARN, "idle notice logged once per window",

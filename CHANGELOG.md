@@ -168,6 +168,24 @@
   (a missed finding is worse than a spare request). `apache-status` is gated to `["apache"]`.
 
 ### Fixed
+- **`bjorn_verify.py` reported a *working* uplink guard as broken** (2026-08-08 Pi run, the port's
+  worst bug). Bjorn's handlers signal a refusal with `_err()` — HTTP **500** plus a JSON
+  `{"status": "error"}` body. `curl`, in the shell version, printed that body regardless of status
+  code. `urllib` raises `HTTPError` instead, and the client swallowed it as `None`, so a correct
+  refusal of `wlan0` came out as **"ACCEPTED wlan0 — do NOT run a capture, check_usable is
+  broken"**. The guard was fine throughout; the verifier invented a catastrophe, and the early
+  return it triggered also skipped the capture and release checks.
+  - An HTTP error body is now read and returned — for these endpoints the error body *is* the
+    answer.
+  - `None` (no answer) and `{}` (empty answer) stay distinguishable, and the guard check reports
+    **WARN "could not ask; guard NOT tested"** rather than FAIL when the request never landed.
+    Claiming a safety guard failed when the question was never asked is the worst lie this script
+    could tell.
+  - Both paths are pinned as tests. Sobering note for the bash-vs-Python question: this is the
+    exact class of silent wrong answer the port was meant to eliminate, introduced *by* the port —
+    the difference is that it took one run to surface and is now covered.
+- **The planner verdict printed `strator.py - INFO - Planner chose: …`** — a `[-70:]` tail slice
+  cutting the log's own prefix mid-word. Sliced from the marker instead.
 - **`apt install bettercap` left a root daemon enabled at boot** (found on-Pi 2026-08-08 by the
   verification run — the single FAIL in an otherwise-green sweep). Debian's debhelper enables
   **and starts** a packaged service at install time; `install_bettercap` never called

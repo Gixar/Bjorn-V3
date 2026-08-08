@@ -35,6 +35,10 @@ class NetworkScanner:
     """
     This class handles the entire network scanning process.
     """
+    # Class-level so it holds even for an instance built with __new__ (the tests do that — real
+    # SharedData needs hardware). Assigning it marks "already said"; see selected_engine().
+    _rustscan_missing_logged = False
+
     def __init__(self, shared_data):
         self.shared_data = shared_data
         self.logger = logger
@@ -352,13 +356,20 @@ class NetworkScanner:
         return next((p for p in candidates if os.access(p, os.X_OK)), None)
 
     def selected_engine(self):
-        """Which port-discovery engine to use: 'rustscan' only if opted in AND the binary is
-        present, else 'nmap'. Warn (once per scan) when opted in but rustscan isn't installed so
-        an existing install that flips the toggle without provisioning the binary isn't silent."""
-        if getattr(self.shared_data, "use_rustscan", False):
+        """Which port-discovery engine to use: 'rustscan' if enabled AND the binary is present,
+        else 'nmap'.
+
+        Said once per process, not once per scan, and at INFO rather than WARNING: rustscan is on
+        by default now, so "binary missing -> use nmap" is a normal, fully-handled state on an arch
+        the installer couldn't provision, not a misconfiguration to nag about every cycle. It is
+        still worth saying once — a silent 27x slowdown is worse than a line in the log."""
+        if getattr(self.shared_data, "use_rustscan", True):
             if self._rustscan_bin():
                 return "rustscan"
-            self.logger.warning("use_rustscan is on but the 'rustscan' binary was not found; using nmap.")
+            if not self._rustscan_missing_logged:
+                self.logger.info("rustscan not installed; using nmap for port discovery. "
+                                 "To add it: cargo install rustscan --root /usr/local")
+                self._rustscan_missing_logged = True
         return "nmap"
 
     def discover_ports(self, ip_list, ports_to_scan, engine):

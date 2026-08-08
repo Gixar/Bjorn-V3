@@ -165,10 +165,11 @@ class SharedData:
             "mac_scan_blacklist": [],
             "ip_scan_blacklist": [],
             "snmp_communities": ["public", "private"],  # SNMP community strings tried by SNMPEnum (snmpget)
-            "ble_scan_enabled": False,        # opt-in BLE recon via bluetoothctl (uses the BT radio)
+            "ble_scan_enabled": True,         # BLE recon via bluetoothctl — on by default: the BT radio is built into every supported Pi, needs no dongle, and is the only recon that keeps working with no uplink
             "ble_scan_duration": 10,          # seconds per BLE discovery scan
             "ble_scan_interval": 300,         # min seconds between BLE scans
-            "wifi_scan_enabled": False,       # opt-in 802.11 AP/client recon via airodump-ng
+            "ble_scan_interval_offline": 60,  # min seconds between BLE scans while there is NO uplink (carried around, the survey IS the work)
+            "wifi_scan_enabled": True,        # 802.11 AP/client recon via airodump-ng — on by default, but a no-op unless a non-uplink radio is actually present
             "wifi_scan_iface": "",            # monitor-mode radio — MUST NOT be Bjorn's uplink (use a USB dongle)
             "wifi_scan_duration": 30,         # seconds per airodump-ng capture
             "wifi_scan_interval": 900,        # min seconds between Wi-Fi scans
@@ -194,7 +195,7 @@ class SharedData:
             "steal_file_extensions": [".bjorn",".hack",".flag"],
             
             "__title_network__": "Network",
-            "use_rustscan": False,       # port discovery via RustScan (fast) instead of nmap -sT; falls back to nmap if the binary is missing
+            "use_rustscan": True,        # port discovery via RustScan instead of nmap -sT — 27x faster on the Zero 2 W, same open ports; falls back to nmap if the binary is missing or a run fails
             "rustscan_batch_size": 0,    # RustScan -b socket batch; 0 = auto (memory-aware: 1500 on a Pi Zero, 4500 elsewhere)
             "rustscan_full_port": False, # RustScan sweeps all 65,535 ports (its strength) instead of the curated portlist; needs use_rustscan
             "nmap_scan_aggressivity": "-T2",

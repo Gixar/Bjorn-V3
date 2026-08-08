@@ -24,6 +24,7 @@ def _good_config():
         "bruteforce_threads": 0, "credential_reuse": True, "wpasec_interval": 3600,
         "telegram_enabled": False, "telegram_include_creds": True, "telegram_min_interval": 300,
         "ble_scan_enabled": False, "ble_scan_duration": 10, "ble_scan_interval": 300,
+        "ble_scan_interval_offline": 60,
         "smtp_enabled": False, "smtp_port": 587,
         "wifi_scan_enabled": False, "wifi_scan_duration": 30, "wifi_scan_interval": 900,
         "wifi_scan_band": "bg", "wifi_scan_channel": 0,

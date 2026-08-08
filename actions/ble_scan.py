@@ -1,10 +1,11 @@
 """ble_scan.py - BLE recon (backlog Wave 2 #6).
 
-A standalone action (opt-in): does a timed BLE/Bluetooth discovery via `bluetoothctl` (bluez, already
+A standalone action, **on by default**: does a timed BLE/Bluetooth discovery via `bluetoothctl` (bluez, already
 installed) and records nearby devices to data/output/scan_results/ble_devices.csv, flagging likely
 trackers (AirTag/Tile/SmartTag...). Its own file, NOT netkb.csv — wireless (non-IP) entries don't fit
 the netkb IP+Ports schema, and a self-contained file avoids destabilizing the core pipeline. No-op
-unless `ble_scan_enabled` and `bluetoothctl` is present; throttled by `ble_scan_interval`.
+unless `ble_scan_enabled` and `bluetoothctl` is present; throttled by `ble_scan_interval`, or by the
+shorter `ble_scan_interval_offline` when there is no uplink and this is the only recon left running.
 
 Tracker detection is two-stage: a cheap name heuristic, then — for devices the name didn't flag —
 `bluetoothctl info <mac>`, matching the advertised service UUIDs / manufacturer data against the
@@ -22,6 +23,7 @@ from datetime import datetime, timezone
 from shared import SharedData
 from logger import Logger
 from csv_safe import sanitize_row
+import offline_mode
 
 logger = Logger(name="ble_scan.py", level=logging.INFO)
 
@@ -63,6 +65,11 @@ class BLEScan:
                 logger.info("bluetoothctl not found (install bluez); skipping BLE scan.")
                 return 'skipped'
             interval = getattr(self.shared_data, "ble_scan_interval", 300)
+            if not offline_mode.is_online():
+                # Same reasoning as WiFiScan's offline interval: 5 minutes is a cadence tuned for
+                # "don't disturb the real job", and with no uplink there is no real job. BLE needs
+                # no dongle, so offline this is often the *only* thing still collecting.
+                interval = getattr(self.shared_data, "ble_scan_interval_offline", 60) or interval
             now = time.time()
             if interval and (now - self._last_scan) < interval:
                 return 'skipped'  # throttled

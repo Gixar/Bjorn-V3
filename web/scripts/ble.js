@@ -6,6 +6,8 @@ function bleFillConfig(cfg) {
         cfg.ble_scan_duration !== undefined ? cfg.ble_scan_duration : 10;
     document.getElementById("ble-interval").value =
         cfg.ble_scan_interval !== undefined ? cfg.ble_scan_interval : 300;
+    document.getElementById("ble-interval-offline").value =
+        cfg.ble_scan_interval_offline !== undefined ? cfg.ble_scan_interval_offline : 60;
 }
 
 async function bleSave() {
@@ -13,6 +15,8 @@ async function bleSave() {
         ble_scan_enabled: document.getElementById("ble-enabled").checked,
         ble_scan_duration: parseInt(document.getElementById("ble-duration").value, 10) || 10,
         ble_scan_interval: parseInt(document.getElementById("ble-interval").value, 10) || 0,
+        ble_scan_interval_offline:
+            parseInt(document.getElementById("ble-interval-offline").value, 10) || 0,
     };
     try {
         await postJson("/save_config", body);

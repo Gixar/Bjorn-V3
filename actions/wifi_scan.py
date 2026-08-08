@@ -1,6 +1,6 @@
 """wifi_scan.py - passive Wi-Fi AP/client recon via airodump-ng (backlog Wave 4).
 
-A standalone action (opt-in): puts the *second* radio into monitor mode, runs a timed airodump-ng
+A standalone action, **on by default**: puts the *second* radio into monitor mode, runs a timed airodump-ng
 capture, and records nearby access points and clients to data/output/scan_results/wifi_aps.csv and
 wifi_clients.csv. Own files, NOT netkb.csv — same call as BLEScan: 802.11-layer discoveries have no
 IP or ports, so they don't fit the netkb schema.
@@ -9,9 +9,10 @@ Why airodump-ng and not bettercap's wifi.recon: airodump writes a plain CSV, whi
 "external process + parse its output" pattern already used for nmap/nmcli/snmpget/bluetoothctl. A
 bettercap-based version needs a daemon, a REST client and auth before it parses anything.
 
-No-op unless `wifi_scan_enabled`, `wifi_scan_iface` is set to a non-uplink radio, and airodump-ng is
-installed; throttled by `wifi_scan_interval`. The monitor-mode guard lives in monitor_mode.py — it
-refuses the interface carrying the default route, so this can't knock Bjorn off its own network.
+Enabled by default but a quiet no-op without the hardware: it skips when airodump-ng is missing or
+no non-uplink radio is free, so a Pi with no dongle costs nothing. Throttled by `wifi_scan_interval`.
+The monitor-mode guard lives in monitor_mode.py — it refuses the interface carrying the default
+route, so this can't knock Bjorn off its own network.
 """
 import os
 import csv
@@ -76,6 +77,18 @@ class WiFiScan:
             if iface and iface != configured:
                 logger.info(f"Using {iface} for this capture (configured: {configured or 'none'}, "
                             f"no uplink to protect).")
+            if not iface:
+                # Two different situations, and they must not log alike now that wifi_scan_enabled
+                # is on by default. Nothing configured and nothing spare = missing hardware, the
+                # same class as "airodump-ng not found" -> skip quietly, or every dongle-less Pi
+                # prints an error every cycle. A *configured* radio that isn't there is the
+                # moved-USB-port case, which stayed silent for 15 minutes once already -> say so.
+                if configured:
+                    logger.error(f"Wi-Fi scan skipped: configured radio {configured!r} is not "
+                                 f"present (moved USB port?) and no other radio is free.")
+                    return 'failed'
+                logger.debug("No non-uplink radio free for a capture; skipping Wi-Fi scan.")
+                return 'skipped'
             ok, detail = monitor_mode.acquire(iface)
             if not ok:
                 # A refused interface is a configuration error, not a transient failure — say so

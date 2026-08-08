@@ -22,7 +22,7 @@ _NONNEG_INT_KEYS = (
     "failed_retry_delay", "success_retry_delay", "ref_width", "ref_height",
     "battery_shutdown_percent", "bruteforce_threads", "rustscan_batch_size",
     "wpasec_interval", "telegram_min_interval",
-    "ble_scan_duration", "ble_scan_interval", "smtp_port",
+    "ble_scan_duration", "ble_scan_interval", "ble_scan_interval_offline", "smtp_port",
     "wifi_scan_duration", "wifi_scan_interval", "wifi_scan_channel",
     "wifi_scan_interval_offline", "offline_cycle_interval", "comment_info_ratio",
 )

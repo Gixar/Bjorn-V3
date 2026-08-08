@@ -44,9 +44,12 @@
                     an e-Paper screen; this web UI is how you configure it and read the results.
                 </p>
                 <p>
-                    Optional add-on modules extend it past the wired/Wi-Fi LAN: Bluetooth device
-                    recon, 802.11 access-point survey, and automatic report delivery to Telegram or
-                    email. Each one is <strong>off by default</strong> and has its own page.
+                    Add-on modules extend it past the wired/Wi-Fi LAN: Bluetooth device recon,
+                    802.11 access-point survey, and automatic report delivery to Telegram or email.
+                    Each has its own page. <strong>BLE and Wi-Fi recon are on by default</strong> —
+                    Bjorn is meant to be carried, and they are the only things that keep collecting
+                    when it is off the network. Anything needing a credential is off until you set
+                    one.
                 </p>
                 <div class="note warn">
                     <strong>Authorized use only.</strong> Bjorn actively attacks the network it is on
@@ -182,7 +185,7 @@
             <div class="card-header">
                 <div>
                     <h2 class="card-title">Optional modules</h2>
-                    <p class="card-subtitle">All off by default — enable on the module's own page</p>
+                    <p class="card-subtitle">Recon is on by default; anything needing a credential is off. Each is configured on its own page.</p>
                 </div>
             </div>
             <div class="prose">
@@ -209,9 +212,9 @@
                         <td>Cracked Wi-Fi keys imported as low-priority NetworkManager profiles, so Bjorn can join those networks.</td>
                     </tr>
                     <tr>
-                        <td>RustScan engine</td>
-                        <td>The <code>rustscan</code> binary (<code>use_rustscan</code> on Config).</td>
-                        <td>Much faster port discovery. Falls back to nmap automatically if missing. Time both with the Benchmark button.</td>
+                        <td>RustScan engine <em>(on by default)</em></td>
+                        <td>The <code>rustscan</code> binary — the installer provisions it. <code>use_rustscan</code> on Config turns it off.</td>
+                        <td>Port discovery ~27x faster than nmap on a Pi Zero 2 W, same open ports. Falls back to nmap automatically if the binary is missing or a run fails. Time both with the Benchmark button.</td>
                     </tr>
                     <tr>
                         <td>Battery monitor</td>
@@ -317,7 +320,7 @@
                     <tr><th>Web UI unreachable</th><td>Confirm the Pi's IP and that the service is running; the UI is on port 8000. If the Pi is plugged into a host over USB, try <code>http://172.20.2.1:8000/</code>.</td></tr>
                     <tr><th>No hosts found</th><td>Bjorn scans the subnets of its own interfaces. Check it actually joined the network, and that the target range is not blacklisted.</td></tr>
                     <tr><th>A module does nothing</th><td>Every module is off until enabled, and each throttles itself with an interval. Enable it on its own page, then give it one idle window.</td></tr>
-                    <tr><th>Scans feel too slow</th><td>Shorten <code>portlist</code>, raise <code>nmap_scan_aggressivity</code>, or enable <code>use_rustscan</code> and compare with the Benchmark button on Config.</td></tr>
+                    <tr><th>Scans feel too slow</th><td>Check the log says <code>Port discovery engine: rustscan</code> — if it says nmap, the binary isn't installed. Then shorten <code>portlist</code> or raise <code>nmap_scan_aggressivity</code>, and compare with the Benchmark button on Config.</td></tr>
                 </table>
             </div>
         </div>

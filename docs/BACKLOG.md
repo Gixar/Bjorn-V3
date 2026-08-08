@@ -166,9 +166,11 @@ fingerprint / web templates / SNMP (need a host with those services) · wpa-sec 
 key) · Telegram/SMTP delivery (neither channel configured) · usb0 plugged-host test ·
 `Thread-1` exception in `epd_test.py` (only if it recurs).
 
-**Tier 4 — large / deliberately deferred:** Bettercap (`BETTERCAP_PLAN.md`) → Evil Twin (#8) →
-ESP32 fleet · Bluetooth PAN · BadUSB (a reversal of a past decision, needs a call before code) ·
-tri-color panel (YAGNI, no panel) · Cortex export (YAGNI, no swarm).
+**Tier 4 — large.** **Bettercap (`BETTERCAP_PLAN.md`) → Evil Twin (#8) → ESP32 fleet is now the
+declared next priority** (decided 2026-08-07), once the pocket-carry proactivity work is on the Pi;
+each depends on the one before it. Still deferred behind them: Bluetooth PAN · BadUSB (a reversal of
+a past decision, needs a call before code) · tri-color panel (YAGNI, no panel) · Cortex export
+(YAGNI, no swarm).
 *(Wardriving (#7) left this tier in Wave 4 — shipped as `WiFiScan`, and it never needed Bettercap.)*
 
 **Dropped, do not revisit:** GPS tagging and the wardriving map view (PG-6) · `device_type` netkb
@@ -192,7 +194,8 @@ path). Unlike `bjorn_diag.sh` it *acts* — real capture, real benchmark.
   54.25s, rustscan 2.01s, **26.94× faster, 3 open ports found by both**. *Caveat kept deliberately:*
   3 open ports is a thin sample, so this says "auto is not obviously dropping ports", not "auto is
   proven at scale". Re-run the benchmark against a host with many open ports before treating the
-  batch value as settled.
+  batch value as settled. **→ RustScan was made the default engine on 2026-08-07 on the strength of
+  this run; the thin-sample caveat above is the one thing still open on it.**
 - **#155 web server** reachable (200 on :8000). **#122 framebuffer** renders (`/screen.png`, 2.1 KB).
   **#176 portlist** round-trips from the API as a JSON array — only the GUI *save* path is untested.
 - **BLE recon confirmed on hardware** — `ble_devices.csv` written and fresh.

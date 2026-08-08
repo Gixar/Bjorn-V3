@@ -75,6 +75,35 @@ def test_unremarkable_device_and_ansi_noise():
     assert info("\t\x1b[0;94mUUID\x1b[0m: (0000feec-0000-1000-8000-00805f9b34fb)\n") == "Tile"
 
 
+def test_offline_uses_the_shorter_interval():
+    """The throttle honours ble_scan_interval_offline when there is no uplink. 5 minutes is a
+    cadence tuned for 'don't disturb the real job'; carried around with no uplink there is no real
+    job, and BLE is the only recon still collecting."""
+    import time
+    import tempfile
+    from types import SimpleNamespace
+    import actions.ble_scan as mod
+
+    cfg = SimpleNamespace(scan_results_dir=tempfile.mkdtemp(prefix="bjorn_ble_test_"),
+                          ble_scan_enabled=True, ble_scan_duration=3,
+                          ble_scan_interval=300, ble_scan_interval_offline=60)
+    scanner = BLEScan(cfg)
+    scanner._scan = lambda *a: []          # no bluetoothctl, no devices to record
+    real_which, real_online = mod.shutil.which, mod.offline_mode.is_online
+    mod.shutil.which = lambda _: "/usr/bin/bluetoothctl"
+    try:
+        # 120s since the last scan: inside the 300s online floor, past the 60s offline one.
+        mod.offline_mode.is_online = lambda: True
+        scanner._last_scan = time.time() - 120
+        assert scanner.execute() == 'skipped'
+
+        mod.offline_mode.is_online = lambda: False
+        scanner._last_scan = time.time() - 120
+        assert scanner.execute() == 'success'
+    finally:
+        mod.shutil.which, mod.offline_mode.is_online = real_which, real_online
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

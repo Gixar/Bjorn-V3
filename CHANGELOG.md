@@ -168,6 +168,37 @@
   (a missed finding is worse than a spare request). `apache-status` is gated to `["apache"]`.
 
 ### Changed
+- **RustScan is now the default port-discovery engine** (`use_rustscan: true`) — the on-Pi benchmark
+  that gated this ran on 2026-08-07: **2.01s vs nmap's 54.25s over 7 hosts / 41 ports (26.94x), the
+  same 3 open ports found by both**. Every fallback the opt-in version shipped with is unchanged and
+  is what makes the flip safe: no binary → nmap, a failed run → nmap, and `_rustscan_bin()` still
+  resolves the off-PATH cargo install the systemd service can't see.
+  - The "binary not found" line is now **INFO, said once per process** rather than a WARNING once
+    per scan. With the toggle on by default, an arch the installer couldn't provision is a normal
+    handled state, not a misconfiguration to nag about — but it stays worth saying once, because a
+    silent 27x slowdown is worse than a line in the log.
+  - **`rustscan_full_port` stays off.** The benchmark measured the curated 41-port list; sweeping
+    all 65,535 is a different workload and hasn't been timed on this board.
+  - *Caveat carried over from the benchmark, deliberately:* 3 open ports is a thin sample. It says
+    "auto batching is not obviously dropping ports", not "proven at scale". Re-run the Benchmark
+    button against a port-rich host before treating `rustscan_batch_size` as settled.
+- **BLE and Wi-Fi recon are now on by default** (`ble_scan_enabled`, `wifi_scan_enabled`) — Bjorn is
+  meant to be carried in a pocket, and wireless recon is the half of its job that does not need a
+  network to be on. Both were opt-in, so out of the box a carried device collected *nothing*: it
+  swept a LAN it wasn't attached to and never listened to the air around it.
+  - **BLE costs nothing to leave on.** The radio is built into every supported Pi, `bluez` is
+    already provisioned by the installer, and the action already no-op'd cleanly when
+    `bluetoothctl` was absent. It is also the only recon that keeps working with no dongle *and* no
+    uplink, which is exactly the pocket case.
+  - **`ble_scan_interval_offline`** (60 s, vs. 300 s online) mirrors `wifi_scan_interval_offline`.
+    Five minutes is a cadence tuned for "don't disturb the real job"; offline there is no real job,
+    and a five-minute gap crosses a whole café. Editable on `/ble`.
+  - **Wi-Fi default-on needed one fix first, or it would have been a log flood.** With no dongle,
+    `WiFiScan` resolved to no interface, `acquire("")` refused it, and that path logged an **error**
+    and returned `'failed'` every cycle. Nothing configured and no spare radio is *missing
+    hardware*, not a misconfiguration — the same class as "airodump-ng not found" — so it now
+    returns `'skipped'` silently. A radio that **is** configured and absent still errors: that is
+    the moved-USB-port case, which already cost one silent 15-minute lockout and must stay loud.
 - **`scripts/bjorn_diag.sh` added to the repo** — the deep diagnostic (system health, service and
   process state, network, SPI/I2C, external tools, netkb/stats summary, config, log errors, recent
   orchestrator activity, plus `--save` / `--short` / `--repo`). It had been living untracked on the

@@ -17,6 +17,7 @@
 # Pure decision logic over injected state, so every refusal is testable without a radio.
 import os
 import re
+import csv
 import json
 import shutil
 import logging
@@ -112,7 +113,7 @@ def handshake_dir(shared_data, when=None):
     return path
 
 
-def build_cmd(iface, outdir, binary="bettercap"):
+def build_cmd(iface, outdir, binary="bettercap", channel=0):
     """The bettercap argv for a hunting session. Pure/testable.
 
     `-eval` rather than a caplet file: the handshake path contains today's date, and a caplet is a
@@ -121,13 +122,20 @@ def build_cmd(iface, outdir, binary="bettercap"):
 
     `wifi.handshakes.aggregate false` writes one PCAP per AP instead of a single growing file —
     per-AP is what hashcat wants, and it means a corrupt capture costs one network, not all of them.
+
+    `channel` (0 = hop) parks the radio where the survey says the unclaimed targets are.
+    NOTE: `wifi.recon.channel` is the one bettercap setting name here that has not been confirmed
+    against a running daemon. It is emitted only when a channel was actually chosen, so an install
+    where the name is wrong degrades to hopping rather than failing to hunt.
     """
-    eval_stmts = "; ".join([
+    statements = [
         f"set wifi.handshakes.file {outdir}",
         "set wifi.handshakes.aggregate false",
-        "wifi.recon on",
-    ])
-    return [binary, "-no-colors", "-iface", iface, "-eval", eval_stmts]
+    ]
+    if channel:
+        statements.append(f"set wifi.recon.channel {int(channel)}")
+    statements.append("wifi.recon on")
+    return [binary, "-no-colors", "-iface", iface, "-eval", "; ".join(statements)]
 
 
 # ---------------------------------------------------------------------------
@@ -272,6 +280,127 @@ def _write_index(base, entries, summary):
         raise
 
 
+# ---------------------------------------------------------------------------
+# Target scoring (step E1)
+# ---------------------------------------------------------------------------
+# Scored from wifi_aps.csv / wifi_clients.csv — the airodump survey, which is already verified on
+# hardware — and NOT from bettercap's own event stream, whose schema is still unconfirmed. Same
+# shape as action_planner: pure functions over dicts, weighted signals, and a reason string that
+# reaches the display, so the pick can always be explained.
+CLIENTS_BONUS = 45     # dominant signal: a WPA handshake happens when a client (re)associates
+WPA_BONUS = 10         # WPA/WPA2 PSK is the crackable case
+WEP_BONUS = 4
+DEFAULT_MIN_RSSI = -80
+
+
+def _read_csv_rows(path):
+    try:
+        with open(path, newline="", errors="replace") as f:
+            return list(csv.DictReader(f))
+    except OSError:
+        return []
+
+
+def signal_bonus(power):
+    """0-30 from dBm. Closer APs are worth more: a handshake needs to be *heard*, and a -85 dBm
+    beacon usually means the client side of the exchange is inaudible even when the AP is not."""
+    try:
+        dbm = int(str(power).strip())
+    except (TypeError, ValueError):
+        return 0
+    return max(0, min(30, (dbm + 90) // 2))
+
+
+def score_targets(aps, clients, owned_bssids=(), min_rssi=DEFAULT_MIN_RSSI):
+    """Rank APs worth hunting. Pure/testable. Returns [{bssid, essid, channel, score, reason}].
+
+    Three exclusions, each because the target cannot pay:
+      - **Already captured.** A second handshake for a network we hold adds nothing.
+      - **Open networks.** No PSK, so there is no four-way handshake to catch. Nothing to crack.
+      - **Too weak.** Below min_rssi the client half of the exchange is usually unhearable.
+    """
+    owned = {b.upper() for b in owned_bssids if b}
+    with_clients = {(row.get("BSSID") or "").upper() for row in clients}
+    ranked = []
+    for ap in aps:
+        bssid = (ap.get("BSSID") or "").strip().upper()
+        if not bssid or bssid in owned:
+            continue
+        privacy = (ap.get("Privacy") or "").upper()
+        if "WPA" not in privacy and "WEP" not in privacy:
+            continue                                   # OPN / blank: no PSK, no handshake
+        try:
+            if int(str(ap.get("Power", "0")).strip()) < int(min_rssi):
+                continue
+        except (TypeError, ValueError):
+            pass                                       # unreadable power: judge it on the rest
+
+        reasons = []
+        score = signal_bonus(ap.get("Power"))
+        if score:
+            reasons.append(f"{ap.get('Power')}dBm")
+        if bssid in with_clients:
+            score += CLIENTS_BONUS
+            reasons.append("has clients")
+        else:
+            reasons.append("no clients seen")
+        if "WPA" in privacy:
+            score += WPA_BONUS
+        elif "WEP" in privacy:
+            score += WEP_BONUS
+        reasons.append(privacy.split()[0] if privacy.split() else privacy)
+
+        ranked.append({
+            "bssid": bssid,
+            "essid": (ap.get("ESSID") or "").strip(),
+            "channel": _int_or_zero(ap.get("Channel")),
+            "score": score,
+            "reason": ", ".join(reasons),
+        })
+    ranked.sort(key=lambda t: t["score"], reverse=True)
+    return ranked
+
+
+def _int_or_zero(value):
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return 0
+
+
+def pick_channel(ranked):
+    """(channel, why). 0 means "keep hopping".
+
+    Parks the radio where the unclaimed value is, summing the scores per channel rather than
+    taking the single best AP: three mediocre targets on channel 6 beat one good one on channel 11,
+    because the radio can only hear one channel at a time and a session is minutes long. Hopping
+    stays the answer when there is nothing to aim at — being blind everywhere beats being parked on
+    a channel with nothing on it.
+    """
+    totals = {}
+    for target in ranked:
+        if target["channel"]:
+            totals[target["channel"]] = totals.get(target["channel"], 0) + target["score"]
+    if not totals:
+        return 0, "no known targets — hopping"
+    channel = max(totals, key=lambda ch: totals[ch])
+    count = sum(1 for t in ranked if t["channel"] == channel)
+    return channel, f"channel {channel}: {count} target(s), score {totals[channel]}"
+
+
+def plan_session(shared_data):
+    """What this hunting session should aim at. Returns (channel, why, ranked)."""
+    scan_dir = getattr(shared_data, "scan_results_dir", "")
+    aps = _read_csv_rows(os.path.join(scan_dir, "wifi_aps.csv"))
+    clients = _read_csv_rows(os.path.join(scan_dir, "wifi_clients.csv"))
+    base = getattr(shared_data, "handshakes_dir", None) or ""
+    owned = {e.get("bssid", "") for e in load_index(base).values()}
+    min_rssi = getattr(shared_data, "bettercap_pwn_min_rssi", DEFAULT_MIN_RSSI)
+    ranked = score_targets(aps, clients, owned, min_rssi)
+    channel, why = pick_channel(ranked)
+    return channel, why, ranked
+
+
 class Hunter:
     """Owns the radio and the bettercap process for one hunting session.
 
@@ -289,6 +418,7 @@ class Hunter:
         self.proc = None
         self.iface = ""
         self.started_at = None
+        self.plan = ""
 
     def is_running(self):
         return self.proc is not None and self.proc.poll() is None
@@ -311,12 +441,18 @@ class Hunter:
         # exact fault the 2026-08-08 run found in WiFiScan's release path.
         try:
             outdir = handshake_dir(self.shared_data)
-            cmd = build_cmd(iface, outdir)
+            channel, why, ranked = plan_session(self.shared_data)
+            cmd = build_cmd(iface, outdir, channel=channel)
             self.proc = self._spawn(cmd)
             self.iface = iface
             self.started_at = datetime.now()
-            logger.info(f"Hunting on {iface}; handshakes -> {outdir}")
-            return True, f"hunting on {iface}"
+            self.plan = why
+            logger.info(f"Hunting on {iface}; {why}; handshakes -> {outdir}")
+            if ranked:
+                top = ranked[0]
+                logger.info(f"Top target: {top['essid'] or top['bssid']} "
+                            f"({top['reason']}, score={top['score']})")
+            return True, f"hunting on {iface} — {why}"
         except Exception as e:
             monitor_mode.release(iface, owner=RADIO_OWNER)
             self.proc, self.iface = None, ""

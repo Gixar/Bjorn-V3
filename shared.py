@@ -208,6 +208,7 @@ class SharedData:
             # Refuses to start on a single-radio device — it would hold the only path back online.
             "bettercap_pwn_enabled": False,   # hunt for handshakes while there is no uplink
             "bettercap_pwn_iface": "",        # radio to hunt on; blank = any non-uplink radio
+            "bettercap_pwn_min_rssi": -80,    # dBm (NEGATIVE): ignore APs weaker than this
             "steal_file_names": ["ssh.csv","hack.txt"],
             "steal_file_extensions": [".bjorn",".hack",".flag"],
             

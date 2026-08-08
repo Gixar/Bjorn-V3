@@ -411,3 +411,77 @@ def test_a_missing_or_corrupt_index_never_breaks_a_report(tmp_path):
     bad = tmp_path / "bad.json"
     bad.write_text("{truncated")
     assert telegram_client._read_json_values(str(bad), "captures") == []
+
+
+# --- E1: target scoring ----------------------------------------------------
+
+def _ap(bssid, essid="Net", channel="6", privacy="WPA2", power="-45"):
+    return {"BSSID": bssid, "ESSID": essid, "Channel": channel,
+            "Privacy": privacy, "Power": power}
+
+
+def test_an_ap_with_clients_outranks_a_stronger_one_without():
+    """The dominant signal, and the reason this scorer exists: a WPA handshake happens when a
+    client (re)associates. A loud AP nobody is talking to will never produce one passively, so
+    signal strength alone would aim the radio at the wrong network."""
+    aps = [_ap("AA:BB:CC:00:00:01", "Loud", power="-30"),
+           _ap("AA:BB:CC:00:00:02", "Busy", power="-70")]
+    clients = [{"BSSID": "AA:BB:CC:00:00:02", "Station": "11:22:33:44:55:66"}]
+    ranked = pwn.score_targets(aps, clients)
+    assert ranked[0]["essid"] == "Busy"
+    assert "has clients" in ranked[0]["reason"]
+
+
+def test_networks_we_already_hold_are_excluded():
+    """A second handshake for a network already captured adds nothing — and would keep the radio
+    parked on a channel with no unclaimed value left."""
+    aps = [_ap("AA:BB:CC:00:00:01"), _ap("AA:BB:CC:00:00:02")]
+    ranked = pwn.score_targets(aps, [], owned_bssids={"AA:BB:CC:00:00:01"})
+    assert [t["bssid"] for t in ranked] == ["AA:BB:CC:00:00:02"]
+
+
+def test_open_networks_are_excluded_because_there_is_no_handshake_to_catch():
+    aps = [_ap("AA:BB:CC:00:00:01", "Cafe-Free", privacy="OPN"),
+           _ap("AA:BB:CC:00:00:02", "Home", privacy="WPA2")]
+    ranked = pwn.score_targets(aps, [])
+    assert [t["essid"] for t in ranked] == ["Home"]
+
+
+def test_weak_aps_are_excluded_by_min_rssi():
+    aps = [_ap("AA:BB:CC:00:00:01", "Far", power="-88"),
+           _ap("AA:BB:CC:00:00:02", "Near", power="-40")]
+    assert [t["essid"] for t in pwn.score_targets(aps, [], min_rssi=-80)] == ["Near"]
+    assert len(pwn.score_targets(aps, [], min_rssi=-100)) == 2
+
+
+def test_unreadable_fields_do_not_drop_a_target():
+    """airodump writes blanks and odd spacing. A target should be judged on what parsed, not
+    discarded because one column was unreadable."""
+    aps = [_ap("AA:BB:CC:00:00:01", "Odd", channel="", power="")]
+    ranked = pwn.score_targets(aps, [])
+    assert len(ranked) == 1 and ranked[0]["channel"] == 0
+
+
+def test_pick_channel_sums_value_rather_than_taking_the_single_best():
+    """The radio hears one channel at a time for the whole session: three mediocre targets on
+    channel 6 are worth more than one good one on channel 11."""
+    aps = [_ap("AA:BB:CC:00:00:01", channel="11", power="-35"),
+           _ap("AA:BB:CC:00:00:02", channel="6", power="-60"),
+           _ap("AA:BB:CC:00:00:03", channel="6", power="-60"),
+           _ap("AA:BB:CC:00:00:04", channel="6", power="-60")]
+    channel, why = pwn.pick_channel(pwn.score_targets(aps, []))
+    assert channel == 6 and "3 target(s)" in why
+
+
+def test_no_targets_means_keep_hopping():
+    """Being blind everywhere beats being parked on a channel with nothing on it."""
+    channel, why = pwn.pick_channel([])
+    assert channel == 0 and "hopping" in why
+
+
+def test_build_cmd_only_locks_a_channel_when_one_was_chosen():
+    """`wifi.recon.channel` is the one bettercap setting name here not confirmed against a running
+    daemon, so it is emitted only when it buys something — a wrong name then degrades to hopping
+    rather than breaking every hunt."""
+    assert "wifi.recon.channel" not in pwn.build_cmd("wlan1", "/out", channel=0)[-1]
+    assert "set wifi.recon.channel 6" in pwn.build_cmd("wlan1", "/out", channel=6)[-1]

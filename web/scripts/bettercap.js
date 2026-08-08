@@ -14,6 +14,8 @@ function bcFillConfig(cfg) {
     document.getElementById("bc-sniff").checked = !!cfg.bettercap_sniff;
     document.getElementById("bc-pwn-enabled").checked = !!cfg.bettercap_pwn_enabled;
     document.getElementById("bc-pwn-iface").value = cfg.bettercap_pwn_iface || "";
+    document.getElementById("bc-pwn-rssi").value =
+        cfg.bettercap_pwn_min_rssi !== undefined ? cfg.bettercap_pwn_min_rssi : -80;
 }
 
 async function bcSave() {
@@ -26,6 +28,7 @@ async function bcSave() {
         bettercap_sniff: document.getElementById("bc-sniff").checked,
         bettercap_pwn_enabled: document.getElementById("bc-pwn-enabled").checked,
         bettercap_pwn_iface: document.getElementById("bc-pwn-iface").value.trim(),
+        bettercap_pwn_min_rssi: parseInt(document.getElementById("bc-pwn-rssi").value, 10) || -80,
     };
     try {
         await postJson("/save_config", body);

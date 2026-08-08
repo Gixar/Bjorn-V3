@@ -261,6 +261,27 @@
   - Bug caught while writing it: `grep -c` prints `0` **and** exits 1 on no-match, so the obvious
     `|| echo 0` appends a second line and every numeric comparison on the result silently fails.
     `bjorn_diag.sh` shipped this exact bug once already.
+- **The hunter aims instead of listening blindly — Stage E, and the Bettercap plan is implemented
+  end to end.** `score_targets()` / `pick_channel()` rank access points and park the radio where
+  the unclaimed value is, in the same shape as `action_planner`: pure functions, weighted signals,
+  a reason string that reaches the log and the display.
+  - **Scored from the airodump survey (`wifi_aps.csv` / `wifi_clients.csv`), not from bettercap's
+    events.** That survey is already verified on hardware; bettercap's event schema is not. Scoring
+    off the verified source means this works on real data today instead of inheriting B0's unknown.
+  - **"Has clients" is the dominant signal (+45).** A WPA handshake happens when a client
+    *(re)associates*, so a loud AP nobody is talking to will never produce one passively — ranking
+    by signal strength alone would aim the radio at exactly the wrong network.
+  - Three exclusions, each because the target cannot pay: already captured, **open networks** (no
+    PSK, so no four-way handshake exists at all), and below `bettercap_pwn_min_rssi`.
+  - `pick_channel` **sums value per channel** rather than taking the single best AP — the radio
+    hears one channel at a time for a whole session, so three mediocre targets on channel 6 beat
+    one good one on channel 11. No targets means keep hopping.
+  - `bettercap_pwn_min_rssi` is dBm and therefore **negative**, with its own validation branch
+    (`_NONNEG_INT_KEYS` would reject every valid value). A *positive* number is the dangerous
+    input: it silently means "ignore every AP", which reads as a hunter that never finds anything.
+  - **E3 (hashcat conversion) deferred and E4 (learning) left out of scope**, both on purpose:
+    conversion would target loot nobody has yet with a tool that is not installed, for a feature
+    that has never run on a radio, and there is nothing to learn from until it has.
 - **Handshakes are visible, downloadable and worth coins — Stage D complete.**
   - **Coins:** new `handshakes` category at weight **20**, fed the *unique-AP* count (two captures
     of one network is one network owned). Above `attacks` (5), below `creds` (25) — a handshake is

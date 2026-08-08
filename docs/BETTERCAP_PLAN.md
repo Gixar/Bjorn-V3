@@ -1,6 +1,6 @@
 # Bettercap integration + Handshake Hunter — implementation plan
 
-Status: **planned, not started.** Scoped from the `docs/BACKLOG.md` Bettercap entry, extended
+Status: **Stages A–E implemented, none verified on hardware.** Scoped from the `docs/BACKLOG.md` Bettercap entry, extended
 2026-08-07 to absorb the Pwnagotchi-style hunting PRD. **This file is the single authority** — the
 standalone `PWNAGOTCHI_MODE_PRD.md` described a device that doesn't match this codebase (see
 Corrections below) and should not be implemented from directly.
@@ -311,14 +311,39 @@ happens, because it fixes a real per-cycle error the moment any long-lived consu
 - Still deferred to E: epoch/deauth/associate/min_rssi/channels/cooldown. The hunter currently runs
   `wifi.recon` for the window and takes what it hears; nothing selects targets yet.
 
-### Stage E — smarter (optional, only after D is real)
+### Stage E — smarter
 
 | # | Step | Notes |
 |---|---|---|
-| E1 | Target scoring | Reuse the `action_planner.py` shape — pure functions over dicts, weighted signals, a reason string on the display. Do **not** write a second scorer. |
-| E2 | Personality knobs in the UI | Only the ones E1 proves matter. |
-| E3 | hashcat conversion | `hcxpcapngtool`, **on demand** from the panel, not a background job — SD wear and Pi Zero CPU. |
-| E4 | Learning | Explicitly out of scope until E1's rule-based version is measured. The A2C net was already a PRD non-goal. |
+| E1 | ✅ **DONE.** Target scoring | `score_targets()` / `pick_channel()` / `plan_session()` — pure functions over dicts, weighted signals, a reason string on the display, same shape as `action_planner`. Scored from the **airodump survey**, not bettercap's events. |
+| E2 | ✅ **DONE.** The one knob E1 proved it needs | `bettercap_pwn_min_rssi` (dBm, negative — its own validation branch), with a field on `/bettercap`. |
+| E3 | ⏸ **Deferred, with a reason** | hashcat conversion converts loot nobody has yet, with `hcxpcapngtool` which is not installed, for a feature that has never run on hardware. Three layers of speculation. Revisit when a real PCAP exists. |
+| E4 | ❌ **Out of scope** | Learning stays out until the rule-based version has been *measured*. Nothing has run on a radio yet, so there is nothing to learn from. |
+
+**E1 notes — the design decision that matters:**
+- **Targets are scored from `wifi_aps.csv` / `wifi_clients.csv`, not from bettercap's event stream.**
+  The airodump survey is already verified on hardware (4 APs / 7 clients on the Pi, 2026-08-08);
+  bettercap's event schema is still unconfirmed. Scoring off the verified source means E1 works on
+  real data today and does not inherit B0's unknown.
+- **"Has clients" is the dominant signal (+45).** A WPA handshake happens when a client
+  *(re)associates*: a loud AP nobody is talking to will never produce one passively. Signal
+  strength alone would aim the radio at exactly the wrong network, which is the mistake this
+  scorer exists to avoid.
+- **Three exclusions, each because the target cannot pay:** already captured (a second handshake
+  for a held network adds nothing), open networks (no PSK, so no four-way handshake exists), and
+  below `min_rssi` (the client half of the exchange is usually inaudible even when the AP is not).
+- **`pick_channel` sums value per channel rather than taking the single best AP.** The radio hears
+  one channel at a time for a whole session, so three mediocre targets on channel 6 beat one good
+  one on channel 11. With nothing to aim at it returns 0 — being blind everywhere beats being
+  parked on an empty channel.
+- **`wifi.recon.channel` is the one bettercap setting name here not confirmed against a running
+  daemon**, so it is emitted *only* when a channel was chosen. An install where the name is wrong
+  degrades to hopping instead of failing to hunt.
+- **deauth / associate / epoch / channels / cooldown remain unbuilt.** E1 did not need them: the
+  session parks on the best channel and takes what it hears. Targeting individual BSSIDs needs
+  `wifi.deauth` / `wifi.assoc` over the REST API, which means giving the hunter's bettercap an
+  `api.rest` listener and sending commands to an API nobody has seen respond yet. That is B0's
+  unknown again, and it buys nothing until a session has been observed working.
 
 ---
 

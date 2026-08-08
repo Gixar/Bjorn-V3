@@ -38,6 +38,7 @@ def _good_config():
         "bettercap_api_url": "http://127.0.0.1:8081", "bettercap_user": "bjorn",
         "bettercap_password": "",
         "bettercap_pwn_enabled": False, "bettercap_pwn_iface": "",
+        "bettercap_pwn_min_rssi": -80,
     }
 
 
@@ -207,6 +208,19 @@ def test_bettercap_credentials_must_be_strings():
     cfg = _good_config()
     cfg["bettercap_password"] = None
     _assert_raises(cfg, "bettercap_password")
+
+
+def test_min_rssi_is_dbm_so_negative_values_are_the_valid_ones():
+    """The plan flagged this one: _NONNEG_INT_KEYS would reject every legitimate value. A POSITIVE
+    number is the dangerous input — it silently means "ignore every AP", which on the device looks
+    like a hunter that never finds anything rather than a bad setting."""
+    cfg = _good_config()
+    for good in (-100, -80, -30, 0):
+        cfg["bettercap_pwn_min_rssi"] = good
+        assert validate_config(cfg) is None, good
+    for bad in (5, -120):
+        cfg["bettercap_pwn_min_rssi"] = bad
+        _assert_raises(cfg, "bettercap_pwn_min_rssi")
 
 
 def _assert_raises(cfg, expected_substr):

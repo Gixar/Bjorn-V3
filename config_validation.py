@@ -107,6 +107,18 @@ def validate_config(config):
                           f"credentials would leave the box. Use loopback, or clear this check "
                           f"knowingly by editing config_validation.py.")
 
+    # dBm, so NEGATIVE — _NONNEG_INT_KEYS would reject every valid value, which is why this gets
+    # its own branch. -100 is roughly the noise floor and 0 is a physically impossible signal, so
+    # anything outside that is a typo — and a positive value here silently means "ignore every AP",
+    # which on the device reads as a hunter that never finds anything.
+    rssi = config.get("bettercap_pwn_min_rssi")
+    if rssi is None:
+        errors.append("missing required key: 'bettercap_pwn_min_rssi'")
+    elif isinstance(rssi, bool) or not isinstance(rssi, int):
+        errors.append(f"'bettercap_pwn_min_rssi' must be an integer, got {type(rssi).__name__}")
+    elif not (-100 <= rssi <= 0):
+        errors.append(f"'bettercap_pwn_min_rssi' is dBm and must be between -100 and 0, got {rssi}")
+
     if "portlist" not in config:
         errors.append("missing required key: 'portlist'")
     elif not isinstance(config["portlist"], list):

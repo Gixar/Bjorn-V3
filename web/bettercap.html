@@ -127,6 +127,9 @@
                 <label class="tg-field">Radio (blank = any radio that is not the uplink)
                     <input type="text" id="bc-pwn-iface" autocomplete="off" placeholder="wlan1">
                 </label>
+                <label class="tg-field">Ignore access points weaker than (dBm, negative)
+                    <input type="number" id="bc-pwn-rssi" min="-100" max="0" value="-80">
+                </label>
             </div>
             <p class="card-subtitle" id="bc-loot">No captures yet.</p>
 

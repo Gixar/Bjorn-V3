@@ -180,7 +180,7 @@ single-user device on an operator-controlled network; see the security-review se
 
 ## Tier-0 verification sweep — 2026-08-07 (12 PASS, 0 FAIL)
 
-Every "needs the Pi" item run in one pass via `scripts/bjorn_verify.sh` (it drives the existing web
+Every "needs the Pi" item run in one pass via `scripts/bjorn_verify.py` (it drives the existing web
 API rather than re-implementing any action, so it verifies the real code path). Unlike
 `bjorn_diag.sh` it *acts* — real capture, real benchmark.
 
@@ -192,6 +192,12 @@ API rather than re-implementing any action, so it verifies the real code path). 
 > between the unit and the config), and the never-yet-run Unreleased wave (planner, idle-notice
 > volume, offline mode, per-page file groups, help page, comment themes). It was untracked before,
 > which is how it drifted from the code it inspects.
+>
+> **Ported to Python 2026-08-08** — `scripts/bjorn_verify.py`.
+> It replaced `git show d31dc12:scripts/bjorn_verify.sh`, still retrievable there to diff two reports. Every bug this
+> script ever had was a *silent wrong answer* from shell string handling, which is the one
+> failure mode a verifier cannot have. The pure logic now has 13 tests in
+> `tests/test_bjorn_verify.py`, including regression tests for both historical bugs.
 
 **✅ Closed — Wave 4 is done, end to end:**
 - **`airodump-ng` captures.** 4 APs / 7 clients into `wifi_aps.csv` / `wifi_clients.csv` from a 30s

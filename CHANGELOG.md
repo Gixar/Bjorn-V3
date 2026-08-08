@@ -168,7 +168,28 @@
   (a missed finding is worse than a spare request). `apache-status` is gated to `["apache"]`.
 
 ### Added
-- **`scripts/bjorn_verify.sh` is now tracked, and verifies this whole batch** — it was living
+- **The verification script is now Python** (`scripts/bjorn_verify.py`, replacing the shell
+  version). The reason is narrow and evidenced: **every bug this script has ever had was a silent
+  wrong answer from shell string handling** — `grep -c` printing `0` while exiting 1, so
+  `|| echo 0` yielded `0\n0` and broke every numeric test; and a `\r` from `csv.writer` riding
+  into the last field so `-eq` failed and a passing benchmark read as "no comparable row". A
+  script whose entire job is to not lie about state cannot have that failure mode; `BACKLOG.md`
+  already records what a reassuring-but-wrong diagnostic costs.
+  - Both historical bugs are pinned as regression tests. 13 tests over the pure logic in
+    `tests/test_bjorn_verify.py` — parsing, config truthiness, benchmark rows, repo resolution —
+    none of which needs a Pi, a network or a subprocess.
+  - `benchmark_ports()` reads with the `csv` module, so the CRLF that broke the shell version is
+    the parser's problem rather than the caller's. `count_matching()` returns a real `int`.
+  - Also drops `curl` as a dependency of verifying Bjorn (urllib), and runs every subprocess as an
+    argv list — no `shell=True` anywhere.
+  - **A regression the port introduced and the smoke run caught:** `run()` folds stderr into its
+    output, so a *missing* `usb0` came back non-empty ("Device usb0 does not exist") and read as a
+    present interface with carrier. The shell version got an empty string for free by sending
+    stderr to `/dev/null`. Now keyed on the return code. The `iw` mode read had the same shape and
+    now reports WARN ("could not tell") rather than a false FAIL ("radio stranded").
+  - The security fixes from the shell version carry over intact: nothing is executed out of the
+    located install tree, `build_info` rather than `git -C`, no fixed `/tmp` path.
+- **The previous shell script was tracked and verified this whole batch** — it was living
   untracked on the device, which is exactly how `bjorn_doctor.sh` drifted from the code it
   inspected. New **section 8**, covering everything with no hardware confirmation yet:
   - **8a — the collect-by-default flips.** Checks the *effective* config, because a saved

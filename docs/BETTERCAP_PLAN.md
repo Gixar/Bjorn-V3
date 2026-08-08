@@ -201,7 +201,7 @@ happens, because it fixes a real per-cycle error the moment any long-lived consu
 |---|---|---|---|
 | C1 | ✅ **DONE.** `bettercap_pwn.can_start(shared_data)` → `(ok, reason, iface)` + `describe()`. Refuses when fewer than two radios exist, when a *named* radio is absent or is the uplink, when managed-mode Bettercap is on, when bettercap is missing, or when the radio is held. Pure decision logic over injected state. | `bettercap_pwn.py`, `tests/test_bettercap_pwn.py` | Single-radio refusal covered, online **and** offline |
 | C2 | ✅ **DONE.** `Hunter.start()/stop()/status()`: takes `monitor_mode.acquire(iface, owner="pwn")`, spawns bettercap, and `stop()` releases in a `finally` after verifying the radio is managed. Output dir derived in `SharedData` (`data/output/handshakes/raw/YYYY-MM-DD/`). | `bettercap_pwn.py`, `shared.py` | `stop()` leaves `iw dev` reporting `type managed` and `holder()` empty |
-| C3 | Handshake watcher: scan the output dir, dedupe by `(BSSID, kind)`, maintain `index.json` (bssid, essid, kind, path, first_seen). Parsing is pure and fixture-tested; no live capture needed. | `bettercap_pwn.py`, `tests/test_bettercap_pwn.py` | Re-running over the same files adds no duplicate entries |
+| C3 | ✅ **DONE.** `update_index()` walks `raw/`, keys by path, preserves `first_seen`, and writes `index.json` atomically only when something changed. Called from `Hunter.stop()`. | `bettercap_pwn.py`, `tests/test_bettercap_pwn.py` | Re-running over the same files adds no duplicate entries |
 | C4 | **Offline integration.** `run_offline_cycle()` starts the hunter after wireless recon and **stops it before `reconnect_best()`**, then restarts it if still offline. No new "am I offline" logic anywhere. | `orchestrator.py`, `offline_mode.py` | Auto-join still works with the hunter enabled — the acceptance test that matters most |
 | C5 | Epoch loop: recon → pick targets → assoc/deauth → sleep `bettercap_pwn_epoch`. Rule-based selection only (RSSI floor, unseen-BSSID first, per-BSSID cooldown). | `bettercap_pwn.py` | One epoch runs end to end on the Pi and writes at least one PCAP |
 
@@ -242,6 +242,24 @@ happens, because it fixes a real per-cycle error the moment any long-lived consu
   verification added the same day — before that fix, `stop()` could not have told the difference.
 - Still no config keys and no UI: nothing calls `start()` automatically until C4, and a toggle that
   starts nothing would be the inert-control problem C1 already avoided.
+
+**C3 notes:**
+- **`kind` (handshake vs PMKID) was dropped, not deferred.** Nothing can populate it without
+  parsing the PCAP, which needs a dependency this project does not have and does not want. A field
+  that is always `""` is worse than no field — it implies an answer exists. Dedupe is therefore by
+  **path**, which is the only identity a capture file actually has, and it satisfies the same
+  requirement: bettercap reopening an AP's file across sessions must not create a second entry.
+- **`first_seen` is preserved across rescans.** It is the field that says when you *caught*
+  something; recomputing it every scan would make every handshake look like it arrived today.
+- **The filename parser matches a MAC by shape, and the lookarounds are load-bearing.** Without
+  `(?<![0-9a-f])` / `(?![0-9a-f])`, `Cafe-aa-bb-cc-dd-ee-02` matches starting *inside* the ESSID —
+  `fe-aa-bb-cc-dd-ee` is a valid MAC shape — producing BSSID `FE:AA:BB:CC:DD:EE` and ESSID
+  `Ca-02`. Every hex-ish ESSID (cafe, beef, dead, face, ace) hits it. Found by a smoke run, *not*
+  by the unit test, which asserted `unique_bssids == 2` and passed because two wrong BSSIDs are
+  also two distinct BSSIDs. The test now asserts the values. **Lesson: a count is not a check.**
+- bettercap's per-AP naming is still unconfirmed on hardware, like the event schema was. This
+  parser is deliberately tolerant and lives in one place; a file with no MAC in its name is still
+  indexed rather than dropped.
 
 ### Stage D — visible, downloadable, rewarded (~1–2 sessions)
 

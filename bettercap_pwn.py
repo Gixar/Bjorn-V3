@@ -16,8 +16,11 @@
 #
 # Pure decision logic over injected state, so every refusal is testable without a radio.
 import os
+import re
+import json
 import shutil
 import logging
+import tempfile
 import subprocess
 from datetime import datetime
 
@@ -127,6 +130,141 @@ def build_cmd(iface, outdir, binary="bettercap"):
     return [binary, "-no-colors", "-iface", iface, "-eval", eval_stmts]
 
 
+# ---------------------------------------------------------------------------
+# The loot index (step C3)
+# ---------------------------------------------------------------------------
+# Capture files are matched by *shape*, not by a filename format anyone has confirmed. bettercap's
+# naming for per-AP handshake files is version-specific and undocumented, and the failure mode of
+# guessing wrong is an index that stays empty while PCAPs pile up on disk. So: any MAC-shaped token
+# in the name is the BSSID, whatever is left is the ESSID, and a file with neither still gets
+# indexed under its own name. Wrong-but-tolerant beats right-in-theory here — and when a real
+# filename is in hand, this regex is the one place to correct.
+CAPTURE_SUFFIXES = (".pcap", ".pcapng", ".cap")
+# The lookarounds are load-bearing, not decoration. Without them "Cafe-aa-bb-cc-dd-ee-02" matches
+# starting inside the ESSID — "fe-aa-bb-cc-dd-ee" is a perfectly good MAC shape — and yields the
+# BSSID FE:AA:BB:CC:DD:EE with an ESSID of "Ca-02". Any hex-looking ESSID (cafe, beef, dead, ace)
+# hits this. Requiring a non-hex character on both sides forces the match onto a whole token.
+_MAC_IN_NAME = re.compile(r"(?<![0-9a-f])([0-9a-f]{2}(?:[:-][0-9a-f]{2}){5})(?![0-9a-f])", re.I)
+
+
+def parse_capture_name(filename):
+    """(bssid, essid) from a capture filename. Pure/testable. Either may be "".
+
+    The BSSID is normalised to upper-case colon form so it matches netkb and the Wi-Fi survey CSVs,
+    which is the whole point of extracting it — a lower-case dashed MAC would silently fail to join
+    against anything else Bjorn knows.
+    """
+    stem = os.path.splitext(os.path.basename(filename))[0]
+    match = _MAC_IN_NAME.search(stem)
+    if not match:
+        return "", stem.strip(" _-")
+    bssid = match.group(1).replace("-", ":").upper()
+    essid = (stem[:match.start()] + stem[match.end():]).strip(" _-")
+    return bssid, essid
+
+
+def find_captures(base_dir):
+    """Every capture file under <base>/raw/, newest last. Returns [(path, mtime)]."""
+    root = os.path.join(base_dir, "raw")
+    found = []
+    for dirpath, _dirs, files in os.walk(root):
+        for name in files:
+            if name.lower().endswith(CAPTURE_SUFFIXES):
+                path = os.path.join(dirpath, name)
+                try:
+                    found.append((path, os.path.getmtime(path)))
+                except OSError:
+                    continue
+    return sorted(found, key=lambda item: item[1])
+
+
+def build_index(base_dir, previous=None, now=None):
+    """Merge what is on disk into the previous index. Pure apart from reading the directory.
+
+    Keyed by path, because the path is the only identity a capture file actually has: bettercap may
+    reopen the same AP's file across sessions, and re-indexing must not invent a second entry for
+    it. `first_seen` is preserved from the previous index for exactly that reason — it is the field
+    that tells you when you caught something, and recomputing it every scan would make every
+    handshake look like it arrived today.
+    """
+    previous = previous or {}
+    stamp = (now or datetime.now()).isoformat(timespec="seconds")
+    entries = {}
+    for path, mtime in find_captures(base_dir):
+        bssid, essid = parse_capture_name(path)
+        prior = previous.get(path, {})
+        entries[path] = {
+            "path": path,
+            "bssid": bssid,
+            "essid": essid or prior.get("essid", ""),
+            "bytes": _size(path),
+            "first_seen": prior.get("first_seen") or stamp,
+            "last_seen": datetime.fromtimestamp(mtime).isoformat(timespec="seconds"),
+        }
+    return entries
+
+
+def _size(path):
+    try:
+        return os.path.getsize(path)
+    except OSError:
+        return 0
+
+
+def index_path(base_dir):
+    return os.path.join(base_dir, "index.json")
+
+
+def load_index(base_dir):
+    try:
+        with open(index_path(base_dir)) as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    entries = data.get("captures") if isinstance(data, dict) else None
+    return entries if isinstance(entries, dict) else {}
+
+
+def update_index(shared_data, now=None):
+    """Rescan the loot directory and persist index.json. Returns the summary dict.
+
+    Written only when something changed — this runs after every hunting session on a device whose
+    storage is an SD card, and rewriting an identical file is pure wear. Same discipline as
+    stats_engine._atomic_write, including the temp-file-and-rename so a crash mid-write cannot
+    leave a truncated index behind.
+    """
+    base = getattr(shared_data, "handshakes_dir", None) or os.path.join("data", "output", "handshakes")
+    previous = load_index(base)
+    entries = build_index(base, previous, now)
+    summary = {
+        "captures": len(entries),
+        "unique_bssids": len({e["bssid"] for e in entries.values() if e["bssid"]}),
+        "bytes": sum(e["bytes"] for e in entries.values()),
+    }
+    if entries != previous:
+        _write_index(base, entries, summary)
+        logger.info(f"Handshake index: {summary['captures']} capture(s), "
+                    f"{summary['unique_bssids']} unique AP(s).")
+    return summary
+
+
+def _write_index(base, entries, summary):
+    os.makedirs(base, exist_ok=True)
+    payload = {"version": 1, "updated": datetime.now().isoformat(timespec="seconds"),
+               **summary, "captures": entries}
+    fd, tmp = tempfile.mkstemp(dir=base, prefix=".index-", suffix=".json")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(payload, f, indent=2)
+        os.replace(tmp, index_path(base))
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
 class Hunter:
     """Owns the radio and the bettercap process for one hunting session.
 
@@ -205,7 +343,18 @@ class Hunter:
 
         if not iface:
             return True, "was not running"
-        return (True, f"stopped; {iface} back in managed mode") if restored \
+
+        # Index what the session caught, now that bettercap has closed its files. Best-effort: a
+        # failure here loses a catalogue entry, not the PCAP, and must not turn a clean stop into a
+        # reported failure — the return value below is about the radio.
+        try:
+            summary = update_index(self.shared_data)
+        except Exception as e:                  # noqa: BLE001
+            logger.error(f"Could not update the handshake index: {e}")
+            summary = {}
+
+        caught = f", {summary['captures']} capture(s) on disk" if summary else ""
+        return (True, f"stopped; {iface} back in managed mode{caught}") if restored \
             else (False, f"stopped, but {iface} is STILL in monitor mode — see monitor_mode log")
 
     def status(self):

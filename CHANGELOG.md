@@ -261,6 +261,23 @@
   - Bug caught while writing it: `grep -c` prints `0` **and** exits 1 on no-match, so the obvious
     `|| echo 0` appends a second line and every numeric comparison on the result silently fails.
     `bjorn_diag.sh` shipped this exact bug once already.
+- **Handshake loot index** (`update_index`, Stage C step C3) — walks `handshakes/raw/`, records
+  BSSID / ESSID / size / first-seen per capture, and writes `index.json` atomically. Called from
+  `Hunter.stop()` once bettercap has closed its files.
+  - **Keyed by path, and `first_seen` survives a rescan.** Re-indexing must not invent a second
+    entry for an AP whose file bettercap reopened, and `first_seen` is the field that says when you
+    *caught* something — recomputing it each scan would make every handshake look like it arrived
+    today.
+  - Written only when the contents actually changed: this runs after every session on a device
+    whose storage is an SD card, and rewriting an identical file is pure wear.
+  - **A parser bug worth remembering:** the MAC-in-filename regex matched *inside* the ESSID —
+    `Cafe-aa-bb-cc-dd-ee-02` gave BSSID `FE:AA:BB:CC:DD:EE`, because `fe-aa-bb-cc-dd-ee` is a valid
+    MAC shape. Every hex-ish ESSID (cafe, beef, dead, face) hit it. Found by a smoke run, not by
+    the unit test — which asserted `unique_bssids == 2` and passed, because two *wrong* BSSIDs are
+    also two distinct ones. Fixed with non-hex lookarounds; the test now asserts the values.
+    **A count is not a check.**
+  - `kind` (handshake vs PMKID) was dropped rather than deferred: nothing can populate it without
+    parsing the PCAP, and a field that is always empty implies an answer exists.
 - **Handshake Hunter radio + process lifecycle** (`bettercap_pwn.Hunter`, Stage C step C2).
   `start()` takes the radio as owner `pwn` and spawns bettercap; `stop()` ends the process and
   gives the radio back. Still nothing calls it automatically — that is C4.

@@ -251,6 +251,118 @@ def test_handshake_dir_is_dated_and_created(tmp_path):
     assert os.path.isdir(path)
 
 
+# --- C3: the loot index ----------------------------------------------------
+
+def test_parse_capture_name_handles_the_shapes_a_filename_might_take():
+    """bettercap's per-AP naming is version-specific and unconfirmed, so the parser matches a MAC
+    by SHAPE rather than a format. Normalised to upper-case colons, because that is what netkb and
+    wifi_aps.csv use — a lower-case dashed MAC would silently join against nothing."""
+    assert pwn.parse_capture_name("HomeNet-aa:bb:cc:dd:ee:01.pcap") == ("AA:BB:CC:DD:EE:01", "HomeNet")
+    assert pwn.parse_capture_name("aa-bb-cc-dd-ee-02_Cafe.pcapng") == ("AA:BB:CC:DD:EE:02", "Cafe")
+    assert pwn.parse_capture_name("/loot/raw/2026-08-08/AA:BB:CC:DD:EE:03.cap") == ("AA:BB:CC:DD:EE:03", "")
+    # no MAC in the name: still indexable, keyed by what it does have
+    assert pwn.parse_capture_name("mystery.pcap") == ("", "mystery")
+
+
+def test_a_hex_looking_essid_does_not_swallow_the_mac():
+    """Caught by a smoke run, not by the tests above: "Cafe-aa-bb-cc-dd-ee-02" matched starting
+    inside the ESSID, because "fe-aa-bb-cc-dd-ee" is itself a valid MAC shape — giving BSSID
+    FE:AA:BB:CC:DD:EE and ESSID "Ca-02". Every hex-ish name (cafe, beef, dead, face, ace) hits it,
+    and the earlier test missed it because two WRONG bssids are still two DISTINCT bssids."""
+    for essid in ("Cafe", "beef", "DeadBeef", "face"):
+        bssid, parsed = pwn.parse_capture_name(f"{essid}-aa-bb-cc-dd-ee-02.pcap")
+        assert bssid == "AA:BB:CC:DD:EE:02", f"{essid!r} corrupted the BSSID: {bssid}"
+        assert parsed == essid
+
+
+def _capture(tmp_path, relname, content=b"pcap"):
+    """Filenames here use DASHED MACs: Windows rejects ':' in a path, while Linux allows it. The
+    colon form is covered by parse_capture_name's pure test, which never touches the disk."""
+    path = tmp_path / "raw" / "2026-08-08" / relname
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(content)
+    return str(path)
+
+
+def test_index_is_stable_across_rescans(tmp_path):
+    """The plan's acceptance for C3: re-running over the same files adds no duplicate entries, and
+    first_seen keeps saying when the handshake actually arrived rather than when it was last
+    counted."""
+    from datetime import datetime as dt
+    shared = cfg()
+    shared.handshakes_dir = str(tmp_path)
+    _capture(tmp_path, "HomeNet-aa-bb-cc-dd-ee-01.pcap")
+
+    first = pwn.update_index(shared, now=dt(2026, 8, 8, 10, 0, 0))
+    assert first["captures"] == 1 and first["unique_bssids"] == 1
+    original = pwn.load_index(str(tmp_path))
+    stamp = list(original.values())[0]["first_seen"]
+
+    again = pwn.update_index(shared, now=dt(2026, 8, 9, 10, 0, 0))
+    assert again["captures"] == 1, "a rescan must not duplicate"
+    assert list(pwn.load_index(str(tmp_path)).values())[0]["first_seen"] == stamp
+
+
+def test_index_counts_unique_aps_not_files(tmp_path):
+    """Two captures of one AP is one network owned — which is what the coin award in D2 needs."""
+    from datetime import datetime as dt
+    shared = cfg()
+    shared.handshakes_dir = str(tmp_path)
+    _capture(tmp_path, "HomeNet-aa-bb-cc-dd-ee-01.pcap")
+    _capture(tmp_path, "HomeNet-aa-bb-cc-dd-ee-01-2.pcap")
+    _capture(tmp_path, "Cafe-aa-bb-cc-dd-ee-02.pcap")
+    summary = pwn.update_index(shared, now=dt(2026, 8, 8))
+    assert summary["captures"] == 3 and summary["unique_bssids"] == 2
+    # Assert the actual values, not just the count: two WRONG bssids are also "2 unique", which is
+    # how the hex-ESSID bug survived this test until a smoke run printed the index.
+    assert {e["bssid"] for e in pwn.load_index(str(tmp_path)).values()} == {
+        "AA:BB:CC:DD:EE:01", "AA:BB:CC:DD:EE:02"}
+
+
+def test_index_ignores_non_captures_and_survives_an_empty_tree(tmp_path):
+    from datetime import datetime as dt
+    shared = cfg()
+    shared.handshakes_dir = str(tmp_path)
+    assert pwn.update_index(shared, now=dt(2026, 8, 8))["captures"] == 0
+    _capture(tmp_path, "notes.txt")
+    _capture(tmp_path, "real-aa-bb-cc-dd-ee-09.pcap")
+    assert pwn.update_index(shared, now=dt(2026, 8, 8))["captures"] == 1
+
+
+def test_a_corrupt_index_does_not_stop_reindexing(tmp_path):
+    """An index.json truncated by a power cut must not make the loot invisible forever."""
+    from datetime import datetime as dt
+    shared = cfg()
+    shared.handshakes_dir = str(tmp_path)
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    (tmp_path / "index.json").write_text("{not json")
+    _capture(tmp_path, "x-aa-bb-cc-dd-ee-05.pcap")
+    assert pwn.update_index(shared, now=dt(2026, 8, 8))["captures"] == 1
+
+
+def test_index_is_not_rewritten_when_nothing_changed(tmp_path):
+    """SD wear: this runs after every session, and rewriting an identical file is pure damage."""
+    from datetime import datetime as dt
+    shared = cfg()
+    shared.handshakes_dir = str(tmp_path)
+    _capture(tmp_path, "x-aa-bb-cc-dd-ee-06.pcap")
+    pwn.update_index(shared, now=dt(2026, 8, 8))
+    before = os.path.getmtime(pwn.index_path(str(tmp_path)))
+    pwn.update_index(shared, now=dt(2026, 8, 8))
+    assert os.path.getmtime(pwn.index_path(str(tmp_path))) == before
+
+
+def test_stop_indexes_what_the_session_caught(tmp_path, monkeypatch):
+    hunter, mm = _hunter(tmp_path, monkeypatch, lambda cmd: _FakeProc(), {"mode": "managed"})
+    try:
+        assert hunter.start()[0]
+        _capture(tmp_path, "Caught-aa-bb-cc-dd-ee-07.pcap")
+        ok, detail = hunter.stop()
+        assert ok and "1 capture(s) on disk" in detail
+    finally:
+        mm.release("wlan1", owner="pwn")
+
+
 if __name__ == "__main__":
     # The C2 lifecycle tests take pytest fixtures (tmp_path/monkeypatch), so this bare runner can
     # only drive the fixture-free ones. Use `pytest tests/test_bettercap_pwn.py` for the full set.

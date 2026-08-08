@@ -138,10 +138,14 @@ echo "Mode: $([ "$QUICK" -eq 1 ] && echo 'quick (no capture/benchmark)' || echo 
 section "0. Preflight"
 # ===========================================================================
 info "version.txt" "$(cat "$REPO/version.txt" 2>/dev/null || echo '?')"
-# The deployed tree is usually not a checkout (the installer copies files), so fall back to the
-# build_info stamp install_bjorn.sh writes — same source bjorn_diag.sh reads.
-COMMIT="$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null)"
-[ -z "$COMMIT" ] && COMMIT="$(sed -n 's/^source_commit=//p' "$REPO/build_info" 2>/dev/null | cut -c1-60)"
+# build_info, NOT `git -C "$REPO"`. Two reasons, and the second is why the git call was removed
+# rather than guarded: (1) BACKLOG.md records that the deployed tree is not a checkout — the
+# installer copies files — so build_info is the only commit stamp that exists on a real device;
+# (2) this script is documented to run under sudo, and $REPO is owned by the bjorn user (or, via
+# the /home/*/Bjorn glob in resolve_repo, by any local user), so running git there as root reads
+# an attacker-controllable .git/config. Modern git refuses that with "dubious ownership", but
+# depending on another tool's safety check for our own privilege boundary is not a design.
+COMMIT="$(sed -n 's/^source_commit=//p' "$REPO/build_info" 2>/dev/null | cut -c1-60)"
 info "commit" "${COMMIT:-? (no .git and no build_info — reinstall to stamp the build)}"
 info "service" "$(systemctl is-active bjorn.service 2>/dev/null || echo '?')"
 
@@ -314,7 +318,16 @@ fi
 section "4. Display + web UI (#122, #113, #176)"
 # ===========================================================================
 info "epd_type" "$(cfg epd_type)"
-PNG="$(curl -s -o /tmp/bjorn_screen.png -w '%{http_code}:%{size_download}' --max-time 15 "http://$HOSTPORT/screen.png" 2>/dev/null)"
+# mktemp, not a fixed /tmp name: root writing to a predictable path in a world-writable directory
+# is the classic symlink overwrite — any local user pre-creates /tmp/bjorn_screen.png pointing at
+# a file they could not otherwise touch, and this curl clobbers it as root.
+SHOT="$(mktemp -t bjorn_screen.XXXXXX 2>/dev/null || echo "")"
+if [ -z "$SHOT" ]; then
+    PNG="mktemp failed"
+else
+    PNG="$(curl -s -o "$SHOT" -w '%{http_code}:%{size_download}' --max-time 15 "http://$HOSTPORT/screen.png" 2>/dev/null)"
+    rm -f "$SHOT"
+fi
 info "GET /screen.png" "$PNG"
 if [ "${PNG%%:*}" = "200" ] && [ "${PNG##*:}" -gt 1000 ]; then
     verdict PASS "#122 framebuffer renders" "screen.png ${PNG##*:} bytes — compare it against the physical panel for #113"
@@ -386,16 +399,23 @@ fi
 # ===========================================================================
 section "7. Dependency set (P1-2 — the pin refresh is a copy-paste from here)"
 # ===========================================================================
-# The env that matters is whatever the systemd unit runs, which is the system python3 unless a
-# venv is on the ExecStart line — so no venv is the normal case here, not a reason to give up.
-PIP=""
-for p in "$REPO/venv/bin/pip" "$REPO/.venv/bin/pip"; do [ -x "$p" ] && PIP="$p" && break; done
+# Always the system python3, never a pip found inside $REPO.
+#
+# This used to prefer "$REPO/venv/bin/pip" and execute it. That is a root shell for anyone who can
+# write to the install tree: the script is documented to run under sudo, the tree is chown'd to
+# the bjorn user, and resolve_repo's /home/*/Bjorn glob widens that to any local user who creates
+# ~/Bjorn/config/shared_config.json. Nothing in a directory this script merely *located* should
+# ever be executed by it — reading attacker-controlled files is fine, running them is not.
+#
+# Cost of the fix: a venv install reports the system package set instead. The comment that used to
+# live here already said no-venv is the normal case (the unit runs the system python3), so this
+# trades a speculative branch for the removal of a privilege boundary — and if a venv ever does
+# appear on the ExecStart line, the "service interpreter" line below is what would reveal it.
 info "python3" "$(python3 -V 2>&1)"
 info "service interpreter" "$(systemctl show -p ExecStart --value bjorn.service 2>/dev/null | grep -o '/[^ ]*python[0-9.]*' | head -1)"
-info "pip source" "${PIP:-system python3 -m pip}"
+info "pip source" "system python3 -m pip"
 FREEZE="$OUT/pip_freeze_$(date +%Y%m%d).txt"
-if [ -n "$PIP" ]; then "$PIP" freeze > "$FREEZE" 2>/dev/null
-else python3 -m pip freeze > "$FREEZE" 2>/dev/null; fi
+python3 -m pip freeze > "$FREEZE" 2>/dev/null
 NPKG="$(wc -l < "$FREEZE" 2>/dev/null | tr -d ' ')"
 if [ "${NPKG:-0}" -gt 0 ]; then
     verdict PASS "pip freeze captured" "$FREEZE ($NPKG packages) — the P1-2 lockfile candidate"

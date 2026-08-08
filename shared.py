@@ -436,6 +436,10 @@ class SharedData:
         self.levelnbr = 0
         self.networkkbnbr = 0
         self.attacksnbr = 0
+        # Unique APs whose handshake has been captured. Set by bettercap_pwn.update_index()
+        # after a hunting session; 0 until then. The score is a high-water mark, so a
+        # restart before the first hunt cannot make an earlier total drop.
+        self.handshakenbr = 0
         # Bumped once per completed network scan (scanning.py). The display threads read it to
         # skip re-parsing netkb/livestatus when nothing changed (P5). Single writer (scanner),
         # multiple readers → no lock needed; a stale read just recomputes one extra time.
@@ -836,6 +840,7 @@ class SharedData:
         counts = {
             "hosts": self.networkkbnbr, "creds": self.crednbr, "data": self.datanbr,
             "zombies": self.zombiesnbr, "attacks": self.attacksnbr, "vulns": self.vulnnbr,
+            "handshakes": getattr(self, "handshakenbr", 0),
         }
         result = stats_engine.update(os.path.join(self.datadir, "stats.json"), counts)
         self.coinnbr = result["coins"]

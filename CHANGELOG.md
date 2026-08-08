@@ -261,6 +261,22 @@
   - Bug caught while writing it: `grep -c` prints `0` **and** exits 1 on no-match, so the obvious
     `|| echo 0` appends a second line and every numeric comparison on the result silently fails.
     `bjorn_diag.sh` shipped this exact bug once already.
+- **Handshakes are visible, downloadable and worth coins — Stage D complete.**
+  - **Coins:** new `handshakes` category at weight **20**, fed the *unique-AP* count (two captures
+    of one network is one network owned). Above `attacks` (5), below `creds` (25) — a handshake is
+    a network you can own *after* cracking it, which is worth less than a credential that already
+    works. High-water mark like everything else, so deleting the PCAPs cannot claw the score back.
+  - **e-Paper:** a `BettercapPwn` comment theme (10 lines) so the hunter does not fall back to IDLE
+    and log a warning per comment, plus `N handshakes in the horn` in the live status rotation.
+  - **Download:** the index and hunter log join the whitelist-key endpoint;
+    `GET /download_handshakes` zips the captures. That is a **fixed route with no parameter** — the
+    original objection was to `?path=`, and nothing here takes a path from the client.
+  - **Telegram** receives the handshake *index*, not the PCAPs: the catalogue belongs in a report,
+    and pushing capture files through a third-party bot is a decision nobody made.
+  - **Panel:** the hunter's own `can_start()` reason, capture/network counts read from `index.json`
+    (read, not remembered, so the page cannot report a number the disk disagrees with), a zip link,
+    and a bounded **Hunt now (60s)** button — added beyond the plan because every part of Stage C
+    is unverified on hardware and the only other trigger is "unplug the network and wait".
 - **The hunter runs while Bjorn is offline** (Stage C step C4) — `bettercap_pwn_enabled`, off by
   default, with fields on `/bettercap`. This is the step where the feature becomes real: the idle
   wait between reconnection attempts is spent listening for handshakes instead of sleeping.

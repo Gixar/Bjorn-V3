@@ -35,6 +35,8 @@ def status_lines(sd):
         lines.append(f"{sd.zombiesnbr} thralls still answering")
     if sd.attacksnbr:
         lines.append(f"{sd.attacksnbr} raids logged")
+    if getattr(sd, "handshakenbr", 0):
+        lines.append(f"{sd.handshakenbr} handshakes in the horn")
     lines.append(f"Lvl {sd.levelnbr} - {sd.coinnbr} coins")
     if not getattr(sd, "wifi_connected", True):
         lines.append("No uplink. Reading the air.")

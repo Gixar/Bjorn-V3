@@ -74,3 +74,24 @@ if __name__ == "__main__":
         if name.startswith("test_") and callable(fn):
             fn()
     print("ok")
+
+
+def test_handshakes_earn_coins_and_never_lose_them():
+    """Handshakes are priced below a cracked credential (already usable) and above an attack: a
+    handshake is a network you can own *after* cracking it. And like every other category it is a
+    high-water mark — deleting the PCAPs must not claw back the score."""
+    import tempfile, os
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "stats.json")
+        first = se.update(path, {"hosts": 0, "handshakes": 2})
+        assert first["hwm"]["handshakes"] == 2
+        assert first["coins"] == 2 * se.WEIGHTS["handshakes"]
+
+        # the loot directory is wiped; the score must not drop
+        after = se.update(path, {"hosts": 0, "handshakes": 0})
+        assert after["hwm"]["handshakes"] == 2 and after["coins"] == first["coins"]
+
+
+def test_handshake_is_worth_less_than_a_credential_and_more_than_an_attack():
+    w = se.WEIGHTS
+    assert w["attacks"] < w["handshakes"] < w["creds"]

@@ -15,6 +15,7 @@ against a fake process and a faked `iw`.
 """
 import os
 import sys
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -371,3 +372,42 @@ if __name__ == "__main__":
         if name.startswith("test_") and callable(fn) and not inspect.signature(fn).parameters:
             fn()
     print("ok (fixture-free subset; run pytest for all)")
+
+
+# --- D2/D4: the index feeds coins and the report ---------------------------
+
+def test_index_sets_the_coin_counter_to_unique_aps(tmp_path):
+    """Coins count networks owned, not files on disk: two captures of one AP is one network."""
+    from datetime import datetime as dt
+    shared = cfg()
+    shared.handshakes_dir = str(tmp_path)
+    shared.handshakenbr = 0
+    _capture(tmp_path, "Home-aa-bb-cc-dd-ee-01.pcap")
+    _capture(tmp_path, "Home-aa-bb-cc-dd-ee-01-again.pcap")
+    _capture(tmp_path, "Cafe-aa-bb-cc-dd-ee-02.pcap")
+    pwn.update_index(shared, now=dt(2026, 8, 8))
+    assert shared.handshakenbr == 2
+
+
+def test_telegram_reads_the_index_without_shipping_the_pcaps(tmp_path):
+    """The catalogue belongs in a report; the capture files do not. Sending PCAPs through a
+    third-party bot is a decision nobody made — they leave over SSH or the zip endpoint."""
+    import telegram_client
+    from datetime import datetime as dt
+    shared = cfg()
+    shared.handshakes_dir = str(tmp_path)
+    _capture(tmp_path, "Home-aa-bb-cc-dd-ee-01.pcap")
+    pwn.update_index(shared, now=dt(2026, 8, 8))
+
+    rows = telegram_client._read_json_values(os.path.join(str(tmp_path), "index.json"), "captures")
+    assert len(rows) == 1 and rows[0]["bssid"] == "AA:BB:CC:DD:EE:01"
+    assert "pcap" not in json.dumps(rows).lower() or rows[0]["path"].endswith(".pcap")
+
+
+def test_a_missing_or_corrupt_index_never_breaks_a_report(tmp_path):
+    """A report must not fail to send because a catalogue file was half-written."""
+    import telegram_client
+    assert telegram_client._read_json_values(str(tmp_path / "nope.json"), "captures") == []
+    bad = tmp_path / "bad.json"
+    bad.write_text("{truncated")
+    assert telegram_client._read_json_values(str(bad), "captures") == []

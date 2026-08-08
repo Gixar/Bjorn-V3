@@ -20,6 +20,7 @@ import os
 import csv
 import ipaddress
 import threading
+import time
 import zipfile
 import uuid
 import importlib
@@ -238,7 +239,53 @@ class WebUtils:
         if isinstance(obj, dict):
             version = str((obj.get("version") or obj.get("Version") or "")).strip()
         return _ok(message=f"running{' ' + version if version else ''}",
-                   payload={"state": "running", "version": version, "hunter": hunter})
+                   payload={"state": "running", "version": version, "hunter": hunter,
+                            "loot": self._hunter_loot()})
+
+    def _hunter_loot(self):
+        """Capture counts straight from index.json — read, not remembered, so the panel cannot
+        report a number the disk disagrees with."""
+        try:
+            with open(os.path.join(self.shared_data.handshakes_dir, "index.json")) as f:
+                data = json.load(f)
+            return {"captures": int(data.get("captures", 0)),
+                    "unique_bssids": int(data.get("unique_bssids", 0)),
+                    "updated": data.get("updated", "")}
+        except (OSError, json.JSONDecodeError, ValueError, TypeError):
+            return {"captures": 0, "unique_bssids": 0, "updated": ""}
+
+    def hunt_now(self, seconds=60):
+        """'Hunt now' button: one bounded hunting session, started in the background.
+
+        Backgrounded like the Wi-Fi 'Scan now' button — a hunt is a minute long and must not hold
+        an HTTP request open. The session is bounded and stops itself: this is a test/verification
+        affordance, and a button that starts something with no end is how a radio goes missing.
+        """
+        hunter = getattr(self.shared_data, "hunter", None)
+        if hunter is None:
+            hunter = bettercap_pwn.Hunter(self.shared_data)
+            self.shared_data.hunter = hunter
+        if hunter.is_running():
+            return _err("already hunting")
+        ok, reason, _iface = bettercap_pwn.can_start(self.shared_data)
+        if not ok:
+            return _err(reason)
+
+        def _run():
+            started, detail = hunter.start()
+            if not started:
+                self.logger.error(f"Manual hunt failed to start: {detail}")
+                return
+            try:
+                deadline = time.time() + seconds
+                while time.time() < deadline and not getattr(self.shared_data, "should_exit", False):
+                    time.sleep(1)
+            finally:
+                stopped, detail = hunter.stop()
+                (self.logger.info if stopped else self.logger.error)(f"Manual hunt: {detail}")
+
+        threading.Thread(target=_run, daemon=True).start()
+        return _ok(message=f"Hunting for {seconds}s.", payload={"duration": seconds})
 
     # ------------------------------------------------------------------
     # Report delivery (Telegram, SMTP fallback) — POST /telegram_test, POST /telegram_send
@@ -354,6 +401,9 @@ class WebUtils:
             ],
             "bettercap": [
                 ("log", "bettercap_client log", logf("bettercap_client.py.log")),
+                ("hunter_log", "bettercap_pwn log", logf("bettercap_pwn.py.log")),
+                ("handshakes", "Handshake index (JSON)",
+                 os.path.join(sd.handshakes_dir, "index.json")),
             ],
         }
 
@@ -571,6 +621,24 @@ class WebUtils:
                 filename=os.path.basename(backup_path),
             )
         return Response(status_code=404)
+
+    def download_handshakes(self):
+        """Every capture as one zip. A fixed route with NO parameter: the whitelist-key endpoint
+        cannot serve a directory that grows new dated folders, and the obvious `?path=` version
+        would put the whole disk behind one sanitizer being right forever."""
+        base = self.shared_data.handshakes_dir
+        if not os.path.isdir(base):
+            return _err("no handshakes captured yet", status_code=404)
+        tmp = os.path.join(self.shared_data.datadir, "handshakes.zip")
+        try:
+            with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zf:
+                for dirpath, _dirs, files in os.walk(base):
+                    for name in files:
+                        full = os.path.join(dirpath, name)
+                        zf.write(full, os.path.relpath(full, base))
+        except OSError as e:
+            return _err(f"could not build the archive: {e}")
+        return FileResponse(tmp, media_type="application/zip", filename="handshakes.zip")
 
     def serve_credentials_data(self):
         try:

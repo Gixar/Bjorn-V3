@@ -287,11 +287,29 @@ happens, because it fixes a real per-cycle error the moment any long-lived consu
 
 | # | Step | Files | Done when |
 |---|---|---|---|
-| D1 | Register a `handshakes` group in `_file_groups()` (index + logs + the day's PCAPs). No new endpoint. | `utils.py` | Files download from the page via key, not path |
-| D2 | Coins: add `"handshakes"` to `stats_engine.WEIGHTS` (suggest **20** — above `attacks`, below `creds`) and feed `update_stats()` a unique count from `index.json`. Note: `_merge_hwm` seeds from current counts on first run, so an existing capture set seeds rather than awards progressively. | `stats_engine.py`, `shared.py`, `tests/test_stats_engine.py` | Coins rise on a new handshake and never fall |
-| D3 | e-Paper: a `bettercap_pwn` comment theme + a status line in `comment.py::status_lines` (`"3 handshakes on my belt"`). No face subsystem. | `comment.py`, `resources/comments.json` | The theme exists, so it doesn't fall back to IDLE and log a warning |
-| D4 | Telegram/SMTP: add `index.json` to `compile_targets`. Delivery is already deferred while offline via `b_needs_internet`, which is correct here — you hunt offline and report when you land. | `actions/telegram_report.py` | Dataset includes handshakes on the first cycle back online |
-| D5 | Panel: live status (running / epoch / APs / clients / handshakes), enable toggle, force-epoch button. Backgrounded like the Wi-Fi "Scan now" button — an epoch must not hold an HTTP request open. | `web/bettercap.html`, `web/scripts/bettercap.js`, `utils.py` | Toggling off stops the daemon and frees the radio |
+| D1 | ✅ **DONE.** `handshakes` (index.json) + the hunter log registered in `_file_groups()`, plus `GET /download_handshakes` — a fixed route with no parameter that zips the whole loot dir. | `utils.py`, `webapp.py` | Files download from the page by key, not path |
+| D2 | ✅ **DONE.** `handshakes` category at weight **20** (above `attacks`, below `creds`), fed the *unique-AP* count by `update_index()`. | `stats_engine.py`, `shared.py`, `bettercap_pwn.py` | Coins rise on a new network and never fall |
+| D3 | ✅ **DONE.** `BettercapPwn` comment theme (10 lines) + `N handshakes in the horn` in `status_lines`. | `comment.py`, `resources/comments/comments.json` | The theme exists, so no IDLE fallback warning |
+| D4 | ✅ **DONE.** `handshakes` (the index, not the PCAPs) added to `compile_targets`. | `telegram_client.py` | Dataset includes handshakes on the first cycle back online |
+| D5 | ✅ **DONE.** Panel shows the hunter's reason, capture/network counts read from index.json, a **Hunt now (60s)** button and a zip download. | `web/bettercap.*`, `utils.py` | Toggling off stops the daemon and frees the radio |
+
+**D notes:**
+- **One correction to this file's own Corrections table.** It said "register a `handshakes` group,
+  no new endpoint, no path parameter" — the first half holds, but the whitelist maps a key to a
+  *fixed path*, and the loot is a tree that grows new dated folders. The index and the log are
+  registered by key; the PCAPs get `GET /download_handshakes`, a **fixed route with no parameter**
+  that zips the directory. The original objection was to `?path=`, and that still stands: nothing
+  here takes a path from the client.
+- **Coins count unique APs, not files.** Two captures of one network is one network owned. Weight
+  20 sits above `attacks` (5) and below `creds` (25): a handshake is a network you can own *after*
+  cracking it, which is worth less than a credential that already works.
+- **Telegram gets the index, not the PCAPs.** The catalogue belongs in a report; pushing capture
+  files through a third-party bot is a decision nobody made. They leave over SSH or the zip.
+- **"Hunt now (60s)" was added beyond the plan**, because every part of Stage C is unverified on
+  hardware and the only other trigger is "unplug the network and wait". It is bounded and stops
+  itself — a button that starts something with no end is how a radio goes missing.
+- Still deferred to E: epoch/deauth/associate/min_rssi/channels/cooldown. The hunter currently runs
+  `wifi.recon` for the window and takes what it hears; nothing selects targets yet.
 
 ### Stage E — smarter (optional, only after D is real)
 

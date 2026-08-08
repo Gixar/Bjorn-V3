@@ -128,9 +128,13 @@
                     <input type="text" id="bc-pwn-iface" autocomplete="off" placeholder="wlan1">
                 </label>
             </div>
+            <p class="card-subtitle" id="bc-loot">No captures yet.</p>
+
             <div class="log-toolbar">
                 <button type="button" class="btn" onclick="bcSave()">Save</button>
+                <button type="button" class="btn btn-ghost" id="bc-hunt-btn" onclick="bcHuntNow()">Hunt now (60s)</button>
                 <button type="button" class="btn btn-ghost" onclick="bcRefreshStatus()">Refresh</button>
+                <a class="btn btn-ghost" href="/download_handshakes">Download all (.zip)</a>
             </div>
         </div>
 

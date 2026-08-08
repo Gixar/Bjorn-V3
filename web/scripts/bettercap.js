@@ -52,12 +52,37 @@ function bcRefreshStatus() {
             // the page cannot disagree with the code about why nothing is happening.
             const h = document.getElementById("bc-hunter-status");
             if (h) h.textContent = d.hunter || "unknown";
+            const loot = document.getElementById("bc-loot");
+            if (loot && d.loot) {
+                loot.textContent = d.loot.captures
+                    ? `${d.loot.captures} capture(s) from ${d.loot.unique_bssids} network(s)` +
+                      (d.loot.updated ? ` — indexed ${d.loot.updated}` : "")
+                    : "No captures yet.";
+            }
         })
         .catch(() => {
             if (el) el.textContent = "status unavailable";
             const h = document.getElementById("bc-hunter-status");
             if (h) h.textContent = "status unavailable";
         });
+}
+
+async function bcHuntNow() {
+    // Disabled for the session's length, like the Wi-Fi "Scan now" button: the radio is taken for
+    // the whole window, and a second click would only be told "already hunting".
+    const btn = document.getElementById("bc-hunt-btn");
+    try {
+        const r = await postJson("/bettercap_hunt_now", {});
+        const secs = (r && r.duration) || 60;
+        if (btn) { btn.disabled = true; btn.textContent = `Hunting (${secs}s)…`; }
+        toast(`Hunting for ${secs}s`, "success");
+        setTimeout(() => {
+            if (btn) { btn.disabled = false; btn.textContent = "Hunt now (60s)"; }
+            bcRefreshStatus();
+        }, (secs + 5) * 1000);
+    } catch (e) {
+        toast(e.message || "Could not start hunting", "error");
+    }
 }
 
 document.addEventListener("DOMContentLoaded", () => {

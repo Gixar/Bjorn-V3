@@ -150,6 +150,20 @@ def _read_csv(path):
         return []
 
 
+def _read_json_values(path, key):
+    """The values of one dict key in a JSON file, as a list. [] when anything is missing or bad —
+    a report must not fail to send because a catalogue file was half-written."""
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError, TypeError):
+        return []
+    section = data.get(key) if isinstance(data, dict) else None
+    if isinstance(section, dict):
+        return list(section.values())
+    return section if isinstance(section, list) else []
+
+
 def _collect_creds(crackedpwddir):
     out = {}
     try:
@@ -174,6 +188,11 @@ def compile_targets(shared_data, include_creds=True):
         "wifi_aps": _read_csv(os.path.join(sr, "wifi_aps.csv")),
         "wifi_clients": _read_csv(os.path.join(sr, "wifi_clients.csv")),
         "vulnerabilities": _read_csv(shared_data.vuln_summary_file),
+        # The handshake *index*, not the PCAPs: the catalogue is what belongs in a report, and
+        # shipping capture files through a third-party bot is a decision nobody made. The PCAPs
+        # come off the device over SSH or the zip endpoint.
+        "handshakes": _read_json_values(
+            os.path.join(getattr(shared_data, "handshakes_dir", ""), "index.json"), "captures"),
     }
     if include_creds:
         data["credentials"] = _collect_creds(shared_data.crackedpwddir)

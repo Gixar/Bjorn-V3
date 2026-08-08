@@ -13,7 +13,11 @@ import tempfile
 
 # Rebalanced award weights: rare achievements pay far more than common ones (a host merely
 # appearing is cheap; a cracked credential or stolen file is the real win).
-WEIGHTS = {"hosts": 1, "creds": 25, "data": 15, "zombies": 15, "attacks": 5, "vulns": 8}
+# "handshakes" counts UNIQUE APs whose WPA handshake has been captured, not capture files. Priced
+# at 20: below a cracked credential (25 — that one is already usable) and above an attack (5),
+# because a handshake is a network you can own offline later, but only after cracking it.
+WEIGHTS = {"hosts": 1, "creds": 25, "data": 15, "zombies": 15, "attacks": 5, "vulns": 8,
+           "handshakes": 20}
 CATEGORIES = tuple(WEIGHTS.keys())
 LEVEL_DIVISOR = 25  # level = floor(sqrt(coins / LEVEL_DIVISOR)) -> rising thresholds (RPG curve)
 

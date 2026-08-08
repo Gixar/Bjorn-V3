@@ -241,6 +241,13 @@ def update_index(shared_data, now=None):
         "unique_bssids": len({e["bssid"] for e in entries.values() if e["bssid"]}),
         "bytes": sum(e["bytes"] for e in entries.values()),
     }
+    # Coins count UNIQUE APs, not capture files: two captures of one network is one network owned.
+    # stats_engine is a high-water mark, so this only ever pushes the score up.
+    try:
+        shared_data.handshakenbr = summary["unique_bssids"]
+    except AttributeError:
+        pass
+
     if entries != previous:
         _write_index(base, entries, summary)
         logger.info(f"Handshake index: {summary['captures']} capture(s), "

@@ -151,6 +151,16 @@ def bettercap_status():
     return web_utils.bettercap_status()
 
 
+@app.post("/bettercap_hunt_now")
+def bettercap_hunt_now():
+    return web_utils.hunt_now()
+
+
+@app.get("/download_handshakes")
+def download_handshakes():
+    return web_utils.download_handshakes()
+
+
 @app.post("/telegram_test")
 def telegram_test():
     return web_utils.telegram_test()

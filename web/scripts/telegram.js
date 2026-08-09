@@ -75,7 +75,53 @@ async function tgSendNow() {
     }
 }
 
+function tgBundleStatus(text) {
+    const el = document.getElementById("tg-bundle-status");
+    if (el) el.textContent = text;
+}
+
+function tgRefreshBundle() {
+    fetch("/bundle_status")
+        .then((r) => r.json())
+        .then((d) => {
+            const b = (d && d.bundle) || {};
+            tgBundleStatus(b.exists
+                ? `Bundle ready — ${Math.round(b.bytes / 1024)} KB, built ${b.built}`
+                : "No bundle yet. Press Compile.");
+        })
+        .catch(() => tgBundleStatus("status unavailable"));
+}
+
+async function tgCompileBundle() {
+    tgBundleStatus("Compiling…");
+    try {
+        const d = await postJson("/compile_bundle", {});
+        const b = (d && d.bundle) || {};
+        // Say whether credentials went in. The switch that decides it lives in the card above, so
+        // the one thing worth confirming here is which way it was set when the archive was built.
+        const creds = b.creds_included ? "with credentials" : "credentials excluded";
+        toast(d.message || "Compiled", "success");
+        tgBundleStatus(`Bundle ready — ${d.message}, ${creds}.`);
+    } catch (e) {
+        toast(e.message || "Compile failed", "error");
+        tgBundleStatus("Compile failed: " + (e.message || ""));
+    }
+}
+
+async function tgSendBundle() {
+    tgBundleStatus("Sending bundle…");
+    try {
+        const d = await postJson("/send_bundle", {});
+        toast(d.message || "Sent", "success");
+        tgBundleStatus(d.message || "Sent.");
+    } catch (e) {
+        toast(e.message || "Send failed", "error");
+        tgBundleStatus("Send failed: " + (e.message || ""));
+    }
+}
+
 document.addEventListener("DOMContentLoaded", () => {
     if (typeof renderNav === "function") renderNav();
     fetch("/load_config").then((r) => r.json()).then(tgFillFromConfig).catch(() => {});
+    tgRefreshBundle();
 });

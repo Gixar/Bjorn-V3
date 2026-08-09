@@ -290,6 +290,33 @@ class WebUtils:
     # ------------------------------------------------------------------
     # Report delivery (Telegram, SMTP fallback) — POST /telegram_test, POST /telegram_send
     # ------------------------------------------------------------------
+    def compile_bundle(self):
+        """'Compile' button: pack every non-empty collected file into one archive on disk.
+
+        Compiling and sending are separate on purpose. The archive is the thing people want off the
+        device, and the two ways off it — Telegram and a browser download — should not each rebuild
+        it. Compile once, then choose."""
+        ok, detail, summary = telegram_client.compile_bundle(self.shared_data)
+        if not ok:
+            return _err(detail)
+        return _ok(message=detail, payload={"bundle": summary})
+
+    def bundle_status(self):
+        return _ok(payload={"bundle": telegram_client.bundle_summary(self.shared_data)})
+
+    def download_bundle(self):
+        """Serve the compiled archive. Fixed path, no parameter — same rule as every other
+        download here: the client never names a file."""
+        path = telegram_client.bundle_path(self.shared_data)
+        if not os.path.isfile(path):
+            return _err("no bundle compiled yet — press Compile first", status_code=404)
+        return FileResponse(path, media_type="application/zip",
+                            filename=telegram_client.BUNDLE_NAME)
+
+    def send_bundle(self):
+        ok, detail = telegram_client.send_bundle(self.shared_data)
+        return _ok(message=f"Bundle {detail}.") if ok else _err(detail)
+
     def telegram_test(self):
         """Test message down whichever channel is configured (Telegram first, then SMTP)."""
         ok, detail = telegram_client.send_test(self.shared_data)

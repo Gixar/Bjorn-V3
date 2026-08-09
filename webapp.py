@@ -171,6 +171,26 @@ def telegram_send():
     return web_utils.telegram_send()
 
 
+@app.post("/compile_bundle")
+def compile_bundle():
+    return web_utils.compile_bundle()
+
+
+@app.get("/bundle_status")
+def bundle_status():
+    return web_utils.bundle_status()
+
+
+@app.get("/download_bundle")
+def download_bundle():
+    return web_utils.download_bundle()
+
+
+@app.post("/send_bundle")
+def send_bundle():
+    return web_utils.send_bundle()
+
+
 @app.post("/save_config")
 async def save_config(request: Request):
     params = await request.json()

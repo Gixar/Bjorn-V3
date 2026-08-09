@@ -198,3 +198,115 @@ if __name__ == "__main__":
         if name.startswith("test_") and callable(fn):
             fn()
     print("ok")
+
+
+# --- the "everything in one file" bundle -----------------------------------
+
+def _bundle_tree(tmp):
+    """A miniature data/ tree: some real files, some empty, some header-only."""
+    import os
+    out = os.path.join(tmp, "output")
+    for sub in ("scan_results", "crackedpwd", "data_stolen"):
+        os.makedirs(os.path.join(out, sub), exist_ok=True)
+    def write(rel, text):
+        path = os.path.join(out, rel)
+        with open(path, "w", newline="") as f:
+            f.write(text)
+        return path
+    write("scan_results/wifi_aps.csv", "BSSID,ESSID\nAA:BB,Home\n")   # real data
+    write("scan_results/snmp_enum.csv", "IP,SysDescr\n")              # header only
+    write("scan_results/empty.csv", "")                                # truly empty
+    write("crackedpwd/ssh.csv", "IP,User,Password\n10.0.0.1,root,toor\n")
+    write("data_stolen/loot.txt", "secrets")
+    netkb = os.path.join(tmp, "netkb.csv")
+    with open(netkb, "w", newline="") as f:
+        f.write("MAC Address,IPs\nAA:BB,10.0.0.1\n")
+    live = os.path.join(tmp, "livestatus.csv")
+    with open(live, "w", newline="") as f:
+        f.write("h\n")                                                 # header only
+    return types.SimpleNamespace(datadir=tmp, output_dir=out, netkbfile=netkb,
+                                 livestatusfile=live,
+                                 crackedpwddir=os.path.join(out, "crackedpwd"),
+                                 telegram_include_creds=True)
+
+
+def test_header_only_and_empty_files_are_left_out():
+    """Every module creates its output file up front, so a size check alone would pack a dozen
+    empty tables and make the archive look full. A CSV with only a header is a table that never
+    got a row, not data you collected."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        sd = _bundle_tree(tmp)
+        names = [arc for arc, _ in tc.bundle_sources(sd)]
+        assert any(n.endswith("wifi_aps.csv") for n in names)
+        assert any(n.endswith("loot.txt") for n in names)
+        assert not any("snmp_enum" in n for n in names), "header-only CSV must be skipped"
+        assert not any("empty.csv" in n for n in names)
+        assert not any(n == "livestatus.csv" for n in names)
+        assert "netkb.csv" in names
+
+
+def test_credentials_obey_the_same_switch_as_the_report():
+    """It is one file whether you send it or download it, so 'it's only a local download' is not a
+    reason to put cracked passwords in it without being asked."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        sd = _bundle_tree(tmp)
+        with_creds = [a for a, _ in tc.bundle_sources(sd, include_creds=True)]
+        without = [a for a, _ in tc.bundle_sources(sd, include_creds=False)]
+        assert any("ssh.csv" in n for n in with_creds)
+        assert not any("ssh.csv" in n for n in without)
+        assert any("wifi_aps.csv" in n for n in without), "only creds are withheld"
+
+
+def test_compile_writes_one_readable_zip_outside_the_output_tree():
+    """The archive lives in datadir, not under output_dir — otherwise the next rebuild would pack
+    the previous bundle into the new one, and the file would grow every press."""
+    import tempfile, zipfile, os
+    with tempfile.TemporaryDirectory() as tmp:
+        sd = _bundle_tree(tmp)
+        ok, detail, summary = tc.compile_bundle(sd)
+        assert ok, detail
+        path = tc.bundle_path(sd)
+        assert os.path.dirname(path) == tmp
+        with zipfile.ZipFile(path) as zf:
+            assert zf.testzip() is None
+            assert sorted(zf.namelist()) == sorted(summary["names"])
+            assert zf.read([n for n in zf.namelist() if n.endswith("loot.txt")][0]) == b"secrets"
+
+        # rebuilding must not swallow the previous archive
+        ok2, _detail, summary2 = tc.compile_bundle(sd)
+        assert ok2 and summary2["names"] == summary["names"]
+
+
+def test_compiling_nothing_is_an_honest_refusal():
+    import tempfile, os
+    with tempfile.TemporaryDirectory() as tmp:
+        os.makedirs(os.path.join(tmp, "output"))
+        sd = types.SimpleNamespace(datadir=tmp, output_dir=os.path.join(tmp, "output"),
+                                   netkbfile=os.path.join(tmp, "none.csv"),
+                                   livestatusfile=os.path.join(tmp, "none2.csv"),
+                                   crackedpwddir=os.path.join(tmp, "output", "crackedpwd"),
+                                   telegram_include_creds=True)
+        ok, detail, _ = tc.compile_bundle(sd)
+        assert not ok and "nothing collected" in detail
+
+
+def test_sending_before_compiling_says_so():
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        sd = types.SimpleNamespace(datadir=tmp)
+        ok, detail = tc.send_bundle(sd)
+        assert not ok and "Compile first" in detail
+
+
+def test_an_oversized_bundle_is_refused_before_the_upload():
+    """Telegram bots reject documents over 50 MB. Naming the size beats posting a doomed upload
+    and relaying whatever Telegram says about it."""
+    import tempfile, os
+    with tempfile.TemporaryDirectory() as tmp:
+        sd = types.SimpleNamespace(datadir=tmp)
+        with open(tc.bundle_path(sd), "wb") as f:
+            f.write(b"0" * (tc.TELEGRAM_MAX_BYTES + 1))
+        ok, detail = tc.send_bundle(sd)
+        assert not ok and "download it instead" in detail

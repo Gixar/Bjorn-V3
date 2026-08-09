@@ -147,6 +147,40 @@
             </div>
             <p class="card-subtitle" id="tg-status"></p>
         </div>
+
+        <div class="card">
+            <div class="card-header">
+                <div>
+                    <h2 class="card-title">Everything in one file</h2>
+                    <p class="card-subtitle" id="tg-bundle-status">Checking…</p>
+                </div>
+            </div>
+
+            <p>
+                <strong>Compile</strong> packs every file Bjorn has actually collected — netkb, scan
+                results, fingerprints, BLE and Wi-Fi surveys, vulnerabilities, handshakes and stolen
+                loot — into a single <code>.zip</code>. Then send it to Telegram or download it in
+                the browser; both use the archive you just built, so nothing is compiled twice.
+            </p>
+
+            <details class="manual">
+                <summary>Manual — what goes in, what doesn't</summary>
+                <div class="prose">
+                    <table>
+                        <tr><th>Empty files are skipped</th><td>Every module creates its output file up front, so a plain size check would pack a dozen empty tables. A CSV holding only its header counts as empty — it is a table that never got a row, not data you collected.</td></tr>
+                        <tr><th>Logs are not included</th><td>They are diagnostics rather than loot, and each module page already offers its own log individually. This archive is the data.</td></tr>
+                        <tr><th>Cracked credentials follow <em>Include cracked credentials</em></th><td>The same switch that governs the automatic report governs this archive. It is one file whether you send it or download it, so "it's only a local download" is not a reason to put passwords in it without being asked.</td></tr>
+                        <tr><th>Size limit</th><td>Telegram bots refuse documents over 50&nbsp;MB. Past that the send is refused with the size named, rather than attempted and failed — download it instead.</td></tr>
+                    </table>
+                </div>
+            </details>
+
+            <div class="log-toolbar">
+                <button type="button" class="btn" onclick="tgCompileBundle()">Compile</button>
+                <button type="button" class="btn btn-ghost" onclick="tgSendBundle()">Send bundle</button>
+                <a class="btn btn-ghost" href="/download_bundle">Download bundle</a>
+            </div>
+        </div>
         <div class="card" data-files-group="telegram"></div>
     </main>
 </body>

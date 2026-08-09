@@ -2,6 +2,29 @@
 
 ## [Unreleased]
 
+### Added
+- **"Everything in one file" on the Telegram page** — a **Compile** button packs every non-empty
+  collected file (netkb, scan results, fingerprints, BLE and Wi-Fi surveys, vulnerabilities,
+  handshakes, stolen loot) into a single zip, which you can then **send** or **download**.
+  Compiling and sending are separate steps on purpose: the archive is the thing you want off the
+  device, and the two ways off it should not each rebuild it.
+  - **Empty means empty of *data*.** Every module creates its output file up front, so a plain size
+    check would pack a dozen empty tables and make the archive look full. A CSV holding only its
+    header is a table that never got a row, and is skipped.
+  - **Cracked credentials obey `telegram_include_creds`** — the same switch that governs the
+    automatic report. It is one file whether you send it or download it, so "it's only a local
+    download" is not a reason to put passwords in it without being asked.
+  - Logs are excluded: they are diagnostics rather than loot, and every module page already offers
+    its own.
+  - Over Telegram's 50 MB bot limit the send is **refused with the size named** rather than
+    attempted and failed with whatever Telegram says about it.
+  - The archive is written to `datadir`, not under `output_dir`, so a rebuild never packs the
+    previous bundle into the new one and the file cannot grow with every press.
+  - Two bugs fixed while wiring it up: both senders hardcoded `Content-Type: application/json`,
+    which mislabels a zip (mail clients act on that, Telegram does not); and ZIP entry names are
+    always forward-slash separated, while `os.path.relpath` returns backslashes on Windows — the
+    reported file list disagreed with the archive's own listing.
+
 ## [2.5.1-beta] — 2026-08-08
 
 First **beta**: the alpha line's Pi-facing work is now confirmed on real hardware. A verification

@@ -51,7 +51,7 @@ The fastest way to install Bjorn is to get the repo onto the Pi and run the inst
 ```bash
 # Download the repo ZIP from GitHub and unzip it (or `git clone` if you have access),
 # then run the installer from inside the extracted folder:
-cd Bjorn-v2
+cd Bjorn-V3
 sudo chmod +x install_bjorn.sh
 sudo ./install_bjorn.sh
 # Choose the choice 1 for automatic installation. It may take a while as a lot of packages and modules will be installed. You must reboot at the end.
@@ -113,7 +113,7 @@ sudo nmap --script-updatedb
 ```bash
 # Clone the Bjorn repository (this fork; clone into a folder named "Bjorn")
 cd /home/bjorn
-git clone https://github.com/Gixar/Bjorn-v2.git Bjorn
+git clone https://github.com/Gixar/Bjorn-V3.git Bjorn
 cd Bjorn
 
 # Install Python dependencies within the virtual environment

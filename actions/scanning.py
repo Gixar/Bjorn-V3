@@ -342,7 +342,7 @@ class NetworkScanner:
     def _rustscan_bin():
         """Resolve the rustscan binary, or None. `shutil.which` alone isn't enough: the systemd
         service runs as `bjorn` with a minimal PATH that omits ~/.cargo/bin (where `cargo install`
-        drops it), and it may have been built under a different user (e.g. /home/gixar/.cargo/bin).
+        drops it), and it may have been built under a different user (e.g. /home/<user>/.cargo/bin).
         Fall back to globbing the usual cargo/local locations so a present-but-off-PATH binary is
         still found. Returns an absolute path or None."""
         found = shutil.which("rustscan")

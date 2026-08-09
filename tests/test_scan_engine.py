@@ -86,10 +86,10 @@ def test_rustscan_bin_falls_back_to_cargo_path_off_PATH():
     import actions.scanning as s
     orig_which, orig_glob, orig_access = s.shutil.which, s.glob.glob, s.os.access
     s.shutil.which = lambda _name: None  # not on PATH
-    s.glob.glob = lambda pat: ["/home/gixar/.cargo/bin/rustscan"] if "cargo" in pat else []
-    s.os.access = lambda p, _mode: p == "/home/gixar/.cargo/bin/rustscan"
+    s.glob.glob = lambda pat: ["/home/otheruser/.cargo/bin/rustscan"] if "cargo" in pat else []
+    s.os.access = lambda p, _mode: p == "/home/otheruser/.cargo/bin/rustscan"
     try:
-        assert NetworkScanner._rustscan_bin() == "/home/gixar/.cargo/bin/rustscan"
+        assert NetworkScanner._rustscan_bin() == "/home/otheruser/.cargo/bin/rustscan"
     finally:
         s.shutil.which, s.glob.glob, s.os.access = orig_which, orig_glob, orig_access
 

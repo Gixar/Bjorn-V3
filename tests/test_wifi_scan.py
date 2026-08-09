@@ -80,7 +80,7 @@ def test_empty_and_ap_only_input():
 
 # --- monitor-mode guard ---------------------------------------------------------------------
 def test_parse_default_route_iface():
-    out = "default via 192.168.1.1 dev wlan0 proto dhcp src 192.168.1.35 metric 600\n"
+    out = "default via 192.168.1.1 dev wlan0 proto dhcp src 192.168.1.50 metric 600\n"
     assert monitor_mode.parse_default_route_iface(out) == "wlan0"
     assert monitor_mode.parse_default_route_iface("") == ""
 

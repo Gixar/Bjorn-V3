@@ -119,7 +119,7 @@ Pi Zero 2 W, dongle = TP-Link Archer T2U Nano `2357:011e`, Realtek **RTL8811AU**
 misconfiguration), so USB enumerated the adapter while `iw dev` showed only the onboard `phy#0` and
 `dmesg` had no Realtek line at all. Fixed with the out-of-tree DKMS driver
 `morrownr/8821au-20210708`, which supports monitor mode and injection. `iw dev` now reports
-**`phy#1` / `wlan1`** (`24:2f:d0:d9:b3:71`) alongside the onboard radio.
+**`phy#1` / `wlan1`** (`24:2f:d0:xx:xx:xx`) alongside the onboard radio.
 
 > **Trap worth remembering for anyone repeating this:** installing `linux-headers-rpi-v7` also
 > *upgrades the kernel* (here 6.12.93 → 6.12.96) and rewrites `kernel7.img`. `install-driver.sh`
@@ -154,7 +154,7 @@ against a real second radio:
   worked out, but the free window had already closed.
 - **Unrelated confirmations from the same pull:** `usb0` still holds `172.20.2.1/24` with
   `NO-CARRIER` (#68 fix holding across reboots — still needs a plugged-in host for the lease test),
-  and `wlan0` is on `192.168.1.35/24`, SSID `Kiwifi`, channel 2.
+  and `wlan0` is on `192.168.1.x/24`, SSID `<your-ssid>`, channel 2.
 
 **Tier 3 — blocked on hardware, a target, or a live WebUI** (do opportunistically when the Pi is out):
 ~~RTL8811AU driver~~ ✅ 2026-08-05 · ~~`WiFiScan` capture + release~~ ✅ 2026-08-07 ·
@@ -385,7 +385,7 @@ Clean reinstall of 2.5.0-alpha, checked against a real LAN (source: install/veri
   paths observed.
 - **Engine log line** — `scanning.py.log`: `Port discovery engine: rustscan (8 hosts, 41 ports)`.
 - **P1 idle spam** — `journalctl -u bjorn | grep -ci idle` = **0**; one "idling 180s" per window.
-- **Self-scan guard** — `Excluding own IPs from scan: ['192.168.1.35']` each scan.
+- **Self-scan guard** — `Excluding own IPs from scan: ['192.168.1.x']` each scan.
 - **Coins/stats overhaul** — `data/stats.json` = `{hwm:{hosts:10,attacks:17,…}, coins:95, level:1}`;
   monotonic model + math correct (10×1 + 17×5 = 95; `floor(√(95/25))` = 1), persisted to disk.
 - **wpa-sec import** — no-op path confirmed: `wpasec_api_key not set; skipping` (correct).
@@ -469,11 +469,11 @@ collapsing to 4 distinct issues.
    `False` (not connected); only genuinely unexpected stderr stays at ERROR. Independent of #68
    (the gadget-config fix) — even with usb0 configured, an unplugged device shouldn't spam ERROR.
 3. ~~**[P3] `use_rustscan: True` but the `rustscan` binary "not found"**~~ — ✅ **FIXED (path resolution)** —
-   rustscan **was** installed (`/home/gixar/.cargo/bin/rustscan`, v2.4.1) but `shutil.which("rustscan")`
+   rustscan **was** installed (`/home/<user>/.cargo/bin/rustscan`, v2.4.1) but `shutil.which("rustscan")`
    missed it: the service runs as `root` under systemd with a minimal PATH that omits `~/.cargo/bin`,
-   and here it was built under a **different** user (`gixar`, not `bjorn`). Added `NetworkScanner._rustscan_bin()`
+   and here it was built under a **different** user (a non-`bjorn` user). Added `NetworkScanner._rustscan_bin()`
    — `which` first, then a glob fallback over `/home/*/.cargo/bin`, `/root/.cargo/bin`, `/usr/local/bin`,
-   `/usr/bin` (root can traverse the 700-mode `/home/gixar` and exec the binary). Wired it into
+   `/usr/bin` (root can traverse the 700-mode `/home/<user>` and exec the binary). Wired it into
    `selected_engine`, the benchmark guard, and `_rustscan_cmd` (now takes the resolved path instead of
    the literal `"rustscan"`). Works on the existing install with no reinstall. Tests updated + a new
    `test_rustscan_bin_falls_back_to_cargo_path_off_PATH`. **Now unblocks** the batch-size tuning item

@@ -3,7 +3,8 @@
 # It scans for vulnerabilities on various ports and saves the results and progress.
 
 import os
-import pandas as pd
+import re
+import json
 import subprocess
 import logging
 from datetime import datetime
@@ -29,6 +30,7 @@ class NmapVulnScanner:
         self.shared_data = shared_data
         self.scan_results = []
         self.summary_file = self.shared_data.vuln_summary_file
+        self._cve_signatures = None  # lazy-loaded offline CVE DB (config/cve_signatures.json)
         self.create_summary_file()
         logger.debug("NmapVulnScanner initialized.")
 
@@ -37,6 +39,7 @@ class NmapVulnScanner:
         Creates a summary file for vulnerabilities if it does not exist.
         """
         if not os.path.exists(self.summary_file):
+            import pandas as pd  # lazy: keep pandas out of module import (P2)
             os.makedirs(self.shared_data.vulnerabilities_dir, exist_ok=True)
             df = pd.DataFrame(columns=["IP", "Hostname", "MAC Address", "Port", "Vulnerabilities"])
             df.to_csv(self.summary_file, index=False)
@@ -46,6 +49,7 @@ class NmapVulnScanner:
         Updates the summary file with the scan results.
         """
         try:
+            import pandas as pd  # lazy: keep pandas out of module import (P2)
             # Read existing data
             df = pd.read_csv(self.summary_file)
             
@@ -72,13 +76,23 @@ class NmapVulnScanner:
 
             # Proceed with scanning if ports are not already scanned
             logger.info(f"Scanning {ip} on ports {','.join(ports)} for vulnerabilities with aggressivity {self.shared_data.nmap_scan_aggressivity}")
-            result = subprocess.run(
-                ["nmap", self.shared_data.nmap_scan_aggressivity, "-sV", "--script", "vulners.nse", "-p", ",".join(ports), ip],
-                capture_output=True, text=True
-            )
+            nmap_args = ["nmap", self.shared_data.nmap_scan_aggressivity]
+            if self.shared_data.vuln_scan_sv:
+                nmap_args.append("-sV")
+            if self.shared_data.vuln_scan_vulners:
+                nmap_args += ["--script", "vulners.nse"]
+            nmap_args += ["-p", ",".join(ports), ip]
+            result = subprocess.run(nmap_args, capture_output=True, text=True)
             combined_result += result.stdout
 
             vulnerabilities = self.parse_vulnerabilities(result.stdout)
+            # Offline CVE enrichment: match the -sV service versions against the bundled
+            # signature DB. No internet needed, so it complements the online vulners.nse and
+            # still flags known-vulnerable versions when vuln_scan_vulners is off.
+            if getattr(self.shared_data, "vuln_offline_cve", True):
+                offline = self.enrich_offline(result.stdout)
+                if offline:
+                    vulnerabilities = "; ".join(v for v in (vulnerabilities, offline) if v)
             self.update_summary_file(ip, hostname, mac, ",".join(ports), vulnerabilities)
         except Exception as e:
             logger.error(f"Error scanning {ip}: {e}")
@@ -118,6 +132,78 @@ class NmapVulnScanner:
                     capture = False
         return "; ".join(vulnerabilities)
 
+    # --- Offline CVE enrichment (bundled config/cve_signatures.json) -------------------
+    def _load_cve_signatures(self):
+        """Load the bundled offline CVE signature DB. Missing/broken file → [] (feature no-ops)."""
+        path = os.path.join(self.shared_data.configdir, "cve_signatures.json")
+        try:
+            with open(path) as f:
+                return json.load(f).get("signatures", [])
+        except (FileNotFoundError, json.JSONDecodeError) as e:
+            logger.warning(f"Offline CVE signatures unavailable ({path}): {e}")
+            return []
+
+    def enrich_offline(self, scan_output):
+        """Match the service versions nmap -sV reported (via CPE) against the signature DB.
+        Returns a '; '-joined string of matched CVEs (empty if none / no signatures)."""
+        if self._cve_signatures is None:
+            self._cve_signatures = self._load_cve_signatures()
+        if not self._cve_signatures:
+            return ""
+        pairs = self._parse_service_versions(scan_output)
+        return "; ".join(sorted(self._match_signatures(pairs, self._cve_signatures)))
+
+    @staticmethod
+    def _parse_service_versions(scan_output):
+        """Extract (product, version) pairs from nmap -sV output. Primary source is the structured
+        CPE lines (cpe:/a:vendor:product:version). Fallback for services nmap couldn't CPE-identify
+        (common on consumer gear like routers): take the first two tokens of the -sV version detail
+        (`PORT open SERVICE <product> <version> …`) as (product, version). product lowercased,
+        deduped. Garbage products from the fallback simply match no signature, so it only adds hits,
+        never false positives."""
+        pairs, seen = [], set()
+
+        def add(product, version):
+            key = (product.lower(), version)
+            if key not in seen:
+                seen.add(key)
+                pairs.append(key)
+
+        for m in re.finditer(r'cpe:/[aoh]:[^:\s]+:([^:\s]+):([^:\s]+)', scan_output):
+            add(m.group(1), m.group(2))
+        # service-line fallback (multiline: ^ at each line start)
+        for m in re.finditer(r'(?m)^\d+/\w+\s+open\s+\S+\s+(\S+)\s+(\S+)', scan_output):
+            add(m.group(1), m.group(2))
+        return pairs
+
+    @staticmethod
+    def _match_signatures(pairs, signatures):
+        """Set of 'CVE-… (product version) [severity]' strings for every (product, version) that
+        matches a signature. Pure/testable."""
+        findings = set()
+        for product, version in pairs:
+            for sig in signatures:
+                if sig.get("product", "").lower() == product and \
+                        NmapVulnScanner._version_matches(version, sig):
+                    findings.add(f"{sig['cve']} ({product} {version}) [{sig.get('severity', '?')}]")
+        return findings
+
+    @staticmethod
+    def _version_matches(version, sig):
+        if "version" in sig:
+            return version == sig["version"]
+        if "version_contains" in sig:
+            return sig["version_contains"] in version
+        if "version_lt" in sig:
+            # ponytail: naive numeric-tuple compare (8.4p1 -> (8,4,1)); fine for the seed CVEs.
+            # Swap for packaging.version if real range matching is ever needed.
+            return NmapVulnScanner._ver_tuple(version) < NmapVulnScanner._ver_tuple(sig["version_lt"])
+        return False
+
+    @staticmethod
+    def _ver_tuple(v):
+        return tuple(int(n) for n in re.findall(r'\d+', v))
+
     def save_results(self, mac_address, ip, scan_result):
         """
         Saves the detailed scan results to a file.
@@ -146,6 +232,7 @@ class NmapVulnScanner:
         Saves a summary of all scanned vulnerabilities to a final summary file.
         """
         try:
+            import pandas as pd  # lazy: keep pandas out of module import (P2)
             final_summary_file = os.path.join(self.shared_data.vulnerabilities_dir, "final_vulnerability_summary.csv")
             df = pd.read_csv(self.summary_file)
             summary_data = df.groupby(["IP", "Hostname", "MAC Address"])["Vulnerabilities"].apply(lambda x: "; ".join(set("; ".join(x).split("; ")))).reset_index()

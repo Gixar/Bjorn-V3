@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bjorn Cyberviking — Stats</title>
+    <link rel="icon" href="web/images/favicon.ico" type="image/x-icon">
+    <link rel="stylesheet" href="web/css/styles.css">
+    <link rel="manifest" href="manifest.json">
+    <link rel="apple-touch-icon" sizes="192x192" href="web/images/icon-192x192.png">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+    <script src="web/scripts/common.js" defer></script>
+    <script src="web/scripts/stats.js" defer></script>
+</head>
+<body>
+    <nav id="app-nav" class="topnav"></nav>
+
+    <main class="page stats-container">
+        <div class="page-header">
+            <div>
+                <h1>Stats</h1>
+                <p class="card-subtitle">Live counters from the orchestrator</p>
+            </div>
+            <div class="page-header-actions">
+                <div id="ws-indicator" class="ws-indicator ws-connecting">
+                    <span class="ws-dot"></span>
+                    <span id="ws-indicator-text">Connecting…</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="stats-header">
+            <div class="stats-status-badges">
+                <span id="orchestrator-badge" class="status-badge">—</span>
+                <span id="wifi-badge" class="status-badge">—</span>
+                <span id="mode-badge" class="status-badge">—</span>
+            </div>
+        </div>
+
+        <div class="stats-grid">
+            <div class="stat-card" data-stat="coins">
+                <div class="stat-icon">💰</div>
+                <div class="stat-value" id="stat-coins">0</div>
+                <div class="stat-label">Coins</div>
+            </div>
+            <div class="stat-card" data-stat="level">
+                <div class="stat-icon">⭐</div>
+                <div class="stat-value" id="stat-level">0</div>
+                <div class="stat-label">Level</div>
+            </div>
+            <div class="stat-card" data-stat="known_hosts">
+                <div class="stat-icon">🖧</div>
+                <div class="stat-value" id="stat-known_hosts">0</div>
+                <div class="stat-label">Known Hosts</div>
+            </div>
+            <div class="stat-card" data-stat="vulnerabilities">
+                <div class="stat-icon">⚠️</div>
+                <div class="stat-value" id="stat-vulnerabilities">0</div>
+                <div class="stat-label">Vulnerabilities</div>
+            </div>
+            <div class="stat-card" data-stat="credentials_cracked">
+                <div class="stat-icon">🔑</div>
+                <div class="stat-value" id="stat-credentials_cracked">0</div>
+                <div class="stat-label">Credentials Cracked</div>
+            </div>
+            <div class="stat-card" data-stat="data_stolen">
+                <div class="stat-icon">📦</div>
+                <div class="stat-value" id="stat-data_stolen">0</div>
+                <div class="stat-label">Data Stolen</div>
+            </div>
+            <div class="stat-card" data-stat="zombies">
+                <div class="stat-icon">🧟</div>
+                <div class="stat-value" id="stat-zombies">0</div>
+                <div class="stat-label">Zombies</div>
+            </div>
+            <div class="stat-card" data-stat="attacks">
+                <div class="stat-icon">⚔️</div>
+                <div class="stat-value" id="stat-attacks">0</div>
+                <div class="stat-label">Attacks</div>
+            </div>
+            <div class="stat-card" data-stat="targets">
+                <div class="stat-icon">🎯</div>
+                <div class="stat-value" id="stat-targets">0</div>
+                <div class="stat-label">Targets</div>
+            </div>
+            <div class="stat-card" data-stat="open_ports">
+                <div class="stat-icon">🔌</div>
+                <div class="stat-value" id="stat-open_ports">0</div>
+                <div class="stat-label">Open Ports</div>
+            </div>
+        </div>
+
+        <div class="stats-chart-container">
+            <div class="stats-chart-header">
+                <span>Session trend</span>
+                <span class="stats-chart-note">Resets on page reload — live view, not stored history yet.</span>
+            </div>
+            <canvas id="stats-chart" height="90"></canvas>
+        </div>
+
+        <div class="stats-chart-container">
+            <div class="stats-chart-header">
+                <span>Coin breakdown</span>
+                <span class="stats-chart-note">Earned totals per category — monotonic, persists across restarts.</span>
+            </div>
+            <table class="stats-breakdown" id="stats-breakdown">
+                <thead><tr><th>Category</th><th>Count</th><th>×&nbsp;weight</th><th>Coins</th></tr></thead>
+                <tbody id="stats-breakdown-body"></tbody>
+            </table>
+        </div>
+    </main>
+</body>
+</html>

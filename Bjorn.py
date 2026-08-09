@@ -21,6 +21,8 @@ import logging
 import time
 import sys
 import subprocess
+import battery
+import bettercap_client
 from init_shared import shared_data
 from display import Display, handle_exit_display
 from comment import Commentaireia
@@ -29,6 +31,20 @@ from orchestrator import Orchestrator
 from logger import Logger
 
 logger = Logger(name="Bjorn.py", level=logging.DEBUG)
+
+# PG-4 watchdog: the main loop refreshes this heartbeat each iteration. A background loop in the
+# systemd unit restarts bjorn.service if it goes stale (the main loop wedged). /run is tmpfs on
+# Raspberry Pi OS, so this costs zero SD writes. Keep this path in sync with install_bjorn.sh.
+HEARTBEAT_FILE = "/run/bjorn_heartbeat"
+
+
+def touch_heartbeat():
+    """Refresh the watchdog heartbeat. Best-effort — never raise (e.g. /run unwritable off-Pi)."""
+    try:
+        with open(HEARTBEAT_FILE, "w") as f:
+            f.write(str(int(time.time())))
+    except Exception:
+        pass
 
 class Bjorn:
     """Main class for Bjorn. Manages the primary operations of the application."""
@@ -47,9 +63,27 @@ class Bjorn:
 
         # Main loop to keep Bjorn running
         while not self.shared_data.should_exit:
+            touch_heartbeat()  # PG-4: tell the systemd watchdog the main loop is alive
+            self.check_battery()  # PG-3: shut down cleanly before the battery dies
             if not self.shared_data.manual_mode:
                 self.check_and_start_orchestrator()
             time.sleep(10)  # Main loop idle waiting
+
+    def check_battery(self):
+        """PG-3: if a battery monitor is configured and charge is below the shutdown threshold,
+        power off cleanly (systemd stops bjorn.service -> SIGTERM -> flush) to protect the SD."""
+        if not getattr(self.shared_data, 'battery_monitor_enabled', False):
+            return
+        pct = battery.read_percent()
+        if pct is None:
+            return  # no battery hardware reachable — nothing to do
+        threshold = getattr(self.shared_data, 'battery_shutdown_percent', 10)
+        if pct <= threshold:
+            logger.critical(f"Battery at {pct}% (<= {threshold}% threshold). Shutting down cleanly "
+                            f"to protect the SD card.")
+            self.shared_data.should_exit = True
+            # Static command, no user input — but use subprocess (list form), not os.system.
+            subprocess.run(["shutdown", "-h", "now"], check=False)
 
 
 
@@ -148,6 +182,11 @@ if __name__ == "__main__":
         if shared_data.config["websrv"]:
             logger.info("Starting the web server...")
             web_thread.start()
+
+        # Bettercap poller (docs/BETTERCAP_PLAN.md B2). No-op unless bettercap_enabled, which
+        # defaults false — so an install that never touched the Bettercap page starts no thread
+        # and makes no requests. It only buffers; the orchestrator does the netkb write.
+        shared_data.bettercap_poller = bettercap_client.start_poller(shared_data)
 
         signal.signal(signal.SIGINT, lambda sig, frame: handle_exit(sig, frame, display_thread, bjorn_thread, web_thread))
         signal.signal(signal.SIGTERM, lambda sig, frame: handle_exit(sig, frame, display_thread, bjorn_thread, web_thread))

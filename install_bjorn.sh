@@ -2,7 +2,7 @@
 
 # BJORN Installation Script
 # This script handles the complete installation of BJORN
-# Author: infinition
+# Author: infinition (original) — fork: Gixar/Bjorn-V3
 # Version: 1.0 - 071124 - 0954
 
 # Colors for output
@@ -23,11 +23,21 @@ BJORN_USER="bjorn"
 BJORN_PATH="/home/${BJORN_USER}/Bjorn"
 CURRENT_STEP=0
 TOTAL_STEPS=8
+# Directory this script lives in (= the repo root — install_bjorn.sh sits at the top of the
+# repo). Lets the installer install from a local copy instead of cloning from GitHub.
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
 if [[ "$1" == "--help" ]]; then
-    echo "Usage: sudo ./install_bjorn.sh"
+    echo "Usage: sudo ./install_bjorn.sh [--dry-run|--help]"
+    echo "  --dry-run   Check prerequisites and list the install steps without changing anything."
+    echo "  --help      Show this message."
     echo "Make sure you have the necessary permissions and that all dependencies are met."
     exit 0
+fi
+
+DRY_RUN=false
+if [[ "$1" == "--dry-run" ]]; then
+    DRY_RUN=true
 fi
 
 # Function to display progress
@@ -178,6 +188,18 @@ check_system_compatibility() {
         log "SUCCESS" "Raspberry Pi Zero detected"
     fi
 
+    # Check required external tools that must already be present (base Raspberry Pi OS).
+    # nmap is intentionally NOT here — the installer provides it in the dependency step, so
+    # checking it before that step always false-warns on a fresh image.
+    for tool in nmcli python3; do
+        if ! command -v "$tool" >/dev/null 2>&1; then
+            log "WARNING" "Required tool not found on PATH: $tool"
+            should_ask_confirmation=true
+        else
+            log "SUCCESS" "Found required tool: $tool"
+        fi
+    done
+
     if [ "$should_ask_confirmation" = true ]; then
         echo -e "\n${YELLOW}Some system compatibility warnings were detected (see above).${NC}"
         echo -e "${YELLOW}The installation might not work as expected.${NC}"
@@ -212,6 +234,9 @@ install_dependencies() {
         "git"
         "libopenjp2-7"
         "nmap"
+        "snmp"
+        "aircrack-ng"  # airodump-ng, for the opt-in Wi-Fi AP recon (needs a monitor-mode radio)
+        "iw"           # monitor-mode switching + interface capability probing
         "libopenblas-dev"
         "bluez-tools"
         "bluez"
@@ -233,13 +258,208 @@ install_dependencies() {
     # Install packages
     for package in "${packages[@]}"; do
         log "INFO" "Installing $package..."
-        apt-get install -y "$package"
-        check_success "Installed $package"
+        if apt-get install -y "$package"; then
+            log "SUCCESS" "Installed $package"
+        else
+            # A package may be renamed/removed on newer Debian (e.g. libatlas-base-dev was
+            # dropped in trixie — upstream #147). Warn and continue rather than aborting the
+            # whole install for one optional dependency.
+            log "WARNING" "Could not install $package (skipping — may be unavailable on this OS)"
+        fi
     done
     
     # Update nmap scripts
     nmap --script-updatedb
+
+    # Optional faster port-discovery engine (backlog #12). Off by default (use_rustscan config
+    # toggle); Bjorn falls back to nmap when it's absent, so this never aborts the install.
+    install_rustscan
+
     check_success "Dependencies installation completed"
+}
+
+# Install bettercap and write its systemd unit (optional — docs/BETTERCAP_PLAN.md Stage B).
+#
+# THE POINT OF THIS FUNCTION IS THE PASSWORD. bettercap's api.rest ships a documented default
+# user/pass ("user"/"pass"); shipping that on a device whose whole job is to sit on other people's
+# networks would be handing out a root-equivalent local API. So we generate one per install and
+# write it into both the unit and Bjorn's config, which is also the only way the two can agree
+# without the operator typing it twice.
+#
+# The unit is written but NOT enabled: bettercap_enabled defaults to false, and a daemon nobody
+# asked for should not be running. Enabling it is a deliberate act on the Bettercap web page.
+#
+# Called from setup_services, NOT install_dependencies: it writes into the *installed* config at
+# $BJORN_PATH, which setup_bjorn only creates at step 5. Run earlier, it would either find no
+# config or write to the source tree and have the copy overwrite it.
+install_bettercap() {
+    if ! apt-get install -y bettercap >/dev/null 2>&1; then
+        log "WARNING" "bettercap not available from apt — skipping (optional; Bjorn is unaffected)."
+        return 0
+    fi
+
+    # UNDO DEBIAN'S AUTO-ENABLE. Found on-Pi 2026-08-08: the verification run reported the unit
+    # enabled on a box where this installer had demonstrably written its own (the generated
+    # password matched the config), and nothing here ever calls `systemctl enable`. debhelper
+    # enables AND starts a packaged service at apt-install time, so `apt install bettercap` left a
+    # root daemon with a REST API running at every boot on a device that is carried onto other
+    # people's networks — with Bjorn not even talking to it (bettercap_enabled defaults false).
+    # Unconditional and before the early return below, so it also fixes an install that already
+    # went out. Idempotent: disabling an already-disabled unit is a no-op.
+    systemctl disable --now bettercap >/dev/null 2>&1
+    log "INFO" "bettercap left installed but disabled (apt enables it by default; Bjorn does not)."
+
+    # Already provisioned? Leave the existing password alone — regenerating it on every re-run
+    # would silently break a working install by desynchronising the unit from the saved config.
+    if [ -f /etc/systemd/system/bettercap.service ]; then
+        log "INFO" "bettercap.service already present — keeping its existing credentials."
+        return 0
+    fi
+
+    local bc_pass
+    bc_pass="$(head -c 24 /dev/urandom | base64 | tr -d '/+=' | head -c 24)"
+
+    cat > /etc/systemd/system/bettercap.service << EOF
+[Unit]
+Description=bettercap (Bjorn managed-mode recon)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/bettercap -eval "set api.rest.address 127.0.0.1; set api.rest.port 8081; set api.rest.username bjorn; set api.rest.password ${bc_pass}; api.rest on"
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    chmod 600 /etc/systemd/system/bettercap.service  # the password is in it
+
+    # Land the same password in Bjorn's config. python3 rather than sed: the value is random
+    # base64 and sed would treat a stray character in it as syntax. The password arrives as argv,
+    # never interpolated into the (quoted) heredoc, so no quoting of it can go wrong.
+    local bc_config="${BJORN_PATH}/config/shared_config.json"
+    if [ -f "$bc_config" ]; then
+        python3 - "$bc_config" "$bc_pass" << 'PYEOF'
+import json, sys
+path, password = sys.argv[1], sys.argv[2]
+with open(path) as f:
+    cfg = json.load(f)
+cfg["bettercap_password"] = password
+cfg["bettercap_user"] = "bjorn"
+cfg["bettercap_api_url"] = "http://127.0.0.1:8081"
+with open(path, "w") as f:
+    json.dump(cfg, f, indent=4)
+PYEOF
+        chown "$BJORN_USER:$BJORN_USER" "$bc_config"
+        check_success "Wrote generated bettercap credentials into shared_config.json"
+    else
+        log "WARNING" "$bc_config not found — set bettercap_password by hand: ${bc_pass}"
+    fi
+
+    systemctl daemon-reload
+    log "SUCCESS" "bettercap installed (service written, NOT enabled — turn it on from the web UI)."
+}
+
+# Install RustScan (optional — port-discovery speedup, off by default via the use_rustscan config
+# toggle). Not in apt. On 64-bit ARM / amd64 we drop the official prebuilt static binary into
+# /usr/local/bin (no Rust toolchain, no compile). RustScan ships no 32-bit ARM binary; there we
+# pull our own once-compiled armv7 binary (RUSTSCAN_ARMHF_URL) and only fall back to a slow local
+# cargo build if that's missing. Non-fatal: any failure just leaves Bjorn on nmap.
+# Bump RUSTSCAN_VERSION to match a newer release: https://github.com/RustScan/RustScan/releases
+# When you bump it, rebuild the armv7 binary and re-upload it to the RUSTSCAN_ARMHF_URL release.
+RUSTSCAN_VERSION="2.4.1"
+# Self-hosted armv7 (32-bit) RustScan binary — compiled once, attached to a GitHub release.
+# Points at the PUBLIC Bjorn-V3 repo, so an unauthenticated wget on a fresh Pi works and the
+# ~1h from-source compile is only a fallback. Release assets do NOT travel via git push: the
+# binary has to be attached to the release by hand (or with `gh release upload`). If the asset is
+# missing the installer just compiles instead — slower, never fatal.
+RUSTSCAN_ARMHF_URL="https://github.com/Gixar/Bjorn-V3/releases/download/rustscan-v${RUSTSCAN_VERSION}-armhf/rustscan"
+install_rustscan() {
+    log "INFO" "Installing RustScan ${RUSTSCAN_VERSION} (optional — off by default; Bjorn uses nmap without it)..."
+
+    if command -v rustscan >/dev/null 2>&1; then
+        log "SUCCESS" "RustScan already installed ($(command -v rustscan))"
+        return 0
+    fi
+
+    local arch asset
+    arch="$(uname -m)"
+    case "$arch" in
+        aarch64|arm64) asset="aarch64-linux-rustscan.zip" ;;          # 64-bit Raspberry Pi OS
+        x86_64|amd64)  asset="x86_64-linux-rustscan.tar.gz.zip" ;;    # dev box
+        armv7l)                                                       # 32-bit ARMv7 (Pi Zero 2 W, Pi 3/4 on 32-bit OS)
+            install_rustscan_armhf_prebuilt || install_rustscan_from_source
+            return 0
+            ;;
+        armv6l)                                                       # ARMv6 (Pi Zero/1) — armv7 binary won't run, compile
+            install_rustscan_from_source
+            return 0
+            ;;
+        *)
+            log "WARNING" "No prebuilt RustScan for '$arch'. Skipping — run 'cargo install rustscan' to add it manually. Bjorn uses nmap until then."
+            return 0
+            ;;
+    esac
+
+    local url="https://github.com/RustScan/RustScan/releases/download/${RUSTSCAN_VERSION}/${asset}"
+    local tmpdir bin inner_tgz
+    tmpdir="$(mktemp -d)"
+
+    if wget -qO "$tmpdir/rustscan.zip" "$url"; then
+        # Extract with python3 (always present) so we don't add an 'unzip' apt dependency.
+        python3 -m zipfile -e "$tmpdir/rustscan.zip" "$tmpdir/" 2>/dev/null
+        # The x86_64 asset wraps a .tar.gz inside the .zip; the aarch64 asset is the raw binary.
+        inner_tgz="$(find "$tmpdir" -name '*.tar.gz' | head -1)"
+        [ -n "$inner_tgz" ] && tar -xzf "$inner_tgz" -C "$tmpdir"
+        bin="$(find "$tmpdir" -type f -name rustscan | head -1)"
+        if [ -n "$bin" ]; then
+            install -m 0755 "$bin" /usr/local/bin/rustscan
+            log "SUCCESS" "Installed RustScan to /usr/local/bin/rustscan"
+        else
+            log "WARNING" "RustScan archive had no 'rustscan' binary — skipping. Bjorn uses nmap."
+        fi
+    else
+        log "WARNING" "RustScan download failed (${url}). Skipping — Bjorn uses nmap. Install manually later if wanted."
+    fi
+    rm -rf "$tmpdir"
+}
+
+# Download our once-compiled armv7 RustScan binary (RUSTSCAN_ARMHF_URL). Returns nonzero if it's
+# not published yet, so the caller falls back to a local compile.
+install_rustscan_armhf_prebuilt() {
+    local tmp
+    tmp="$(mktemp)"
+    if wget -qO "$tmp" "$RUSTSCAN_ARMHF_URL" && [ -s "$tmp" ]; then
+        install -m 0755 "$tmp" /usr/local/bin/rustscan
+        rm -f "$tmp"
+        log "SUCCESS" "Installed prebuilt RustScan (armv7) to /usr/local/bin/rustscan"
+        return 0
+    fi
+    rm -f "$tmp"
+    log "INFO" "No prebuilt armv7 RustScan at ${RUSTSCAN_ARMHF_URL} — will compile from source."
+    return 1
+}
+
+# Compile RustScan from crates.io on architectures with no prebuilt binary (32-bit ARM).
+# Uses apt's Rust toolchain; --locked builds against RustScan's pinned Cargo.lock so old
+# transitive deps don't demand a newer compiler. Slow (~10-20 min on a Pi) but one-time.
+# ponytail: apt's cargo can still be too old for the pinned deps — if the build fails, install
+#   rustup (a current toolchain) and re-run 'cargo install rustscan --root /usr/local'.
+install_rustscan_from_source() {
+    log "INFO" "No prebuilt RustScan for 32-bit ARM — compiling from source with cargo (slow, one-time)..."
+    if ! command -v cargo >/dev/null 2>&1; then
+        apt-get install -y cargo build-essential || {
+            log "WARNING" "Could not install cargo — skipping RustScan. Bjorn uses nmap."
+            return 0
+        }
+    fi
+    if cargo install rustscan --version "${RUSTSCAN_VERSION}" --locked --root /usr/local; then
+        log "SUCCESS" "Compiled and installed RustScan to /usr/local/bin/rustscan"
+    else
+        log "WARNING" "RustScan compile failed (apt's Rust may be too old). Skipping — Bjorn uses nmap. To add it: install rustup, then 'cargo install rustscan --root /usr/local'."
+    fi
 }
 
 # Configure system limits
@@ -299,14 +519,31 @@ setup_bjorn() {
     if [ -d "Bjorn" ]; then
         log "INFO" "Using existing BJORN directory"
         echo -e "${GREEN}Using existing BJORN directory${NC}"
+    elif [ -f "$SCRIPT_DIR/requirements.txt" ] && [ -d "$SCRIPT_DIR/actions" ]; then
+        # Preferred path: install from the local repo this script was run from — no network,
+        # no GitHub, works with a private repo. (install_bjorn.sh lives at the repo root.)
+        log "INFO" "Installing BJORN from local source: $SCRIPT_DIR"
+        cp -r "$SCRIPT_DIR" /home/$BJORN_USER/Bjorn
+        check_success "Copied BJORN from local source"
     else
-        # No existing directory, proceed with clone
-        log "INFO" "Cloning BJORN repository"
-        git clone https://github.com/infinition/Bjorn.git
+        # Fallback: clone from GitHub (needs a public repo, or a token for a private one).
+        log "INFO" "No local copy found next to the script; cloning BJORN repository"
+        git clone https://github.com/Gixar/Bjorn-V3.git Bjorn
         check_success "Cloned BJORN repository"
     fi
 
     cd Bjorn
+
+    # Stamp what was actually installed. version.txt only carries the release tag, and the deployed
+    # tree is often not a git checkout (the local-source path above copies whatever it was handed,
+    # and a downloaded zip has no .git at all) — so a diagnostic from the device had no way to say
+    # which code was running. Written once, at install; read back by scripts/bjorn_diag.sh.
+    {
+        echo "installed_at=$(date -Is 2>/dev/null || date)"
+        echo "installed_from=$SCRIPT_DIR"
+        src_commit="$(git -c safe.directory="$SCRIPT_DIR" -C "$SCRIPT_DIR" log -1 --format='%H %cs %s' 2>/dev/null)"
+        [ -n "$src_commit" ] && echo "source_commit=$src_commit" || echo "source_commit=unknown (source was not a git checkout)"
+    } > build_info 2>/dev/null || log "WARNING" "Could not write build_info"
 
     # Update the shared_config.json file with the selected EPD version
     log "INFO" "Updating E-Paper display configuration..."
@@ -365,10 +602,24 @@ WorkingDirectory=/home/bjorn/Bjorn
 StandardOutput=inherit
 StandardError=inherit
 Restart=always
+RestartSec=10
+# PG-2: give Bjorn time to flush on a commanded shutdown/reboot before systemd kills it.
+TimeoutStopSec=30
 User=root
 
-# Check open files and restart if it reached the limit (ulimit -n buffer of 1000)
-ExecStartPost=/bin/bash -c 'FILE_LIMIT=\$(ulimit -n); THRESHOLD=\$(( FILE_LIMIT - 1000 )); while :; do TOTAL_OPEN_FILES=\$(lsof | wc -l); if [ "\$TOTAL_OPEN_FILES" -ge "\$THRESHOLD" ]; then echo "File descriptor threshold reached: \$TOTAL_OPEN_FILES (threshold: \$THRESHOLD). Restarting service."; systemctl restart bjorn.service; exit 0; fi; sleep 10; done &'
+# Restart if Bjorn leaks file descriptors (ulimit -n buffer of 1000).
+# Counts \$MAINPID's own fds via /proc, NOT 'lsof | wc -l': lsof walks every process on the box and
+# is genuinely expensive on a Pi Zero 2 W at a 10s cadence (it was a measurable slice of the
+# service's CPU). It also answered the wrong question — the threshold is about Bjorn's own leak,
+# and a system-wide count could trip on some other process entirely.
+ExecStartPost=/bin/bash -c 'FILE_LIMIT=\$(ulimit -n); THRESHOLD=\$(( FILE_LIMIT - 1000 )); while :; do OPEN_FILES=\$(ls /proc/\$MAINPID/fd 2>/dev/null | wc -l); if [ "\$OPEN_FILES" -ge "\$THRESHOLD" ]; then echo "File descriptor threshold reached: \$OPEN_FILES (threshold: \$THRESHOLD). Restarting service."; systemctl restart bjorn.service; exit 0; fi; sleep 10; done &'
+
+# PG-4 watchdog: restart if the main loop stops refreshing /run/bjorn_heartbeat (i.e. it wedged
+# while the process is still alive — which Restart=always alone can't catch). 180s stale window;
+# the loop refreshes every ~10s. Keep the path in sync with Bjorn.py::HEARTBEAT_FILE.
+# NOTE: %s and %Y must be escaped as %%s / %%Y — in a systemd unit '%' is a specifier char, so a
+# bare %s expands to the shell and %Y to a path, corrupting the command. %% -> literal % on load.
+ExecStartPost=/bin/bash -c 'HB=/run/bjorn_heartbeat; while :; do if [ -f "\$HB" ]; then AGE=\$(( \$(date +%%s) - \$(stat -c %%Y "\$HB") )); if [ "\$AGE" -ge 180 ]; then echo "Bjorn heartbeat stale (\${AGE}s). Restarting service."; systemctl restart bjorn.service; exit 0; fi; fi; sleep 15; done &'
 
 [Install]
 WantedBy=multi-user.target
@@ -382,18 +633,33 @@ EOF
     systemctl daemon-reload
     systemctl enable bjorn.service
 
+    # Optional network-attack daemon (docs/BETTERCAP_PLAN.md). Installed and configured but never
+    # enabled; Bjorn works exactly as before without it, so this never aborts the install.
+    install_bettercap
+
     check_success "Services setup completed"
 }
 
 # Configure USB Gadget
+# NEEDS ON-PI VERIFICATION (bug #68): this rewrite is a coherent single-stack fix (dwc2-only
+# gadget + systemd-networkd address & host DHCP + NetworkManager unmanaged), but every failure
+# mode lives in kernel USB-gadget bring-up and which network manager wins — none reproducible off
+# a real Pi. Verify on hardware: plug the Pi into a host, confirm usb0 gets 172.20.2.1, the host
+# leases 172.20.2.10-30, and http://172.20.2.1:8000/ loads. Touches boot files (cmdline/config.txt).
 configure_usb_gadget() {
     log "INFO" "Configuring USB Gadget..."
 
-    # Modify cmdline.txt
-    sed -i 's/rootwait/rootwait modules-load=dwc2,g_ether/' /boot/firmware/cmdline.txt
+    # cmdline.txt: load dwc2 only. NOT g_ether — the legacy g_ether gadget grabs the UDC at
+    # boot, so the configfs/libcomposite gadget below can't bind it ("Device or resource busy").
+    # That race was a primary cause of bug #68 (usb0 never coming up / no IP). Idempotent, and
+    # strips g_ether if a previous (broken) install added it.
+    sed -i 's/modules-load=dwc2,g_ether/modules-load=dwc2/' /boot/firmware/cmdline.txt
+    if ! grep -q "modules-load=dwc2" /boot/firmware/cmdline.txt; then
+        sed -i 's/rootwait/rootwait modules-load=dwc2/' /boot/firmware/cmdline.txt
+    fi
 
-    # Modify config.txt
-    echo "dtoverlay=dwc2" >> /boot/firmware/config.txt
+    # config.txt: enable the dwc2 overlay (idempotent — don't append twice on a re-run).
+    grep -q "^dtoverlay=dwc2" /boot/firmware/config.txt || echo "dtoverlay=dwc2" >> /boot/firmware/config.txt
 
     # Create USB gadget script
     cat > /usr/local/bin/usb-gadget.sh << 'EOF'
@@ -438,11 +704,9 @@ while ! ls /sys/class/udc > UDC 2>/dev/null; do
     sleep 1
 done
 
-if ! ip addr show usb0 | grep -q "172.20.2.1"; then
-    ifconfig usb0 172.20.2.1 netmask 255.255.255.0
-else
-    echo "Interface usb0 already configured."
-fi
+# Addressing is owned by systemd-networkd (/etc/systemd/network/10-usb0.network), NOT here.
+# The old imperative `ifconfig usb0 172.20.2.1` raced whatever network manager was active and
+# left usb0 unaddressed (bug #68); it also never gave the *host* an address at all.
 EOF
 
     chmod +x /usr/local/bin/usb-gadget.sh
@@ -463,21 +727,45 @@ RemainAfterExit=yes
 WantedBy=multi-user.target
 EOF
 
-    # Configure network interface
-    cat >> /etc/network/interfaces << EOF
+    # ONE network manager owns usb0. On Bookworm the main manager is NetworkManager (not
+    # ifupdown/systemd-networkd), so the old /etc/network/interfaces stanza was ignored and the
+    # bare `systemctl enable systemd-networkd` had no matching .network file — usb0 stayed
+    # unaddressed (bug #68). Instead: give usb0 to systemd-networkd with an explicit .network
+    # (static IP for the Pi + a built-in DHCP server so the *host* gets an address), and tell
+    # NetworkManager to leave usb0 alone so it can't clobber that.
+    mkdir -p /etc/systemd/network
+    cat > /etc/systemd/network/10-usb0.network << EOF
+[Match]
+Name=usb0
 
-allow-hotplug usb0
-iface usb0 inet static
-    address 172.20.2.1
-    netmask 255.255.255.0
+[Network]
+Address=172.20.2.1/24
+DHCPServer=yes
+# Assign the static address + start the DHCP server even with no host plugged in (the gadget
+# reports NO-CARRIER until a cable is connected). Without this, usb0 sits DOWN with no inet (#68).
+ConfigureWithoutCarrier=yes
+IgnoreCarrierLoss=yes
+
+[DHCPServer]
+PoolOffset=10
+PoolSize=20
+EmitDNS=no
 EOF
 
-    # Enable and start services
+    mkdir -p /etc/NetworkManager/conf.d
+    cat > /etc/NetworkManager/conf.d/99-usb0-unmanaged.conf << EOF
+[keyfile]
+unmanaged-devices=interface-name:usb0
+EOF
+
+    # Enable and start services (networkd owns usb0's address + host DHCP; usb-gadget builds the
+    # gadget). NetworkManager reload is best-effort — it may not be running during install.
     systemctl daemon-reload
     systemctl enable systemd-networkd
     systemctl enable usb-gadget
     systemctl start systemd-networkd
     systemctl start usb-gadget
+    systemctl reload NetworkManager 2>/dev/null || true
 
     check_success "USB Gadget configuration completed"
 }
@@ -539,7 +827,7 @@ main() {
     echo "5. epd2in7"
     
     while true; do
-        read -p "Enter your choice (1-4): " epd_choice
+        read -p "Enter your choice (1-5): " epd_choice
         case $epd_choice in
             1) EPD_VERSION="epd2in13"; break;;
             2) EPD_VERSION="epd2in13_V2"; break;;
@@ -629,8 +917,64 @@ main() {
     fi
 }
 
-main
+# ponytail: dry-run does read-only prereq probes + lists the ordered steps; it does not
+# simulate each install command. Full behavior is only exercised by a real (Pi) run.
+dry_run() {
+    echo -e "${BLUE}BJORN installer --dry-run (no changes will be made)${NC}"
+    echo
+    echo "Prerequisite checks:"
+    if [ -f /etc/os-release ]; then
+        # shellcheck disable=SC1091
+        . /etc/os-release
+        echo "  OS: ${PRETTY_NAME:-unknown} (tested: Raspberry Pi OS 12 / bookworm)"
+    else
+        echo "  OS: /etc/os-release not found"
+    fi
+    if grep -q "Raspberry Pi" /proc/cpuinfo 2>/dev/null; then
+        echo "  Hardware: Raspberry Pi detected"
+    else
+        echo "  Hardware: not a Raspberry Pi (mock display only; e-Paper HAT unavailable)"
+    fi
+    for tool in nmap nmcli python3 git; do
+        if command -v "$tool" >/dev/null 2>&1; then
+            echo "  tool $tool: found"
+        else
+            echo "  tool $tool: MISSING"
+        fi
+    done
+    if command -v rustscan >/dev/null 2>&1; then
+        echo "  tool rustscan: found (optional — enables use_rustscan)"
+    else
+        echo "  tool rustscan: not installed (optional — installer adds the prebuilt binary on arm64/amd64, compiles from source on 32-bit ARM)"
+    fi
+    if command -v bettercap >/dev/null 2>&1; then
+        if [ -f /etc/systemd/system/bettercap.service ]; then
+            echo "  tool bettercap: found, service present (credentials kept as-is on re-run)"
+        else
+            echo "  tool bettercap: found, no service yet (installer would write one + generate a password)"
+        fi
+    else
+        echo "  tool bettercap: not installed (optional — installer adds it from apt; off until enabled in the web UI)"
+    fi
+    echo
+    echo "Full install would run these steps (as root):"
+    echo "  1. Check system compatibility"
+    echo "  2. Install system dependencies (apt-get) + optional RustScan binary + optional bettercap"
+    echo "  3. Configure system limits"
+    echo "  4. Configure interfaces"
+    echo "  5. Set up BJORN (${BJORN_PATH})"
+    echo "  6. Configure USB gadget"
+    echo "  7. Set up services (systemd)"
+    echo "  8. Verify installation (systemctl + curl :8000 healthcheck)"
+    echo
+    echo -e "${YELLOW}Dry run only — nothing was installed or modified.${NC}"
+    exit 0
+}
 
-
+if [ "$DRY_RUN" = true ]; then
+    dry_run
+else
+    main
+fi
 
 

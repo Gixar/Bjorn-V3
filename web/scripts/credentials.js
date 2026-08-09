@@ -1,51 +1,29 @@
-let fontSize = 12;
-        // Adjust font size based on device type
-if (/Mobi|Android/i.test(navigator.userAgent)) {
-    fontSize = 7; // size for mobile
-}
+let fontSize = /Mobi|Android/i.test(navigator.userAgent) ? 11 : 13;
+
 function fetchCredentials() {
-    fetch('/list_credentials')
-        .then(response => response.text())
-        .then(data => {
-            document.getElementById('credentials-table').innerHTML = data;
+    fetch("/list_credentials")
+        .then((r) => r.text())
+        .then((data) => {
+            const el = document.getElementById("credentials-table");
+            if (el) el.innerHTML = data;
         })
-        .catch(error => {
-            console.error('Error:', error);
+        .catch((error) => {
+            console.error("Error:", error);
+            if (typeof toast === "function") toast("Failed to load credentials", "error");
         });
 }
 
-document.addEventListener("DOMContentLoaded", function() {
-    fetchCredentials();
-    setInterval(fetchCredentials, 20000); // 20000 ms = 20 seconds
-});
 function adjustCredFontSize(change) {
     fontSize += change;
-    document.getElementById('credentials-table').style.fontSize = fontSize + 'px';
+    const el = document.getElementById("credentials-table");
+    if (el) el.style.fontSize = fontSize + "px";
 }
 
-
-
-
-function toggleCredToolbar() {
-    const mainToolbar = document.querySelector('.toolbar');
-    const toggleButton = document.getElementById('toggle-toolbar')
-    const toggleIcon = document.getElementById('toggle-icon');
-    if (mainToolbar.classList.contains('hidden')) {
-        mainToolbar.classList.remove('hidden');
-        toggleIcon.src = '/web/images/hide.png';
-        toggleButton.setAttribute('data-open', 'false');
-    } else {
-        mainToolbar.classList.add('hidden');
-        toggleIcon.src = '/web/images/reveal.png';
-        toggleButton.setAttribute('data-open', 'true');
-
-    }
-}
-
-document.addEventListener("DOMContentLoaded", function() {
-    fetchCredentials(); // Initial fetch
-    setInterval(fetchCredentials, 10000); // Refresh every 10 seconds
+document.addEventListener("DOMContentLoaded", () => {
+    if (typeof renderNav === "function") renderNav();
+    fetchCredentials();
+    setInterval(fetchCredentials, 15000);
 });
 
-
-
+window.adjustCredFontSize = adjustCredFontSize;
+window.fetchCredentials = fetchCredentials;

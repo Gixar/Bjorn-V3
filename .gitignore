@@ -133,5 +133,29 @@ $RECYCLE.BIN/
 *.sln
 *.sw?
 
-scripts
 */certs/
+
+# Generated comment cache — comment.py rebuilds it whenever comments.json is newer. Committing it
+# meant a checkout could carry a cache older than the JSON beside it, hiding newly added lines.
+*.json.cache
+
+# --- Bjorn runtime data (generated; keep dir skeleton via .gitkeep, never commit loot) ---
+data/logs/*
+!data/logs/.gitkeep
+data/netkb.csv
+data/netkb.csv.tmp
+data/livestatus.csv
+data/output/run_reports/
+data/output/improvement_notes/
+data/output/mock_display.png
+data/output/crackedpwd/*
+!data/output/crackedpwd/.gitkeep
+data/output/data_stolen/*
+!data/output/data_stolen/.gitkeep
+data/output/zombies/*
+!data/output/zombies/.gitkeep
+data/output/vulnerabilities/*
+!data/output/vulnerabilities/.gitkeep
+data/output/scan_results/*
+!data/output/scan_results/.gitkeep
+bjorn_reports_*.tar.gz

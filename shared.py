@@ -21,9 +21,12 @@ import time
 import csv
 import logging
 import subprocess
-from PIL import Image, ImageFont 
+import traceback
+from PIL import Image, ImageFont
 from logger import Logger
 from epd_helper import EPDHelper
+from config_validation import validate_config
+import stats_engine
 
 
 logger = Logger(name="shared.py", level=logging.DEBUG) # Create a logger object 
@@ -73,6 +76,10 @@ class SharedData:
         self.zombiesdir = os.path.join(self.output_dir, 'zombies')
         self.vulnerabilities_dir = os.path.join(self.output_dir, 'vulnerabilities')
         self.scan_results_dir = os.path.join(self.output_dir, "scan_results")
+        # Handshake Hunter loot (docs/BETTERCAP_PLAN.md Stage C). Derived, not configurable: every
+        # other output path is, and a configurable one is just another path to validate. The dated
+        # subdirectory under raw/ is computed per capture, so it is not a fixed attribute.
+        self.handshakes_dir = os.path.join(self.output_dir, "handshakes")
         # Directories under resourcesdir
         self.picdir = os.path.join(self.resourcesdir, 'images')
         self.fontdir = os.path.join(self.resourcesdir, 'fonts')
@@ -115,8 +122,7 @@ class SharedData:
             "__title_Bjorn__": "Settings",
             "manual_mode": False,
             "websrv": True,
-            "web_increment ": False,
-            "debug_mode": True,
+            "debug_mode": False,
             "scan_vuln_running": False,
             "retry_success_actions": False,
             "retry_failed_actions": True,
@@ -130,30 +136,90 @@ class SharedData:
             
             "startup_delay": 10,
             "web_delay": 2,
+            "stats_ws_interval": 2,  # seconds between /ws/stats pushes to the stats dashboard
             "screen_delay": 1,
             "comment_delaymin": 15,
             "comment_delaymax": 30,
+            "comment_info_ratio": 3,   # every Nth comment slot shows live findings instead of a joke (0 = jokes only)
             "livestatus_delay": 8,
             "image_display_delaymin": 2,
             "image_display_delaymax": 8,
             "scan_interval": 180,
             "scan_vuln_interval": 900,
             "failed_retry_delay": 600,
-            "success_retry_delay": 900, 
+            "success_retry_delay": 900,
+            "adaptive_scan_interval": True,  # idle longer as scans stay fruitless, shorter when a retry window expires first
+            "planner_max_host_actions": 4,   # host actions the planner runs per cycle (fairness window, not a cap on throughput)
+            "planner_standalone_every": 3,   # force a standalone action every N cycles so recon isn't starved by host work
+            "bruteforce_threads": 0,  # brute-force worker threads per connector; 0 = auto (core-aware, capped at 8)
+            "credential_reuse": True,  # replay a cracked user:password across other hosts/protocols (tried first); shared pool in crackedpwd/known_creds.csv
+            "wpasec_api_key": "",      # wpa-sec.stanev.org API key (secret, user-supplied); empty = wpa-sec import disabled
+            "wpasec_interval": 3600,   # min seconds between wpa-sec fetches (throttle; 0 = every idle cycle)
             "ref_width" :122 ,
             "ref_height" : 250,
             "epd_type": "epd2in13_V4",
+
+            # PG-3 battery/UPS awareness (opt-in; no-op without a PiSugar-style server).
+            "battery_monitor_enabled": False,
+            "battery_shutdown_percent": 10,
             
             
             "__title_lists__": "List Settings",
             "portlist": [20, 21, 22, 23, 25, 53, 69, 80, 110, 111, 135, 137, 139, 143, 161, 162, 389, 443, 445, 512, 513, 514, 587, 636, 993, 995, 1080, 1433, 1521, 2049, 3306, 3389, 5000, 5001, 5432, 5900, 8080, 8443, 9090, 10000],
             "mac_scan_blacklist": [],
             "ip_scan_blacklist": [],
+            "snmp_communities": ["public", "private"],  # SNMP community strings tried by SNMPEnum (snmpget)
+            "ble_scan_enabled": True,         # BLE recon via bluetoothctl — on by default: the BT radio is built into every supported Pi, needs no dongle, and is the only recon that keeps working with no uplink
+            "ble_scan_duration": 10,          # seconds per BLE discovery scan
+            "ble_scan_interval": 300,         # min seconds between BLE scans
+            "ble_scan_interval_offline": 60,  # min seconds between BLE scans while there is NO uplink (carried around, the survey IS the work)
+            "wifi_scan_enabled": True,        # 802.11 AP/client recon via airodump-ng — on by default, but a no-op unless a non-uplink radio is actually present
+            "wifi_scan_iface": "",            # monitor-mode radio — MUST NOT be Bjorn's uplink (use a USB dongle)
+            "wifi_scan_duration": 30,         # seconds per airodump-ng capture
+            "wifi_scan_interval": 900,        # min seconds between Wi-Fi scans
+            "wifi_scan_band": "bg",           # airodump --band: bg = 2.4GHz (its default), a = 5GHz, abg = both
+            "wifi_scan_channel": 0,           # 0 = hop channels; a channel number locks to it (overrides band)
+            "wifi_scan_interval_offline": 120,  # min seconds between Wi-Fi scans while there is NO uplink (survey is the only work left)
+            "offline_mode_enabled": True,     # with no default route: pause IP scanning, run wireless recon, try to rejoin
+            "offline_cycle_interval": 60,     # seconds between offline recon/reconnect cycles
+            "wifi_autojoin": True,            # while offline, rejoin a saved network that comes back in range
+            "wifi_autojoin_open": False,      # ALSO join open networks Bjorn has no profile for — off by default: joining someone's open AP is a posture decision, not a connectivity fix
+            "telegram_enabled": False,        # auto-send raw target data to Telegram when it changes
+            "telegram_bot_token": "",         # Telegram bot token (secret, user-supplied)
+            "telegram_chat_id": "",           # Telegram chat/channel id to deliver to
+            "telegram_min_interval": 300,     # rate floor (seconds) between auto-sends
+            "telegram_include_creds": True,   # include cracked credentials in the sent dataset (third-party hop)
+            "smtp_enabled": False,            # SMTP fallback channel, used when Telegram is unset or fails
+            "smtp_host": "",                  # SMTP server hostname
+            "smtp_port": 587,                 # 465 = implicit SSL, anything else = STARTTLS when offered
+            "smtp_user": "",                  # SMTP login / From address
+            "smtp_password": "",              # SMTP password (secret, user-supplied)
+            "smtp_to": "",                    # recipient(s), comma-separated
+            # Bettercap (docs/BETTERCAP_PLAN.md Stage B) — managed mode only: recon on the network
+            # Bjorn has already joined. Entirely off until switched on; nothing is installed or
+            # enabled at install time. The hunter's own keys (bettercap_pwn_*) arrive in Stage C.
+            "bettercap_enabled": False,       # master switch — the poller thread AND bettercap.service
+            "bettercap_api_url": "http://127.0.0.1:8081",  # api.rest endpoint; keep it on loopback
+            "bettercap_user": "bjorn",        # api.rest Basic-Auth user
+            "bettercap_password": "",             # api.rest Basic-Auth password (secret, generated at install)
+            "bettercap_arp_spoof": False,     # active ARP spoofing (off = passive recon only)
+            "bettercap_sniff": False,         # passive traffic sniff
+            # Handshake Hunter (Stage C): monitor mode on a SECOND radio, during offline cycles.
+            # Refuses to start on a single-radio device — it would hold the only path back online.
+            "bettercap_pwn_enabled": False,   # hunt for handshakes while there is no uplink
+            "bettercap_pwn_iface": "",        # radio to hunt on; blank = any non-uplink radio
+            "bettercap_pwn_min_rssi": -80,    # dBm (NEGATIVE): ignore APs weaker than this
             "steal_file_names": ["ssh.csv","hack.txt"],
             "steal_file_extensions": [".bjorn",".hack",".flag"],
             
             "__title_network__": "Network",
+            "use_rustscan": True,        # port discovery via RustScan instead of nmap -sT — 27x faster on the Zero 2 W, same open ports; falls back to nmap if the binary is missing or a run fails
+            "rustscan_batch_size": 0,    # RustScan -b socket batch; 0 = auto (memory-aware: 1500 on a Pi Zero, 4500 elsewhere)
+            "rustscan_full_port": False, # RustScan sweeps all 65,535 ports (its strength) instead of the curated portlist; needs use_rustscan
             "nmap_scan_aggressivity": "-T2",
+            "vuln_scan_sv": True,        # include nmap -sV (service/version detection) in the vuln scan
+            "vuln_scan_vulners": True,   # run the vulners.nse CVE script (internet-dependent, heaviest step)
+            "vuln_offline_cve": True,    # match -sV service versions against the bundled offline CVE DB (config/cve_signatures.json); no internet
             "portstart": 1,
             "portend": 2,
             
@@ -247,33 +313,101 @@ class SharedData:
         try:
             logger.info("Initializing EPD display...")
             time.sleep(1)
-            self.epd_helper = EPDHelper(self.config["epd_type"])
-            self.epd_helper = EPDHelper(self.epd_type)
-            if self.config["epd_type"] == "epd2in7":
-                logger.info("EPD type: epd2in7 screen reversed")
-                self.screen_reversed = False
-                self.web_screen_reversed = False
-            elif self.config["epd_type"] == "epd2in13_V2":
-                logger.info("EPD type: epd2in13_V2 screen reversed")
-                self.screen_reversed = False
-                self.web_screen_reversed = False
-            elif self.config["epd_type"] == "epd2in13_V3":
-                logger.info("EPD type: epd2in13_V3 screen reversed")
-                self.screen_reversed = True
-                self.web_screen_reversed = True
-            elif self.config["epd_type"] == "epd2in13_V4":
-                logger.info("EPD type: epd2in13_V4 screen reversed")
-                self.screen_reversed = True
-                self.web_screen_reversed = True
-            self.epd_helper.init_full_update()
+            configured = self.config["epd_type"]
+            if configured == "auto":
+                self.epd_helper, epd_type = self._auto_detect_epd()
+            else:
+                epd_type = configured
+                self.epd_helper = EPDHelper(epd_type)
+                self.epd_helper.init_full_update()
+            # Record the resolved type so the rest of the app (display, web) reads a concrete value.
+            self.epd_type = epd_type
+            self.config["epd_type"] = epd_type
+            # V3/V4 render rotated; V2/2in7/mock do not.
+            self.screen_reversed = epd_type in ("epd2in13_V3", "epd2in13_V4")
+            self.web_screen_reversed = self.screen_reversed
+            logger.info(f"EPD type: {epd_type} (screen_reversed={self.screen_reversed})")
             self.width, self.height = self.epd_helper.epd.width, self.epd_helper.epd.height
-            logger.info(f"EPD {self.config['epd_type']} initialized with size: {self.width}x{self.height}")
+            logger.info(f"EPD {epd_type} initialized with size: {self.width}x{self.height}")
         except Exception as e:
-            logger.error(f"Error initializing EPD display: {e}")
+            logger.error(f"Error initializing EPD display (epd_type={self.config.get('epd_type')!r}): {e}")
+            logger.error(
+                "Blank/absent panel checklist: (1) SPI enabled? `ls /dev/spidev*` should list a device "
+                "— if not, enable it (sudo raspi-config -> Interface Options -> SPI, or add "
+                "`dtparam=spi=on` to /boot/firmware/config.txt and reboot). (2) Does 'epd_type' match "
+                "your HAT? (3) Run `sudo python3 scripts/epd_test.py --all` to probe each driver."
+            )
+            logger.error(traceback.format_exc())
             raise
-        
+
+    # Real-panel drivers tried, in order, when epd_type == "auto" ("mock" is never auto-picked).
+    EPD_AUTODETECT_CANDIDATES = ["epd2in13_V4", "epd2in13_V3", "epd2in13_V2", "epd2in13", "epd2in7"]
+
+    def _auto_detect_epd(self):
+        """Try each candidate driver until one initializes; return (helper, epd_type).
+
+        ponytail: init-based, not render-based. An e-Paper gives no signal that pixels actually
+        appeared, so this confirms only that a driver *initialized without error* — it does NOT
+        distinguish V3 from V4 (both init on the same panel). Value here is graceful degradation
+        (Bjorn still boots if the configured driver errors or the HAT is absent) and first-boot
+        convenience. If the auto-picked driver inits but the screen stays blank, run
+        `sudo python3 scripts/epd_test.py --all` to find the one that visibly renders, then set
+        that exact value as `epd_type` in config/shared_config.json.
+        """
+        last_error = None
+        for candidate in self.EPD_AUTODETECT_CANDIDATES:
+            helper = None
+            try:
+                logger.info(f"[epd auto] trying driver '{candidate}'...")
+                helper = EPDHelper(candidate)
+                helper.init_full_update()
+                logger.info(f"[epd auto] selected '{candidate}' (first driver that initialized).")
+                return helper, candidate
+            except Exception as e:
+                last_error = e
+                logger.warning(f"[epd auto] '{candidate}' did not initialize: {e}")
+                # Best-effort pin release so the next candidate can claim GPIO/SPI. Only reached
+                # when a candidate fails; the common case (first driver works) never releases.
+                if helper is not None:
+                    try:
+                        helper.epd.sleep()
+                    except Exception:
+                        pass
+        raise RuntimeError(
+            f"EPD auto-detect: no candidate driver initialized ({self.EPD_AUTODETECT_CANDIDATES}). "
+            f"Last error: {last_error}"
+        )
+
+    @staticmethod
+    def _auto_rustscan_batch(total_ram_mb=None):
+        """A RustScan `-b` batch size this box can actually sustain. Pure enough to unit-test.
+
+        Thresholds are deliberately coarse — the point is to stay well clear of the cliff, not to
+        squeeze the last socket out of a Pi Zero. Anything with real memory keeps RustScan's own
+        4500, so this only bites on the small boards where the failure mode actually shows up."""
+        if total_ram_mb is None:
+            try:
+                total_ram_mb = (os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")) // (1024 ** 2)
+            except (ValueError, OSError, AttributeError):
+                return 4500  # not Linux / can't tell — leave RustScan's default alone
+        if total_ram_mb < 640:      # Pi Zero / Zero 2 W
+            return 1500
+        if total_ram_mb < 1536:     # Pi 3 / Zero-class with more headroom
+            return 3000
+        return 4500                 # RustScan's own default
+
     def initialize_variables(self):
         """Initialize the variables."""
+        # Resolve auto (0) brute-force thread count: core-aware, capped at 8 (IO-bound, so >cores is fine).
+        if not getattr(self, "bruteforce_threads", 0):
+            self.bruteforce_threads = min(8, (os.cpu_count() or 1) * 4)
+        # Resolve auto (0) RustScan batch size: memory-aware. RustScan's own default is 4500
+        # concurrent sockets, tuned for a laptop; a Pi Zero 2 W has ~425MB of RAM, and its
+        # documented failure mode under too-aggressive batching is *silently dropped ports*, not an
+        # error — so an over-large batch costs findings without ever announcing itself. Same
+        # "0 = auto" contract as bruteforce_threads above; set a number to override.
+        if not getattr(self, "rustscan_batch_size", 0):
+            self.rustscan_batch_size = self._auto_rustscan_batch()
         self.should_exit = False
         self.display_should_exit = False
         self.orchestrator_should_exit = False 
@@ -303,6 +437,14 @@ class SharedData:
         self.levelnbr = 0
         self.networkkbnbr = 0
         self.attacksnbr = 0
+        # Unique APs whose handshake has been captured. Set by bettercap_pwn.update_index()
+        # after a hunting session; 0 until then. The score is a high-water mark, so a
+        # restart before the first hunt cannot make an earlier total drop.
+        self.handshakenbr = 0
+        # Bumped once per completed network scan (scanning.py). The display threads read it to
+        # skip re-parsing netkb/livestatus when nothing changed (P5). Single writer (scanner),
+        # multiple readers → no lock needed; a stale read just recomputes one extra time.
+        self.data_generation = 0
         self.show_first_image = True
 
     def delete_webconsolelog(self):
@@ -422,9 +564,22 @@ class SharedData:
             if os.path.exists(self.shared_config_json):
                 with open(self.shared_config_json, 'r') as f:
                     config = json.load(f)
-                    self.config.update(config)
-                    for key, value in self.config.items():
-                        setattr(self, key, value)
+                self.config.update(config)
+                validate_config(self.config)  # fail fast on a bad config before setup runs
+                for key, value in self.config.items():
+                    setattr(self, key, value)
+                # Persist any default keys the saved file predates. The merge above has always
+                # been in-memory only, so everything that reads the *file* — the web /load_config
+                # form, save_configuration() — saw an incomplete config: a key added by an upgrade
+                # stayed invisible in the UI until some unrelated save happened to rewrite the
+                # file. Writing it back also restores the canonical key order (self.config starts
+                # as a copy of the defaults), keeping the form's section titles grouped.
+                # One write per upgrade, not per boot.
+                missing = [k for k in self.config if k not in config]
+                if missing:
+                    logger.info(f"Config file missing {len(missing)} default key(s) {missing}; "
+                                "writing the merged configuration back.")
+                    self.save_config()
             else:
                 logger.warning("Configuration file not found, creating new one with default values...")
                 self.save_config()
@@ -664,22 +819,90 @@ class SharedData:
                 # Add new row
                 mac_to_existing_row[mac_address] = new_row
 
-        # Write updated data back to CSV
-        with open(self.netkbfile, 'w', newline='') as file:
+        # PG-2 (SD-card protection): write to a temp file in the same dir, then os.replace().
+        # os.replace is atomic on POSIX, so a power loss mid-write leaves netkb.csv either fully
+        # old or fully new — never a half-written, corrupt CSV (this file is rewritten on every
+        # action, so it's the most exposed to a yanked-plug corruption).
+        tmpfile = self.netkbfile + '.tmp'
+        with open(tmpfile, 'w', newline='') as file:
             writer = csv.DictWriter(file, fieldnames=headers)
             writer.writeheader()
-
-            # Write all data
             for row in mac_to_existing_row.values():
                 writer.writerow(row)
+            file.flush()
+            os.fsync(file.fileno())  # force bytes to the SD before the rename
+        os.replace(tmpfile, self.netkbfile)
 
     def update_stats(self):
-        """Update the stats based on formulas."""
-        self.coinnbr = int((self.networkkbnbr * 5 + self.crednbr * 5 + self.datanbr * 5 + self.zombiesnbr * 10+self.attacksnbr * 5+ self.vulnnbr * 2 ))
-        self.levelnbr = int((self.networkkbnbr * 0.1 + self.crednbr * 0.2 + self.datanbr * 0.1 + self.zombiesnbr * 0.5+ self.attacksnbr+ self.vulnnbr * 0.01 ))
+        """Coins/level are a monotonic, persisted high-water-mark score (see stats_engine /
+        docs/COINS_STATS_PLAN.md), not a live recompute — so the score never drops when a count
+        falls (netkb cleaned, hosts offline) and survives restarts. Called only from the display
+        thread (single writer)."""
+        counts = {
+            "hosts": self.networkkbnbr, "creds": self.crednbr, "data": self.datanbr,
+            "zombies": self.zombiesnbr, "attacks": self.attacksnbr, "vulns": self.vulnnbr,
+            "handshakes": getattr(self, "handshakenbr", 0),
+        }
+        result = stats_engine.update(os.path.join(self.datadir, "stats.json"), counts)
+        self.coinnbr = result["coins"]
+        self.levelnbr = result["level"]
+        self._stats_breakdown = result["breakdown"]  # exposed via utils.get_stats_snapshot
 
 
     def print(self, message):
         """Print a debug message if debug mode is enabled."""
         if self.config['debug_mode']:
             logger.debug(message)
+
+
+# ---------------------------------------------------------------------------
+# Small stdlib-CSV helpers (P2): the connectors + display only read/count/dedupe
+# netkb and creds files. Doing that with the `csv` module avoids importing pandas
+# (~2-5s + 50-80MB on a Pi Zero) in the always-loaded scan/attack path.
+# ---------------------------------------------------------------------------
+def netkb_targets(netkbfile, port):
+    """Rows from netkb whose Ports field contains str(port).
+
+    Substring match, matching the old pandas `Ports.str.contains(port, na=False)`.
+    Returns a list of dict rows (csv.DictReader); [] if the file is missing.
+    """
+    port_s = str(port)
+    rows = []
+    try:
+        with open(netkbfile, newline='') as f:
+            for row in csv.DictReader(f):
+                if port_s in (row.get("Ports") or ""):
+                    rows.append(row)
+    except FileNotFoundError:
+        pass
+    return rows
+
+
+def append_csv_rows(path, rows):
+    """Append list-of-list rows to a CSV (no header — the file is created with one)."""
+    with open(path, "a", newline='') as f:
+        csv.writer(f).writerows(rows)
+
+
+def dedupe_csv(path):
+    """Drop duplicate rows from a CSV in place, keeping first-occurrence order (incl. header).
+
+    Equivalent to the old `pd.read_csv(...).drop_duplicates().to_csv(...)`.
+    """
+    with open(path, newline='') as f:
+        rows = list(csv.reader(f))
+    seen = set()
+    unique = []
+    for row in rows:
+        key = tuple(row)
+        if key not in seen:
+            seen.add(key)
+            unique.append(row)
+    with open(path, "w", newline='') as f:
+        csv.writer(f).writerows(unique)
+
+
+# Credential reuse / lateral chaining (backlog Wave 1 #2). The pool helpers live in the
+# dependency-free credential_pool module (unit-testable without SharedData); re-exported here so
+# the connectors keep importing them from `shared`.
+from credential_pool import known_cred_pairs, record_cracked_cred, credential_candidates  # noqa: E402,F401

@@ -1,177 +1,229 @@
-# <img src="https://github.com/user-attachments/assets/c5eb4cc1-0c3d-497d-9422-1614651a84ab" alt="thumbnail_IMG_0546" width="33"> Bjorn
+# <img src="https://github.com/user-attachments/assets/c5eb4cc1-0c3d-497d-9422-1614651a84ab" alt="Bjorn" width="33"> Bjorn V3
 
 ![Python](https://img.shields.io/badge/Python-3776AB?logo=python&logoColor=fff)
-![Status](https://img.shields.io/badge/Status-Development-blue.svg)
+![Status](https://img.shields.io/badge/Status-Beta-blue.svg)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+![CI](https://github.com/Gixar/Bjorn-V3/actions/workflows/ci.yml/badge.svg)
+![Tests](https://img.shields.io/badge/tests-281%20passing-brightgreen)
 
 [![Reddit](https://img.shields.io/badge/Reddit-Bjorn__CyberViking-orange?style=for-the-badge&logo=reddit)](https://www.reddit.com/r/Bjorn_CyberViking)
 [![Discord](https://img.shields.io/badge/Discord-Join%20Us-7289DA?style=for-the-badge&logo=discord)](https://discord.com/invite/B3ZH9taVfT)
 
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/c5eb4cc1-0c3d-497d-9422-1614651a84ab" alt="thumbnail_IMG_0546" width="150">
-  <img src="https://github.com/user-attachments/assets/1b490f07-f28e-4418-8d41-14f1492890c6" alt="bjorn_epd-removebg-preview" width="150">
+  <img src="https://github.com/user-attachments/assets/c5eb4cc1-0c3d-497d-9422-1614651a84ab" alt="Bjorn" width="150">
+  <img src="https://github.com/user-attachments/assets/1b490f07-f28e-4418-8d41-14f1492890c6" alt="Bjorn e-Paper" width="150">
 </p>
 
-Bjorn is a « Tamagotchi like » sophisticated, autonomous network scanning, vulnerability assessment, and offensive security tool designed to run on a Raspberry Pi equipped with a 2.13-inch e-Paper HAT. This document provides a detailed explanation of the project.
+**Bjorn is a Tamagotchi-like autonomous network scanner and offensive-security appliance** that runs
+on a Raspberry Pi with a 2.13" e-Paper HAT. Leave it on a network and it maps every host, probes
+their services, brute-forces what it can, and pulls files off whatever opens — writing everything
+into one knowledge base you read from a web UI.
 
+**V3 makes it work in your pocket.** Earlier versions only did anything while attached to a LAN.
+This one keeps collecting when there is no network at all: Bluetooth recon, an 802.11 survey, and
+WPA handshake capture on a second radio, all running while it tries to find its way back online.
 
-## 📚 Table of Contents
+> ⚠️ **Authorized testing only.** Bjorn actively attacks the network it is on — it brute-forces
+> credentials and copies files. Run it only on networks and devices you own or have written
+> permission to test.
 
-- [Introduction](#-introduction)
-- [Features](#-features)
-- [Getting Started](#-getting-started)
-  - [Prerequisites](#-prerequisites)
-  - [Installation](#-installation)
-- [Quick Start](#-quick-start)
-- [Usage Example](#-usage-example)
-- [Contributing](#-contributing)
-- [License](#-license)
-- [Contact](#-contact)
+---
 
-## 📄 Introduction
+## 📸 See it
 
-Bjorn is a powerful tool designed to perform comprehensive network scanning, vulnerability assessment, and data ex-filtration. Its modular design and extensive configuration options allow for flexible and targeted operations. By combining different actions and orchestrating them intelligently, Bjorn can provide valuable insights into network security and help identify and mitigate potential risks.
+<!-- ─────────────────────────────────────────────────────────────────────────
+     SCREENCAPS GO HERE. Drag an image or GIF into a GitHub issue/PR comment to
+     get a user-attachments URL, then paste it over each placeholder below.
+     Suggested captures, in order of usefulness to a newcomer:
+       1. The e-Paper panel showing live stats + a comment
+       2. The web dashboard (/stats.html): coins, level, trend chart
+       3. NetKB with a few cracked hosts
+       4. A short GIF of a scan -> attack -> loot cycle in the live console
+       5. The Wi-Fi survey page with APs and clients
+     ───────────────────────────────────────────────────────────────────────── -->
 
-The e-Paper HAT display and web interface make it easy to monitor and interact with Bjorn, providing real-time updates and status information. With its extensible architecture and customizable actions, Bjorn can be adapted to suit a wide range of security testing and monitoring needs.
+| | |
+|:--:|:--:|
+| _**e-Paper panel** — screencap placeholder_ | _**Live stats dashboard** — screencap placeholder_ |
+| _**NetKB / cracked hosts** — screencap placeholder_ | _**Wi-Fi survey** — screencap placeholder_ |
 
-## 🌟 Features
+<p align="center"><em>Demo GIF placeholder — a full scan → attack → loot cycle.</em></p>
 
-- **Network Scanning**: Identifies live hosts and open ports on the network.
-- **Vulnerability Assessment**: Performs vulnerability scans using Nmap and other tools.
-- **System Attacks**: Conducts brute-force attacks on various services (FTP, SSH, SMB, RDP, Telnet, SQL).
-- **File Stealing**: Extracts data from vulnerable services.
-- **User Interface**: Real-time display on the e-Paper HAT and web interface for monitoring and interaction.
+---
 
-![Bjorn Display](https://github.com/infinition/Bjorn/assets/37984399/bcad830d-77d6-4f3e-833d-473eadd33921)
+## 🌟 What it does
 
-## 🚀 Getting Started
+| Capability | What you get |
+|---|---|
+| **Host discovery** | Sweeps every subnet on every interface, not just the default gateway's. Merges into one `netkb.csv`; hosts are never dropped, only marked alive or dead. |
+| **Port discovery** | **RustScan by default** — benchmarked at **29× faster than nmap** on a Pi Zero 2 W (1.65 s vs 48.39 s over 8 hosts), finding the same ports. Falls back to nmap automatically if the binary is missing or a run fails. |
+| **Service fingerprinting** | HTTP `Server` / `X-Powered-By` / `<title>` per web port, then templated web checks (nuclei-style, JSON not YAML — no new dependency). |
+| **Vulnerability matching** | Offline CVE enrichment from bundled signatures, with a service-line fallback for consumer gear nmap can't CPE-identify. |
+| **Credential attacks** | SSH, FTP, SMB, Telnet, SQL, RDP. Anything cracked joins a shared pool and is **tried first** on every other host and protocol — one crack tends to cascade. |
+| **Loot** | Files pulled off whatever opens, organised under `data/output/`. |
+| **Bluetooth recon** | Timed BLE discovery, flagging Find My / SmartTag / Tile trackers from **advertisement data**, not just device names. |
+| **Wi-Fi survey** | Passive AP + client survey via airodump-ng on a second radio, with band and channel control. |
+| **Handshake hunting** | WPA handshake capture on a second radio while offline. Targets ranked, captures indexed, downloadable and worth coins. |
+| **Reporting** | Auto-delivery to Telegram (HTTPS) with an SMTP fallback, only when the data actually changed. Plus one-click **"compile everything into a zip"**. |
+| **Gamification** | Coins and RPG levels on a monotonic high-water mark — the score never drops, and survives restarts. |
 
-## 📌 Prerequisites
+### Offline mode — the pocket feature
 
-### 📋 Prerequisites for RPI zero W (32bits)
+With no default route, Bjorn stops sweeping a network it isn't on and instead:
 
-![image](https://github.com/user-attachments/assets/3980ec5f-a8fc-4848-ab25-4356e0529639)
+1. **Surveys the air** — BLE and 802.11 recon need no target and work exactly as well offline.
+2. **Hunts handshakes** — the idle wait between reconnection attempts is spent capturing, not sleeping.
+3. **Tries to rejoin** — auto-joins a saved network that comes back in range.
 
-- Raspberry Pi OS installed. 
-    - Stable:
-      - System: 32-bit
-      - Kernel version: 6.6
-      - Debian version: 12 (bookworm) '2024-10-22-raspios-bookworm-armhf-lite'
-- Username and hostname set to `bjorn`.
-- 2.13-inch e-Paper HAT connected to GPIO pins.
+The ordering is load-bearing: the radio is always handed back to managed mode before any
+reconnection attempt, because `nmcli` cannot associate a monitor-mode interface and **fails
+silently** if you try.
 
-### 📋 Prerequisites for RPI zero W2 (64bits)
+---
 
-![image](https://github.com/user-attachments/assets/e8d276be-4cb2-474d-a74d-b5b6704d22f5)
+## 🧰 Hardware
 
-I did not develop Bjorn for the raspberry pi zero w2 64bits, but several feedbacks have attested that the installation worked perfectly.
+| | Needed for |
+|---|---|
+| **Raspberry Pi Zero 2 W** (or any Pi) | Everything. Bjorn is tuned for the Zero 2 W's 512 MB. |
+| **Waveshare 2.13" e-Paper HAT** | The screen. Set `epd_type: "mock"` to run headless without one. |
+| **A second Wi-Fi radio (USB dongle)** | Wi-Fi survey and handshake hunting. **Never the uplink** — Bjorn refuses to monitor-mode the radio carrying its own connection, and refuses to hunt at all on a single-radio device. |
+| Battery / PiSugar | Optional. Clean shutdown below a charge threshold. |
 
-- Raspberry Pi OS installed. 
-    - Stable:
-      - System: 64-bit
-      - Kernel version: 6.6
-      - Debian version: 12 (bookworm) '2024-10-22-raspios-bookworm-arm64-lite'
-- Username and hostname set to `bjorn`.
-- 2.13-inch e-Paper HAT connected to GPIO pins.
+**Known-good dongle:** TP-Link Archer T2U Nano (Realtek RTL8811AU) with the out-of-tree
+[`morrownr/8821au-20210708`](https://github.com/morrownr/8821au-20210708) DKMS driver — it supports
+monitor mode and injection. The onboard Pi chip needs the nexmon patch and has an open
+crash-on-injection bug, so a dongle is the only sane path.
 
+---
 
-At the moment the paper screen v2  v4 have been tested and implemented.
-I juste hope the V1 & V3 will work the same.
-
-### 🔨 Installation
-
-The fastest way to install Bjorn is using the automatic installation script :
+## 🚀 Getting started
 
 ```bash
-# Download and run the installer
-wget https://raw.githubusercontent.com/infinition/Bjorn/refs/heads/main/install_bjorn.sh
+# 1. Get the code onto the Pi
+git clone https://github.com/Gixar/Bjorn-V3.git Bjorn-V3
+cd Bjorn-V3
+
+# 2. Run the installer FROM INSIDE the repo — it installs this local copy
 sudo chmod +x install_bjorn.sh && sudo ./install_bjorn.sh
-# Choose the choice 1 for automatic installation. It may take a while as a lot of packages and modules will be installed. You must reboot at the end.
+# Choose 1 for automatic installation, then reboot.
 ```
 
-For **detailed information** about **installation** process go to [Install Guide](INSTALL.md)
-
-## ⚡ Quick Start
-
-**Need help ? You struggle to find Bjorn's IP after the installation ?**
-Use my Bjorn Detector & SSH Launcher :
-
-[https://github.com/infinition/bjorn-detector](https://github.com/infinition/bjorn-detector)
-
-![ezgif-1-a310f5fe8f](https://github.com/user-attachments/assets/182f82f0-5c3a-48a9-a75e-37b9cfa2263a)
-
-**Hmm, You still need help ?**
-For **detailed information** about **troubleshooting** go to [Troubleshooting](TROUBLESHOOTING.md)
-
-**Quick Installation**: you can use the fastest way to install **Bjorn** [Getting Started](#-getting-started)
-
-## 💡 Usage Example
-
-Here's a demonstration of how Bjorn autonomously hunts through your network like a Viking raider (fake demo for illustration):
+Check what it would do first, changing nothing:
 
 ```bash
-# Reconnaissance Phase
-[NetworkScanner] Discovering alive hosts...
-[+] Host found: 192.168.1.100
-    ├── Ports: 22,80,445,3306
-    └── MAC: 00:11:22:33:44:55
-
-# Attack Sequence 
-[NmapVulnScanner] Found vulnerabilities on 192.168.1.100
-    ├── MySQL 5.5 < 5.7 - User Enumeration
-    └── SMB - EternalBlue Candidate
-
-[SSHBruteforce] Cracking credentials...
-[+] Success! user:password123
-[StealFilesSSH] Extracting sensitive data...
-
-# Automated Data Exfiltration
-[SQLBruteforce] Database accessed!
-[StealDataSQL] Dumping tables...
-[SMBBruteforce] Share accessible
-[+] Found config files, credentials, backups...
+sudo ./install_bjorn.sh --dry-run
 ```
 
-This is just a demo output - actual results will vary based on your network and target configuration.
+Then open **`http://<pi-ip>:8000/`**. Can't find the IP? The original author's
+[bjorn-detector](https://github.com/infinition/bjorn-detector) finds any Bjorn on the network.
 
-All discovered data is automatically organized in the data/output/ directory, viewable through both the e-Paper display (as indicators) and web interface.
-Bjorn works tirelessly, expanding its network knowledge base and growing stronger with each discovery.
+Full detail in the [Install Guide](INSTALL.md) · headless/VM setup in [`docs/INSTALL_VM.md`](docs/INSTALL_VM.md).
 
-No constant monitoring needed - just deploy and let Bjorn do what it does best: hunt for vulnerabilities.
+### First five minutes
 
-🔧 Expand Bjorn's Arsenal!
-Bjorn is designed to be a community-driven weapon forge. Create and share your own attack modules!
+1. **Join a network** — Config → Wi-Fi, pick an SSID. Ethernet and the USB gadget work with nothing to configure.
+2. **Check the screen** — blank panel? Set `epd_type` to `auto`, or run `sudo python3 scripts/epd_test.py --all` with the service stopped to find the exact driver.
+3. **Set the scope** — add anything you must never touch to `ip_scan_blacklist` / `mac_scan_blacklist` **before** starting.
+4. **Start it** — Home → Start. The live console streams what it's doing.
+5. **Turn on what you need** — each optional module is one checkbox on its own page.
 
-⚠️ **For educational and authorized testing purposes only** ⚠️
+Everything is explained in the built-in **`/help`** page on the device itself.
+
+---
+
+## 🔒 Defaults, and what's off
+
+Bjorn is carried around, so the recon that needs no network is **on out of the box**:
+
+| On by default | Off until you enable it |
+|---|---|
+| BLE recon | Telegram / SMTP reporting (needs a token) |
+| Wi-Fi survey (no-op without a second radio) | wpa-sec import (needs an API key) |
+| RustScan port discovery | Bettercap (needs installing) |
+| Offline mode + auto-join | Handshake hunting |
+| | ARP spoofing, traffic sniffing |
+| | Joining *open* networks it has no profile for |
+
+Nothing that needs a credential, transmits at a target, or ships data off-device is on unless you
+turn it on.
+
+---
+
+## ✅ What's verified, and what isn't
+
+This project distinguishes "the code is done" from "the hardware agrees", because they are
+different claims.
+
+**Confirmed on a Pi Zero 2 W:** RustScan at 29×, BLE recon, monitor-mode capture *and* release with
+the uplink guard refusing the wrong radio, the scan→attack→idle planner, offline mode, the web UI,
+the USB gadget, and the e-Paper pipeline.
+
+**Implemented and unit-tested but never run on a radio:** the Bettercap integration and the
+Handshake Hunter. All of it is off by default. Two version-specific unknowns (bettercap's event
+schema and its handshake filenames) are each isolated to one place and **warn in the log** rather
+than failing silently.
+
+`scripts/bjorn_verify.py` runs the whole hardware checklist on the device and prints a
+PASS/FAIL/SKIP report:
+
+```bash
+sudo /home/bjorn/Bjorn/scripts/bjorn_verify.py --save
+```
+
+---
+
+## 🧭 Documentation
+
+| Where | What |
+|---|---|
+| **`/help`** on the device | Settings reference, what every page does, troubleshooting table |
+| [`INSTALL.md`](INSTALL.md) | Full install walkthrough |
+| [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) | Start with `scripts/bjorn_diag.sh` |
+| [`CHANGELOG.md`](CHANGELOG.md) | Every change, with the reasoning |
+| [`docs/PRD.md`](docs/PRD.md) | Roadmap and design decisions |
+| [`docs/BACKLOG.md`](docs/BACKLOG.md) | Open ideas, hardware findings, post-mortems |
+| [`docs/BETTERCAP_PLAN.md`](docs/BETTERCAP_PLAN.md) | The Bettercap + Handshake Hunter plan |
+| [`DEVELOPMENT.md`](DEVELOPMENT.md) | Adding your own attack module |
+
+---
+
+## 🔧 Extending it
+
+Attack modules follow a small contract — drop a file in `actions/`, declare `b_class` / `b_port` /
+`b_parent`, and the orchestrator picks it up, scores it against every host, and shows *why* it chose
+it. See [`DEVELOPMENT.md`](DEVELOPMENT.md).
+
+```bash
+pytest tests/          # 281 tests, no hardware required
+```
+
+---
 
 ## 🤝 Contributing
 
-The project welcomes contributions in:
+New attack modules, bug fixes, docs and features all welcome — see
+[Contributing](CONTRIBUTING.md), the [Code of Conduct](CODE_OF_CONDUCT.md) and the
+[Development Guide](DEVELOPMENT.md).
 
-- New attack modules.
-- Bug fixes.
-- Documentation.
-- Feature improvements.
+Report issues via GitHub with reproduction steps, logs and context.
+`sudo scripts/bjorn_diag.sh --save` produces exactly that, with secrets redacted.
 
-For **detailed information** about **contributing** process go to [Contributing Docs](CONTRIBUTING.md), [Code Of Conduct](CODE_OF_CONDUCT.md) and [Development Guide](DEVELOPMENT.md).
+## 📫 Credits
 
-## 📫 Contact
+- **Original author:** __infinition__ — [infinition/Bjorn](https://github.com/infinition/Bjorn)
+- **This fork:** [Gixar/Bjorn-V3](https://github.com/Gixar/Bjorn-V3)
 
-- **Report Issues**: Via GitHub.
-- **Guidelines**:
-  - Follow ethical guidelines.
-  - Document reproduction steps.
-  - Provide logs and context.
-
-- **Author**: __infinition__
-- **GitHub**: [infinition/Bjorn](https://github.com/infinition/Bjorn)
+Reused with attribution from the wider Bjorn ecosystem (all MIT): `HackCocaine/BjornCocaine`
+(WebUI-first ideas, Logs page), `LOCOSP/BjornWpaSecHarvester` (wpa-sec import),
+`PierreGode/Ragnar` (predecessor).
 
 ## 🌠 Stargazers
 
-[![Star History Chart](https://api.star-history.com/svg?repos=infinition/bjorn&type=Date)](https://star-history.com/#infinition/bjorn&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=Gixar/Bjorn-V3&type=Date)](https://star-history.com/#Gixar/Bjorn-V3&Date)
 
 ---
 
 ## 📜 License
 
-2024 - Bjorn is distributed under the MIT License. For more details, please refer to the [LICENSE](LICENSE) file included in this repository.
+MIT — see [LICENSE](LICENSE). Same license as the upstream project.

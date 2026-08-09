@@ -15,7 +15,7 @@
 import threading
 import time
 import os
-import pandas as pd
+import csv
 import signal
 import glob
 import logging
@@ -39,6 +39,11 @@ class Display:
         self.semaphore = threading.Semaphore(10)
         self.screen_reversed = self.shared_data.screen_reversed
         self.web_screen_reversed = self.shared_data.web_screen_reversed
+
+        # P5: skip re-parsing netkb/livestatus when no scan has happened since we last did.
+        # -1 forces a compute on the first tick (data_generation starts at 0).
+        self._last_shared_gen = -1
+        self._last_vuln_gen = -1
 
         # Define frise positions for different display types
         self.frise_positions = {
@@ -124,40 +129,49 @@ class Display:
         with self.semaphore:
             try:
                 if not os.path.exists(self.shared_data.vuln_summary_file):
-                    df = pd.DataFrame(columns=["IP", "Hostname", "MAC Address", "Port", "Vulnerabilities"])
-                    df.to_csv(self.shared_data.vuln_summary_file, index=False)
+                    with open(self.shared_data.vuln_summary_file, 'w', newline='') as f:
+                        csv.writer(f).writerow(["IP", "Hostname", "MAC Address", "Port", "Vulnerabilities"])
                     self.shared_data.vulnnbr = 0
                     logger.info("Vulnerability summary file created.")
                 else:
+                    # P5: netkb/vuln_summary only change on a scan. If none happened since the last
+                    # compute, keep the cached vulnnbr and skip the full-file re-parse below.
+                    gen = self.shared_data.data_generation
+                    if gen == self._last_vuln_gen:
+                        return
+                    self._last_vuln_gen = gen
+
+                    alive_macs = set()
                     if os.path.exists(self.shared_data.netkbfile):
-                        with open(self.shared_data.netkbfile, 'r') as file:
-                            netkb_df = pd.read_csv(file)
-                            alive_macs = set(netkb_df[(netkb_df["Alive"] == 1) & (netkb_df["MAC Address"] != "STANDALONE")]["MAC Address"])
-                    else:
-                        alive_macs = set()
+                        with open(self.shared_data.netkbfile, newline='') as file:
+                            for row in csv.DictReader(file):
+                                if str(row.get("Alive", "")).strip() == "1" and row.get("MAC Address") != "STANDALONE":
+                                    alive_macs.add(row["MAC Address"])
 
-                    with open(self.shared_data.vuln_summary_file, 'r') as file:
-                        df = pd.read_csv(file)
-                        all_vulnerabilities = set()
-
-                        for index, row in df.iterrows():
-                            mac_address = row["MAC Address"]
+                    all_vulnerabilities = set()
+                    with open(self.shared_data.vuln_summary_file, newline='') as file:
+                        for row in csv.DictReader(file):
+                            mac_address = row.get("MAC Address")
                             if mac_address in alive_macs and mac_address != "STANDALONE":
-                                vulnerabilities = row["Vulnerabilities"]
-                                if pd.isna(vulnerabilities) or not isinstance(vulnerabilities, str):
-                                    continue
-
-                                if vulnerabilities and isinstance(vulnerabilities, str):
+                                vulnerabilities = row.get("Vulnerabilities")
+                                if vulnerabilities:
                                     all_vulnerabilities.update(vulnerabilities.split("; "))
-
-                        self.shared_data.vulnnbr = len(all_vulnerabilities)
-                        logger.debug(f"Updated vulnerabilities count: {self.shared_data.vulnnbr}")
+                    self.shared_data.vulnnbr = len(all_vulnerabilities)
+                    logger.debug(f"Updated vulnerabilities count: {self.shared_data.vulnnbr}")
 
                     if os.path.exists(self.shared_data.livestatusfile):
-                        with open(self.shared_data.livestatusfile, 'r+') as livestatus_file:
-                            livestatus_df = pd.read_csv(livestatus_file)
-                            livestatus_df.loc[0, 'Vulnerabilities Count'] = self.shared_data.vulnnbr
-                            livestatus_df.to_csv(self.shared_data.livestatusfile, index=False)
+                        with open(self.shared_data.livestatusfile, newline='') as f:
+                            reader = csv.DictReader(f)
+                            fieldnames = list(reader.fieldnames or [])
+                            rows = list(reader)
+                        if rows:
+                            if 'Vulnerabilities Count' not in fieldnames:
+                                fieldnames.append('Vulnerabilities Count')
+                            rows[0]['Vulnerabilities Count'] = self.shared_data.vulnnbr
+                            with open(self.shared_data.livestatusfile, 'w', newline='') as f:
+                                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                                writer.writeheader()
+                                writer.writerows(rows)
                             logger.debug(f"Updated livestatusfile with vulnerability count: {self.shared_data.vulnnbr}")
                     else:
                         logger.error(f"Livestatusfile {self.shared_data.livestatusfile} does not exist.")
@@ -168,19 +182,28 @@ class Display:
         """Update the shared data with the latest system information."""
         with self.semaphore:
             try:
-                with open(self.shared_data.livestatusfile, 'r') as file:
-                    livestatus_df = pd.read_csv(file)
-                    self.shared_data.portnbr = livestatus_df['Total Open Ports'].iloc[0]
-                    self.shared_data.targetnbr = livestatus_df['Alive Hosts Count'].iloc[0]
-                    self.shared_data.networkkbnbr = livestatus_df['All Known Hosts Count'].iloc[0]
-                    self.shared_data.vulnnbr = livestatus_df['Vulnerabilities Count'].iloc[0]
+                # P5: the livestatus counts only change on a scan. Re-read them only when a scan
+                # has bumped data_generation; otherwise keep the cached values on shared_data.
+                gen = self.shared_data.data_generation
+                if gen != self._last_shared_gen:
+                    self._last_shared_gen = gen
+                    with open(self.shared_data.livestatusfile, newline='') as file:
+                        row = next(csv.DictReader(file))
+                        self.shared_data.portnbr = int(float(row['Total Open Ports'] or 0))
+                        self.shared_data.targetnbr = int(float(row['Alive Hosts Count'] or 0))
+                        self.shared_data.networkkbnbr = int(float(row['All Known Hosts Count'] or 0))
+                        self.shared_data.vulnnbr = int(float(row['Vulnerabilities Count'] or 0))
 
+                # Cracked creds / loot / zombies / attacks change from actions, not scans, so these
+                # cheap filesystem counts stay per-tick (not gated on data_generation).
                 crackedpw_files = glob.glob(f"{self.shared_data.crackedpwddir}/*.csv")
 
                 total_passwords = 0
-                for file in crackedpw_files:
-                    with open(file, 'r') as f:
-                        total_passwords += len(pd.read_csv(f, usecols=[0]))
+                for fpath in crackedpw_files:
+                    with open(fpath, newline='') as f:
+                        reader = csv.reader(f)
+                        next(reader, None)  # skip header row (matches pandas read_csv row count)
+                        total_passwords += sum(1 for _ in reader)
 
                 self.shared_data.crednbr = total_passwords
 
@@ -203,7 +226,7 @@ class Display:
                 self.shared_data.usb_active = self.is_usb_connected()
                 self.get_open_files()
 
-            except (FileNotFoundError, pd.errors.EmptyDataError) as e:
+            except (FileNotFoundError, StopIteration) as e:
                 logger.error(f"Error: {e}")
             except Exception as e:
                 logger.error(f"Error updating shared data: {e}")
@@ -268,7 +291,13 @@ class Display:
             result = subprocess.Popen(['ip', 'neigh', 'show', 'dev', 'usb0'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             output, error = result.communicate()
             if result.returncode != 0:
-                logger.error(f"Error executing 'ip neigh show dev usb0': {error}")
+                # usb0 simply not existing (no gadget up / nothing plugged in) is the normal
+                # not-connected state, not an error — it was logging ERROR every ~25s (505 lines
+                # in one log pull). Only genuinely unexpected stderr stays at ERROR.
+                if 'Cannot find device' in (error or ''):
+                    logger.debug("usb0 not present (gadget down / nothing connected); treating as not connected.")
+                else:
+                    logger.error(f"Error executing 'ip neigh show dev usb0': {error}")
                 return False
             return bool(output.strip())
         except Exception as e:

@@ -16,6 +16,33 @@ import os
 
 logger = Logger(name="comment.py", level=logging.DEBUG)
 
+def status_lines(sd):
+    """Live one-liners for the comment slot — what Bjorn has actually found, in its own voice.
+
+    Counters that are still zero are left out: "0 creds" every third comment is noise pretending to
+    be information, and the panel has room for one line. Everything here is an in-memory counter the
+    display threads already maintain (the P5 change-gated read), so this costs no file I/O."""
+    lines = [f"{sd.targetnbr} alive / {sd.networkkbnbr} known"]
+    if sd.portnbr:
+        lines.append(f"{sd.portnbr} open ports mapped")
+    if sd.vulnnbr:
+        lines.append(f"{sd.vulnnbr} weak spots on the board")
+    if sd.crednbr:
+        lines.append(f"{sd.crednbr} keys on my belt")
+    if sd.datanbr:
+        lines.append(f"{sd.datanbr} files in the longship")
+    if sd.zombiesnbr:
+        lines.append(f"{sd.zombiesnbr} thralls still answering")
+    if sd.attacksnbr:
+        lines.append(f"{sd.attacksnbr} raids logged")
+    if getattr(sd, "handshakenbr", 0):
+        lines.append(f"{sd.handshakenbr} handshakes in the horn")
+    lines.append(f"Lvl {sd.levelnbr} - {sd.coinnbr} coins")
+    if not getattr(sd, "wifi_connected", True):
+        lines.append("No uplink. Reading the air.")
+    return lines
+
+
 class Commentaireia:
     """Provides context-based random comments for bjorn."""
     def __init__(self):
@@ -23,6 +50,7 @@ class Commentaireia:
         self.last_comment_time = 0  # Initialize last_comment_time
         self.comment_delay = random.randint(self.shared_data.comment_delaymin, self.shared_data.comment_delaymax)  # Initialize comment_delay
         self.last_theme = None  # Initialize last_theme
+        self.comment_count = 0  # drives the joke/status rotation (comment_info_ratio)
         self.themes = self.load_comments(self.shared_data.commentsfile)  # Load themes from JSON file
 
     def load_comments(self, commentsfile):
@@ -62,7 +90,19 @@ class Commentaireia:
             self.last_comment_time = current_time   # Update the last comment time
             self.last_theme = theme   # Update the last theme
 
-            if theme not in self.themes: 
+            self.comment_count += 1
+
+            # Every Nth slot reports instead of joking. Same slot, same delay — the panel gains
+            # information without losing the character, and one ratio knob tunes the whole balance
+            # (0 = jokes only, as before).
+            ratio = getattr(self.shared_data, "comment_info_ratio", 3)
+            if ratio and self.comment_count % ratio == 0:
+                try:
+                    return random.choice(status_lines(self.shared_data))
+                except Exception as e:  # a missing counter must never cost us the comment
+                    logger.debug(f"Status line unavailable, falling back to a comment: {e}")
+
+            if theme not in self.themes:
                 logger.warning(f"The theme '{theme}' is not defined, using the default theme IDLE.")
                 theme = "IDLE"
 

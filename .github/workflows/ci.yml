@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"   # matches the target Raspberry Pi OS (Bookworm) Python
+
+      - name: Install test tooling
+        # Note: we do NOT `pip install -r requirements.txt` yet. The hardware pins
+        # (gpiozero/lgpio/spidev) and heavy stack aren't meaningful on a bare runner and
+        # aren't Pi-verified until PRD §9 step 2 (dependency refresh). The tests are written
+        # to avoid the hardware/heavy-import chain, so CI stays green on tooling alone.
+        run: pip install pytest pylint
+
+      - name: Run tests
+        run: pytest tests/ -v
+
+      - name: Lint (errors only, dependency-light modules)
+        run: pylint --rcfile=.pylintrc --errors-only retry_policy.py config_validation.py scripts/ tests/

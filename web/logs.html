@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bjorn Cyberviking — Logs</title>
+    <link rel="icon" href="web/images/favicon.ico" type="image/x-icon">
+    <link rel="stylesheet" href="web/css/styles.css">
+    <link rel="manifest" href="manifest.json">
+    <link rel="apple-touch-icon" sizes="192x192" href="web/images/icon-192x192.png">
+    <script src="web/scripts/common.js" defer></script>
+    <script src="web/scripts/logs.js" defer></script>
+</head>
+<body>
+    <nav id="app-nav" class="topnav"></nav>
+
+    <main class="page">
+        <div class="card">
+            <div class="card-header">
+                <div>
+                    <h2 class="card-title">Logs</h2>
+                    <p class="card-subtitle">Streaming from /get_logs</p>
+                </div>
+                <div class="log-toolbar">
+                    <button type="button" class="btn btn-sm" id="toggle-console-button" onclick="toggleConsole()">
+                        <img id="toggle-console-image" src="/web/images/off.png" alt="">
+                        <span id="console-state-label">Start</span>
+                    </button>
+                    <button type="button" class="btn btn-sm btn-ghost" onclick="adjustFontSize(-1)" title="Smaller">
+                        <img src="/web/images/less.png" alt="-">
+                    </button>
+                    <button type="button" class="btn btn-sm btn-ghost" onclick="adjustFontSize(1)" title="Larger">
+                        <img src="/web/images/plus.png" alt="+">
+                    </button>
+                    <button type="button" class="btn btn-sm btn-ghost" onclick="clearConsoleView()">Clear view</button>
+                </div>
+            </div>
+            <div id="log-console" class="log-console log-console-full"></div>
+        </div>
+    </main>
+</body>
+</html>

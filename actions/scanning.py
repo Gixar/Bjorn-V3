@@ -3,10 +3,10 @@
 # The results are saved to CSV files and displayed using Rich for enhanced visualization.
 
 import os
+import shutil
+import subprocess
 import threading
 import csv
-import pandas as pd
-import socket
 import netifaces
 import time
 import glob
@@ -35,6 +35,10 @@ class NetworkScanner:
     """
     This class handles the entire network scanning process.
     """
+    # Class-level so it holds even for an instance built with __new__ (the tests do that — real
+    # SharedData needs hardware). Assigning it marks "already said"; see selected_engine().
+    _rustscan_missing_logged = False
+
     def __init__(self, shared_data):
         self.shared_data = shared_data
         self.logger = logger
@@ -45,9 +49,23 @@ class NetworkScanner:
         self.console = Console()
         self.lock = threading.Lock()
         self.currentdir = shared_data.currentdir
-        self.semaphore = threading.Semaphore(200)  # Limit the number of active threads to 20
         self.nm = nmap.PortScanner()  # Initialize nmap.PortScanner()
         self.running = False
+
+    def get_local_ips(self):
+        """This device's own IPv4 addresses across all interfaces (wlan0/eth0/usb0/...).
+        Recomputed each scan and added to the scan blacklist so Bjorn never targets itself —
+        dynamic, so it survives DHCP address changes (unlike a fixed IP in the config)."""
+        ips = set()
+        try:
+            for iface in netifaces.interfaces():
+                for addr in netifaces.ifaddresses(iface).get(netifaces.AF_INET, []):
+                    ip = addr.get('addr')
+                    if ip and not ip.startswith('127.'):
+                        ips.add(ip)
+        except Exception as e:
+            self.logger.error(f"Error getting local IPs: {e}")
+        return list(ips)
 
     def check_if_csv_scan_file_exists(self, csv_scan_file, csv_result_file, netkbfile):
         """
@@ -246,22 +264,57 @@ class NetworkScanner:
             except Exception as e:
                 self.logger.error(f"Error in display_csv: {e}")
 
-    def get_network(self):
-        """
-        Retrieves the network information including the default gateway and subnet.
-        """
+    @staticmethod
+    def iface_is_down(iface, sysfs="/sys/class/net"):
+        """True when the kernel reports this interface as down. Pure enough to unit-test.
+
+        netifaces hands back an interface's address whether or not the link is up, so a configured
+        but unplugged interface looked exactly like a live one. On the Pi the USB gadget `usb0`
+        keeps 172.20.2.1/24 with no carrier by design (the #68 fix), which had Bjorn sweeping all
+        254 addresses of a subnet that physically cannot answer — every cycle, at -T2, on a Pi
+        Zero. Only 'down' is filtered: some interfaces legitimately report 'unknown' (tunnels,
+        loopback) and those still carry traffic."""
         try:
-            gws = netifaces.gateways()
-            default_gateway = gws['default'][netifaces.AF_INET][1]
-            iface = netifaces.ifaddresses(default_gateway)[netifaces.AF_INET][0]
-            ip_address = iface['addr']
-            netmask = iface['netmask']
-            cidr = sum([bin(int(x)).count('1') for x in netmask.split('.')])
-            network = ipaddress.IPv4Network(f"{ip_address}/{cidr}", strict=False)
-            self.logger.info(f"Network: {network}")
-            return network
+            with open(f"{sysfs}/{iface}/operstate") as f:
+                return f.read().strip() == "down"
+        except OSError:
+            return False  # can't tell (not Linux, or the iface vanished) -> don't filter it out
+
+    def get_networks(self):
+        """
+        Retrieves the subnet of every interface that has an IPv4 address (#133).
+
+        Bjorn used to scan only the default gateway's network; a device on more than one LAN
+        (eth0 + wlan0 + usb0, etc.) never saw the others. This returns a de-duplicated list of
+        IPv4Network objects, one per interface subnet, skipping loopback, link-local, and
+        interfaces whose link is down. The caller scans each and merges the results into a
+        single netkb.
+        """
+        networks = {}
+        try:
+            for iface in netifaces.interfaces():
+                if self.iface_is_down(iface):
+                    self.logger.debug(f"Skipping {iface}: link is down")
+                    continue
+                for addr in netifaces.ifaddresses(iface).get(netifaces.AF_INET, []):
+                    ip_address = addr.get('addr')
+                    netmask = addr.get('netmask')
+                    if not ip_address or not netmask:
+                        continue
+                    if ip_address.startswith('127.') or ip_address.startswith('169.254.'):
+                        continue
+                    try:
+                        network = ipaddress.IPv4Network(f"{ip_address}/{netmask}", strict=False)
+                    except ValueError as ve:
+                        self.logger.warning(f"Skipping {iface} {ip_address}/{netmask}: {ve}")
+                        continue
+                    networks[str(network)] = network  # dedupe interfaces sharing a subnet
+            result = list(networks.values())
+            self.logger.info(f"Networks to scan: {[str(n) for n in result]}")
+            return result
         except Exception as e:
-            self.logger.error(f"Error in get_network: {e}")
+            self.logger.error(f"Error in get_networks: {e}")
+            return []
 
     def get_mac_address(self, ip, hostname):
         """
@@ -269,11 +322,11 @@ class NetworkScanner:
         """
         try:
             mac = None
-            retries = 5
+            retries = 2  # fallback path only now (nmap supplies the MAC for LAN hosts — L2); keep the worst case short
             while not mac and retries > 0:
                 mac = gma(ip=ip)
                 if not mac:
-                    time.sleep(2)  # Attendre 2 secondes avant de réessayer
+                    time.sleep(1)
                     retries -= 1
             if not mac:
                 mac = f"{ip}_{hostname}" if hostname else f"{ip}_NoHostname"
@@ -282,54 +335,141 @@ class NetworkScanner:
             self.logger.error(f"Error in get_mac_address: {e}")
             return None
 
-    class PortScanner:
-        """
-        Helper class to perform port scanning on a target IP.
-        """
-        def __init__(self, outer_instance, target, open_ports, portstart, portend, extra_ports):
-            self.outer_instance = outer_instance
-            self.logger = logger
-            self.target = target
-            self.open_ports = open_ports
-            self.portstart = portstart
-            self.portend = portend
-            self.extra_ports = extra_ports
+    # (Removed the socket-based PortScanner: a thread-per-port scanner throttled by a
+    # 200-thread semaphore. Replaced by a single nmap port scan in ScanPorts.start() — L1.)
 
-        def scan(self, port):
-            """
-            Scans a specific port on the target IP.
-            """
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(2)
-            try:
-                con = s.connect((self.target, port))
-                self.open_ports[self.target].append(port)
-                con.close()
-            except:
-                pass
-            finally:
-                s.close()  # Ensure the socket is closed
+    @staticmethod
+    def _rustscan_bin():
+        """Resolve the rustscan binary, or None. `shutil.which` alone isn't enough: the systemd
+        service runs as `bjorn` with a minimal PATH that omits ~/.cargo/bin (where `cargo install`
+        drops it), and it may have been built under a different user (e.g. /home/<user>/.cargo/bin).
+        Fall back to globbing the usual cargo/local locations so a present-but-off-PATH binary is
+        still found. Returns an absolute path or None."""
+        found = shutil.which("rustscan")
+        if found:
+            return found
+        candidates = glob.glob("/home/*/.cargo/bin/rustscan") + [
+            "/root/.cargo/bin/rustscan",
+            "/usr/local/bin/rustscan",
+            "/usr/bin/rustscan",
+        ]
+        return next((p for p in candidates if os.access(p, os.X_OK)), None)
 
-        def start(self):
-            """
-            Starts the port scanning process for the specified range and extra ports.
-            """
-            try:
-                for port in range(self.portstart, self.portend):
-                    t = threading.Thread(target=self.scan_with_semaphore, args=(port,))
-                    t.start()
-                for port in self.extra_ports:
-                    t = threading.Thread(target=self.scan_with_semaphore, args=(port,))
-                    t.start()
-            except Exception as e:
-                self.logger.info(f"Maximum threads defined in the semaphore reached: {e}")
+    def selected_engine(self):
+        """Which port-discovery engine to use: 'rustscan' if enabled AND the binary is present,
+        else 'nmap'.
 
-        def scan_with_semaphore(self, port):
-            """
-            Scans a port using a semaphore to limit concurrent threads.
-            """
-            with self.outer_instance.semaphore:
-                self.scan(port)
+        Said once per process, not once per scan, and at INFO rather than WARNING: rustscan is on
+        by default now, so "binary missing -> use nmap" is a normal, fully-handled state on an arch
+        the installer couldn't provision, not a misconfiguration to nag about every cycle. It is
+        still worth saying once — a silent 27x slowdown is worse than a line in the log."""
+        if getattr(self.shared_data, "use_rustscan", True):
+            if self._rustscan_bin():
+                return "rustscan"
+            if not self._rustscan_missing_logged:
+                self.logger.info("rustscan not installed; using nmap for port discovery. "
+                                 "To add it: cargo install rustscan --root /usr/local")
+                self._rustscan_missing_logged = True
+        return "nmap"
+
+    def discover_ports(self, ip_list, ports_to_scan, engine):
+        """Return {ip: [open ports]} for ip_list, using the named engine. If rustscan is asked for
+        but fails at runtime, fall back to nmap so a scan is never lost to a flaky discovery pass."""
+        if engine == "rustscan":
+            result = self._rustscan_discovery(ip_list, ports_to_scan)
+            if result is not None:
+                return result
+            self.logger.warning("rustscan discovery failed; falling back to nmap.")
+        return self._nmap_discovery(ip_list, ports_to_scan)
+
+    def _nmap_discovery(self, ip_list, ports_to_scan):
+        """L1: a single nmap TCP-connect scan over all alive hosts. One C process, light on a Pi
+        Zero. -sT needs no root; timing follows the configured nmap_scan_aggressivity."""
+        open_ports = {ip: [] for ip in ip_list}
+        port_arg = ','.join(str(p) for p in ports_to_scan)
+        nm = self.nm
+        try:
+            nm.scan(
+                hosts=' '.join(ip_list),
+                ports=port_arg,
+                arguments='-sT ' + self.shared_data.nmap_scan_aggressivity,
+            )
+            for ip in ip_list:
+                if ip in nm.all_hosts():
+                    for proto in nm[ip].all_protocols():
+                        for port, info in nm[ip][proto].items():
+                            if info.get('state') == 'open':
+                                open_ports[ip].append(int(port))
+        except Exception as e:
+            # Most commonly this is nmap being killed mid-scan (service restart) — python-nmap
+            # then fails to parse the truncated XML and its str(e) is a wall of raw XML. Log a
+            # concise WARNING (existing port data is preserved; the next scan retries) and keep
+            # the raw detail at debug only.
+            self.logger.warning("nmap port scan did not complete this cycle "
+                                "(interrupted or nmap parse error); keeping existing port data.")
+            self.logger.debug(f"nmap port scan error detail: {str(e)[:300]}")
+        return open_ports
+
+    def _rustscan_discovery(self, ip_list, ports_to_scan, full_port=None):
+        """Discovery-only RustScan pass over the same hosts/ports. Greppable mode (-g) prints
+        'IP -> [p1,p2]' and skips RustScan's built-in nmap hand-off, so this is pure port
+        discovery — service/version detail still comes from nmap later, same as the nmap path.
+        full_port (None → read `rustscan_full_port` config): sweep all 65,535 ports instead of the
+        curated portlist. Returns {ip: [open ports]}, or None so discover_ports() falls back to
+        nmap on any failure."""
+        bin_path = self._rustscan_bin()
+        if not bin_path:
+            return None
+        if full_port is None:
+            full_port = getattr(self.shared_data, "rustscan_full_port", False)
+        batch = getattr(self.shared_data, "rustscan_batch_size", 0)
+        cmd = self._rustscan_cmd(bin_path, ip_list, ports_to_scan, batch, full_port)
+        if full_port:
+            self.logger.info("rustscan full-port mode: scanning all 65,535 ports per host")
+        try:
+            # full-port over several hosts is heavier; give it more headroom on a slow Pi.
+            proc = subprocess.run(cmd, capture_output=True, text=True,
+                                  timeout=600 if full_port else 300)
+        except Exception as e:
+            self.logger.warning(f"rustscan invocation failed: {e}")
+            return None
+        if proc.returncode != 0:
+            self.logger.warning(f"rustscan exited {proc.returncode}: {proc.stderr.strip()[:200]}")
+            return None
+        return self._parse_rustscan_greppable(proc.stdout, ip_list)
+
+    @staticmethod
+    def _rustscan_cmd(bin_path, ip_list, ports_to_scan, batch_size=0, full_port=False):
+        """Build the RustScan argv. bin_path is the resolved binary (see _rustscan_bin). batch_size
+        > 0 sets `-b <n>` (RustScan's ulimit-bound socket batch); 0 leaves RustScan's own adaptive
+        default. On a Pi Zero 2 W a too-large batch silently drops ports (RustScan's documented
+        failure mode), so this is the on-device tuning knob — start with the default, lower it if
+        the benchmark shows missed ports. full_port scans the whole 1-65535 range (`-r`, RustScan's
+        strength) instead of the curated `-p` list; nmap still does service detail on the result."""
+        port_sel = ["-r", "1-65535"] if full_port else ["-p", ','.join(str(p) for p in ports_to_scan)]
+        cmd = [bin_path, "-a", ','.join(ip_list), *port_sel, "-g", "--no-config"]
+        if batch_size and batch_size > 0:
+            cmd += ["-b", str(batch_size)]
+        return cmd
+
+    @staticmethod
+    def _parse_rustscan_greppable(output, ip_list):
+        """Parse RustScan greppable lines ('IP -> [80,443]') into {ip: [open ports]}. Pure/testable.
+        Every ip_list host is present in the result (empty list if it had no open ports)."""
+        open_ports = {ip: [] for ip in ip_list}
+        wanted = set(ip_list)
+        for line in output.splitlines():
+            if "->" not in line:
+                continue
+            ip_part, _, ports_part = line.partition("->")
+            ip = ip_part.strip()
+            if ip not in wanted:
+                continue
+            for p in ports_part.strip().strip("[]").split(","):
+                p = p.strip()
+                if p.isdigit():
+                    open_ports[ip].append(int(p))
+        return open_ports
 
     class ScanPorts:
         """
@@ -367,24 +507,30 @@ class NetworkScanner:
                 except Exception as e:
                     self.outer_instance.logger.error(f"Error in scan_network_and_write_to_csv (initial write): {e}")
 
-            # Use nmap to scan for live hosts
+            # Use nmap to scan for live hosts. On a LAN, `-sn` does an ARP sweep and already
+            # resolves each host's MAC, so we read it straight from the result (L2) — no per-host
+            # ARP retry loop. Iterate synchronously: with the slow MAC lookup gone there's nothing
+            # to parallelise, which also removes the old thread-spawn + fixed-sleep race (P6).
             self.outer_instance.nm.scan(hosts=str(self.network), arguments='-sn')
             for host in self.outer_instance.nm.all_hosts():
-                t = threading.Thread(target=self.scan_host, args=(host,))
-                t.start()
+                self.scan_host(host)
 
-            time.sleep(5)
             self.outer_instance.sort_and_write_csv(self.csv_scan_file)
 
         def scan_host(self, ip):
             """
-            Scans a specific host to check if it is alive and retrieves its hostname and MAC address.
+            Records a live host's hostname and MAC address (MAC taken from the nmap result).
             """
             if self.outer_instance.blacklistcheck and ip in self.outer_instance.ip_scan_blacklist:
                 return
             try:
-                hostname = self.outer_instance.nm[ip].hostname() if self.outer_instance.nm[ip].hostname() else ''
-                mac = self.outer_instance.get_mac_address(ip, hostname)
+                nm = self.outer_instance.nm
+                hostname = nm[ip].hostname() if nm[ip].hostname() else ''
+                # L2: MAC from the nmap -sn result; fall back to the slower ARP lookup only when
+                # nmap didn't provide one (e.g. this device's own IP or a non-L2 host).
+                mac = nm[ip]['addresses'].get('mac', '') if 'addresses' in nm[ip] else ''
+                if not mac:
+                    mac = self.outer_instance.get_mac_address(ip, hostname)
                 if not self.outer_instance.blacklistcheck or mac not in self.outer_instance.mac_scan_blacklist:
                     with self.outer_instance.lock:
                         with open(self.csv_scan_file, 'a', newline='') as file:
@@ -394,7 +540,6 @@ class NetworkScanner:
             except Exception as e:
                 self.outer_instance.logger.error(f"Error getting MAC address or writing to file for IP {ip}: {e}")
             self.progress += 1
-            time.sleep(0.1)  # Adding a small delay to avoid overwhelming the network
 
         def get_progress(self):
             """
@@ -407,15 +552,17 @@ class NetworkScanner:
             Starts the network and port scanning process.
             """
             self.scan_network_and_write_to_csv()
-            time.sleep(7)
             self.ip_data = self.outer_instance.GetIpFromCsv(self.outer_instance, self.csv_scan_file)
             self.open_ports = {ip: [] for ip in self.ip_data.ip_list}
-            with Progress() as progress:
-                task = progress.add_task("[cyan]Scanning IPs...", total=len(self.ip_data.ip_list))
-                for ip in self.ip_data.ip_list:
-                    progress.update(task, advance=1)
-                    port_scanner = self.outer_instance.PortScanner(self.outer_instance, ip, self.open_ports, self.portstart, self.portend, self.extra_ports)
-                    port_scanner.start()
+
+            # Port discovery over all alive hosts via the selected engine (nmap -sT by default,
+            # RustScan when use_rustscan is on and installed — see NetworkScanner.discover_ports).
+            if self.ip_data.ip_list:
+                ports_to_scan = sorted(set(list(range(self.portstart, self.portend)) + list(self.extra_ports)))
+                engine = self.outer_instance.selected_engine()
+                self.outer_instance.logger.info(f"Port discovery engine: {engine} "
+                                                f"({len(self.ip_data.ip_list)} hosts, {len(ports_to_scan)} ports)")
+                self.open_ports = self.outer_instance.discover_ports(self.ip_data.ip_list, ports_to_scan, engine)
 
             self.all_ports = sorted(list(set(port for ports in self.open_ports.values() for port in ports)))
             alive_ips = set(self.ip_data.ip_list)
@@ -435,6 +582,7 @@ class NetworkScanner:
             Reads the source CSV file into a DataFrame.
             """
             try:
+                import pandas as pd  # lazy: keep pandas out of module import (P2)
                 self.df = pd.read_csv(self.source_csv_path)
             except Exception as e:
                 self.logger.error(f"Error in read_csv: {e}")
@@ -467,6 +615,7 @@ class NetworkScanner:
             Saves the calculated results to the output CSV file.
             """
             try:
+                import pandas as pd  # lazy: keep pandas out of module import (P2)
                 if os.path.exists(self.output_csv_path):
                     results_df = pd.read_csv(self.output_csv_path)
                     results_df.loc[0, 'Total Open Ports'] = self.total_open_ports
@@ -512,47 +661,54 @@ class NetworkScanner:
         try:
             self.shared_data.bjornorch_status = "NetworkScanner"
             self.logger.info(f"Starting Network Scanner")
-            network = self.get_network()
-            self.shared_data.bjornstatustext2 = str(network)
+            # Rebuild the IP blacklist from config + this device's *current* IPs each scan, so
+            # Bjorn never scans/attacks itself even after a DHCP address change. All the blacklist
+            # checks below read self.ip_scan_blacklist, so refreshing it here covers them.
+            local_ips = self.get_local_ips()
+            self.ip_scan_blacklist = list(self.shared_data.ip_scan_blacklist) + local_ips
+            if local_ips:
+                self.logger.info(f"Excluding own IPs from scan: {local_ips}")
+            networks = self.get_networks()
+            if not networks:
+                self.logger.error("No scannable networks found; skipping scan.")
+                return
+            self.shared_data.bjornstatustext2 = ", ".join(str(n) for n in networks)
             portstart = self.shared_data.portstart
             portend = self.shared_data.portend
             extra_ports = self.shared_data.portlist
-            scanner = self.ScanPorts(self, network, portstart, portend, extra_ports)
-            ip_data, open_ports, all_ports, csv_result_file, netkbfile, alive_ips = scanner.start()
 
-            alive_macs = set(ip_data.mac_list)
+            # Scan every interface subnet (#133) and merge into ONE netkb write. update_netkb marks
+            # any MAC not in alive_macs as dead, so it must see the alive hosts from *all* networks
+            # at once — writing per-network would make each subnet mark the others' hosts offline.
+            combined_netkb_data = []
+            combined_alive_macs = set()
+            netkbfile = self.shared_data.netkbfile
+            for network in networks:
+                scanner = self.ScanPorts(self, network, portstart, portend, extra_ports)
+                ip_data, open_ports, all_ports, csv_result_file, _netkbfile, alive_ips = scanner.start()
 
-            table = Table(title="Scan Results", show_lines=True)
-            table.add_column("IP", style="cyan", no_wrap=True)
-            table.add_column("Hostname", style="cyan", no_wrap=True)
-            table.add_column("Alive", style="cyan", no_wrap=True)
-            table.add_column("MAC Address", style="cyan", no_wrap=True)
-            for port in all_ports:
-                table.add_column(f"{port}", style="green")
+                alive_macs = set(ip_data.mac_list)
+                combined_alive_macs |= alive_macs
 
-            netkb_data = []
-            for ip, ports, hostname, mac in zip(ip_data.ip_list, open_ports.values(), ip_data.hostname_list, ip_data.mac_list):
-                if self.blacklistcheck and (mac in self.mac_scan_blacklist or ip in self.ip_scan_blacklist):
-                    continue
-                alive = '1' if mac in alive_macs else '0'
-                row = [ip, hostname, alive, mac] + [Text(str(port), style="green bold") if port in ports else Text("", style="on red") for port in all_ports]
-                table.add_row(*row)
-                netkb_data.append([mac, ip, hostname, ports])
+                with self.lock:
+                    with open(csv_result_file, 'w', newline='') as file:
+                        writer = csv.writer(file)
+                        writer.writerow(["IP", "Hostname", "Alive", "MAC Address"] + [str(port) for port in all_ports])
+                        for ip, ports, hostname, mac in zip(ip_data.ip_list, open_ports.values(), ip_data.hostname_list, ip_data.mac_list):
+                            if self.blacklistcheck and (mac in self.mac_scan_blacklist or ip in self.ip_scan_blacklist):
+                                continue
+                            alive = '1' if mac in alive_macs else '0'
+                            writer.writerow([ip, hostname, alive, mac] + [str(port) if port in ports else '' for port in all_ports])
 
-            with self.lock:
-                with open(csv_result_file, 'w', newline='') as file:
-                    writer = csv.writer(file)
-                    writer.writerow(["IP", "Hostname", "Alive", "MAC Address"] + [str(port) for port in all_ports])
-                    for ip, ports, hostname, mac in zip(ip_data.ip_list, open_ports.values(), ip_data.hostname_list, ip_data.mac_list):
-                        if self.blacklistcheck and (mac in self.mac_scan_blacklist or ip in self.ip_scan_blacklist):
-                            continue
-                        alive = '1' if mac in alive_macs else '0'
-                        writer.writerow([ip, hostname, alive, mac] + [str(port) if port in ports else '' for port in all_ports])
+                for ip, ports, hostname, mac in zip(ip_data.ip_list, open_ports.values(), ip_data.hostname_list, ip_data.mac_list):
+                    if self.blacklistcheck and (mac in self.mac_scan_blacklist or ip in self.ip_scan_blacklist):
+                        continue
+                    combined_netkb_data.append([mac, ip, hostname, ports])
 
-            self.update_netkb(netkbfile, netkb_data, alive_macs)
+                if self.displaying_csv:
+                    self.display_csv(csv_result_file)
 
-            if self.displaying_csv:
-                self.display_csv(csv_result_file)
+            self.update_netkb(netkbfile, combined_netkb_data, combined_alive_macs)
 
             source_csv_path = self.shared_data.netkbfile
             output_csv_path = self.shared_data.livestatusfile
@@ -560,8 +716,96 @@ class NetworkScanner:
             updater = self.LiveStatusUpdater(source_csv_path, output_csv_path)
             updater.update_livestatus()
             updater.clean_scan_results(self.shared_data.scan_results_dir)
+
+            # Signal the display threads that netkb/livestatus changed (P5) so they recompute
+            # counts this cycle instead of re-parsing the CSVs on every idle refresh.
+            self.shared_data.data_generation += 1
         except Exception as e:
             self.logger.error(f"Error in scan: {e}")
+
+    def benchmark_scan_engines(self):
+        """Test mode: run the SAME port-discovery scan (same live hosts, same ports) through both
+        nmap and RustScan back-to-back, time each, and append the result to a benchmark CSV in the
+        data dir. Diagnostic only — does not touch netkb/livestatus. Skips RustScan (records a
+        note) if the binary isn't installed. Returns the results dict."""
+        self.shared_data.bjornorch_status = "NetworkScanner"
+        self.logger.info("Starting scan-engine benchmark (nmap vs rustscan)")
+        local_ips = self.get_local_ips()
+        self.ip_scan_blacklist = list(self.shared_data.ip_scan_blacklist) + local_ips
+        networks = self.get_networks()
+        if not networks:
+            self.logger.error("No scannable networks found; skipping benchmark.")
+            return None
+
+        portstart = self.shared_data.portstart
+        portend = self.shared_data.portend
+        extra_ports = self.shared_data.portlist
+        ports_to_scan = sorted(set(list(range(portstart, portend)) + list(extra_ports)))
+
+        # Discover the live hosts once — both engines then scan this identical target list.
+        ip_list = []
+        for network in networks:
+            sp = self.ScanPorts(self, network, portstart, portend, extra_ports)
+            sp.scan_network_and_write_to_csv()
+            ip_list.extend(self.GetIpFromCsv(self, sp.csv_scan_file).ip_list)
+        ip_list = sorted(set(ip_list), key=self.ip_key)
+        if not ip_list:
+            self.logger.error("Benchmark found no live hosts; nothing to scan.")
+            return None
+
+        results = {}  # engine -> {"seconds": float, "open_port_count": int} or {"skipped": reason}
+        # rustscan pinned to the same curated port list as nmap (full_port=False) — an apples-to-
+        # apples engine comparison, regardless of the rustscan_full_port config setting.
+        for engine, fn in (("nmap", self._nmap_discovery),
+                           ("rustscan", lambda ips, ports: self._rustscan_discovery(ips, ports, full_port=False))):
+            if engine == "rustscan" and not self._rustscan_bin():
+                results[engine] = {"skipped": "binary not installed"}
+                self.logger.warning("Benchmark: rustscan not installed — skipping its pass.")
+                continue
+            t0 = time.perf_counter()
+            open_ports = fn(ip_list, ports_to_scan)
+            elapsed = time.perf_counter() - t0
+            if open_ports is None:  # rustscan runtime failure
+                results[engine] = {"skipped": "run failed"}
+                continue
+            results[engine] = {
+                "seconds": round(elapsed, 3),
+                "open_port_count": sum(len(p) for p in open_ports.values()),
+            }
+            self.logger.info(f"Benchmark {engine}: {results[engine]['seconds']}s, "
+                             f"{results[engine]['open_port_count']} open ports over {len(ip_list)} hosts")
+
+        self._write_benchmark_results(len(ip_list), len(ports_to_scan), results)
+        return results
+
+    def _write_benchmark_results(self, host_count, port_count, results):
+        """Append one benchmark row to data/scan_engine_benchmark.csv (created with a header on
+        first run). History accumulates so repeated runs / batch tuning can be compared."""
+        def cell(engine, field):
+            r = results.get(engine, {})
+            return r.get(field, r.get("skipped", ""))
+
+        nmap_s = results.get("nmap", {}).get("seconds")
+        rust_s = results.get("rustscan", {}).get("seconds")
+        speedup = round(nmap_s / rust_s, 2) if (nmap_s and rust_s) else ""
+
+        path = os.path.join(self.shared_data.datadir, "scan_engine_benchmark.csv")
+        header = ["Timestamp", "Hosts", "Ports Scanned", "nmap Seconds", "rustscan Seconds",
+                  "Speedup (nmap/rustscan)", "nmap Open Ports", "rustscan Open Ports"]
+        row = [self.get_current_timestamp(), host_count, port_count,
+               cell("nmap", "seconds"), cell("rustscan", "seconds"), speedup,
+               cell("nmap", "open_port_count"), cell("rustscan", "open_port_count")]
+        try:
+            with self.lock:
+                new_file = not os.path.exists(path)
+                with open(path, "a", newline="") as f:
+                    writer = csv.writer(f)
+                    if new_file:
+                        writer.writerow(header)
+                    writer.writerow(row)
+            self.logger.info(f"Benchmark results appended to {path}")
+        except Exception as e:
+            self.logger.error(f"Error writing benchmark results: {e}")
 
     def start(self):
         """
@@ -584,6 +828,10 @@ class NetworkScanner:
             logger.info("NetworkScanner stopped.")
 
 if __name__ == "__main__":
+    import sys
     shared_data = SharedData()
     scanner = NetworkScanner(shared_data)
-    scanner.scan()
+    if "--benchmark" in sys.argv:
+        scanner.benchmark_scan_engines()  # test mode: nmap vs rustscan, results in data/scan_engine_benchmark.csv
+    else:
+        scanner.scan()

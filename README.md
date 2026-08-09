@@ -78,12 +78,27 @@ In numbers: **17 → 24 action modules, 10 → 22 core modules, 7 → 14 web pag
        5. The Wi-Fi survey page with APs and clients
      ───────────────────────────────────────────────────────────────────────── -->
 
-| | |
-|:--:|:--:|
-| _**e-Paper panel** — screencap placeholder_ | _**Live stats dashboard** — screencap placeholder_ |
-| _**NetKB / cracked hosts** — screencap placeholder_ | _**Wi-Fi survey** — screencap placeholder_ |
+<p align="center">
+  <img width="180" alt="Bjorn on the e-Paper panel" src="https://github.com/user-attachments/assets/00a71f0c-0fa4-4407-9260-0703ba3ad810" />
+  <br><em>The e-Paper panel — live stats, mood and a running commentary.</em>
+</p>
 
-<p align="center"><em>Demo GIF placeholder — a full scan → attack → loot cycle.</em></p>
+<p align="center">
+  <img width="100%" alt="Live stats dashboard" src="https://github.com/user-attachments/assets/87791aab-4fc7-4b2a-941b-0f59a921203b" />
+  <br><em>The web dashboard — coins, level and every counter, pushed live over a WebSocket.</em>
+</p>
+
+<p align="center">
+  <img width="100%" alt="Network knowledge base" src="https://github.com/user-attachments/assets/6d4f64ca-cf79-44c0-8d7b-17c5df76eaad" />
+  <br><em>NetKB — every host, its open ports, and the state of every action against it.</em>
+</p>
+
+<!-- Room for more: the Wi-Fi survey page (APs + clients), and a GIF of a full
+     scan -> attack -> loot cycle in the live console. Drag an image or GIF into
+     a GitHub issue/PR comment to get a user-attachments URL, then add a block
+     in the same shape as those above. -->
+
+<p align="center"><em>More to come: the Wi-Fi survey page, and a demo GIF of a full scan → attack → loot cycle.</em></p>
 
 ---
 

@@ -107,7 +107,7 @@ In numbers: **17 → 24 action modules, 10 → 22 core modules, 7 → 14 web pag
 | Capability | What you get |
 |---|---|
 | **Host discovery** | Sweeps every subnet on every interface, not just the default gateway's. Merges into one `netkb.csv`; hosts are never dropped, only marked alive or dead. |
-| **Port discovery** | **RustScan by default** — benchmarked at **29× faster than nmap** on a Pi Zero 2 W (1.65 s vs 48.39 s over 8 hosts), finding the same ports. Falls back to nmap automatically if the binary is missing or a run fails. |
+| **Port discovery** | **RustScan by default** — benchmarked at **29× faster than nmap** on a Pi Zero 2 W (1.65 s vs 48.39 s over 8 hosts), finding the same ports. The armv7 binary ships in the repo, so a Pi install needs no download and no hour-long compile. Falls back to nmap automatically if it is missing or a run fails. |
 | **Service fingerprinting** | HTTP `Server` / `X-Powered-By` / `<title>` per web port, then templated web checks (nuclei-style, JSON not YAML — no new dependency). |
 | **Vulnerability matching** | Offline CVE enrichment from bundled signatures, with a service-line fallback for consumer gear nmap can't CPE-identify. |
 | **Credential attacks** | SSH, FTP, SMB, Telnet, SQL, RDP. Anything cracked joins a shared pool and is **tried first** on every other host and protocol — one crack tends to cascade. |

@@ -376,6 +376,40 @@ RUSTSCAN_VERSION="2.4.1"
 # binary has to be attached to the release by hand (or with `gh release upload`). If the asset is
 # missing the installer just compiles instead — slower, never fatal.
 RUSTSCAN_ARMHF_URL="https://github.com/Gixar/Bjorn-V3/releases/download/rustscan-v${RUSTSCAN_VERSION}-armhf/rustscan"
+# Install the RustScan binary shipped in this repo (rustscan/rustscan), if it fits this machine.
+# Returns 0 when it installed and actually runs; nonzero to let the caller fall back.
+#
+# Two checks, because a rustscan that exists but does not work is the worst outcome: NetworkScanner
+# resolves it, selects it as the engine, and every discovery pass then fails over to nmap while the
+# log says the engine is rustscan. Cheaper to refuse it here than to debug that on the device.
+install_rustscan_bundled() {
+    local arch="$1"
+    local bundled="$SCRIPT_DIR/rustscan/rustscan"
+
+    [ -f "$bundled" ] || return 1
+
+    # The bundled build is armv7 (ELF 32-bit ARM). armv6 (Pi Zero/1) cannot run it either.
+    case "$arch" in
+        armv7l|armhf) ;;
+        *) log "INFO" "Bundled RustScan is armv7; this machine is '$arch' — using the normal path."
+           return 1 ;;
+    esac
+
+    install -m 0755 "$bundled" /usr/local/bin/rustscan 2>/dev/null || {
+        log "WARNING" "Could not install the bundled RustScan — falling back."
+        return 1
+    }
+    # Measured, not assumed: run it. A truncated checkout or a bad Git LFS pointer produces a file
+    # of the right name and the wrong contents, and this is the only step that notices.
+    if /usr/local/bin/rustscan --version >/dev/null 2>&1; then
+        log "SUCCESS" "Installed bundled RustScan to /usr/local/bin/rustscan (no download, no compile)"
+        return 0
+    fi
+    rm -f /usr/local/bin/rustscan
+    log "WARNING" "Bundled RustScan did not run on this machine — removed it, falling back."
+    return 1
+}
+
 install_rustscan() {
     log "INFO" "Installing RustScan ${RUSTSCAN_VERSION} (optional — off by default; Bjorn uses nmap without it)..."
 
@@ -386,6 +420,14 @@ install_rustscan() {
 
     local arch asset
     arch="$(uname -m)"
+
+    # Bundled binary first: the repo ships rustscan/rustscan so a 32-bit ARM Pi skips both the
+    # download and the ~1h from-source compile. Only used when the architecture matches — the
+    # bundled build is armv7 (ELF 32-bit ARM), and dropping it onto an arm64 or x86 box would
+    # install a binary that cannot exec, which is worse than not installing one at all.
+    if install_rustscan_bundled "$arch"; then
+        return 0
+    fi
     case "$arch" in
         aarch64|arm64) asset="aarch64-linux-rustscan.zip" ;;          # 64-bit Raspberry Pi OS
         x86_64|amd64)  asset="x86_64-linux-rustscan.tar.gz.zip" ;;    # dev box
@@ -944,8 +986,10 @@ dry_run() {
     done
     if command -v rustscan >/dev/null 2>&1; then
         echo "  tool rustscan: found (optional — enables use_rustscan)"
+    elif [ -f "$SCRIPT_DIR/rustscan/rustscan" ] && [ "$(uname -m)" = "armv7l" ]; then
+        echo "  tool rustscan: not installed — the BUNDLED armv7 binary will be used (no download, no compile)"
     else
-        echo "  tool rustscan: not installed (optional — installer adds the prebuilt binary on arm64/amd64, compiles from source on 32-bit ARM)"
+        echo "  tool rustscan: not installed (installer uses the bundled armv7 binary on 32-bit ARM, the official prebuilt on arm64/amd64, else compiles)"
     fi
     if command -v bettercap >/dev/null 2>&1; then
         if [ -f /etc/systemd/system/bettercap.service ]; then

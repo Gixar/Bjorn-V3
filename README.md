@@ -29,6 +29,42 @@ WPA handshake capture on a second radio, all running while it tries to find its 
 
 ---
 
+## 🙏 Standing on infinition's shoulders
+
+**Bjorn is [__infinition__](https://github.com/infinition)'s creation, and this fork exists only
+because the original is good.** Everything that makes Bjorn *Bjorn* came from
+[infinition/Bjorn](https://github.com/infinition/Bjorn):
+
+- **The idea** — a Tamagotchi that raids your network. Nobody else framed offensive tooling that way.
+- **The personality** — the Viking on the e-Paper panel, the comments, the coins and levels. That is the reason people want one on their desk, and it is entirely theirs.
+- **The architecture** — the `b_class` action-module contract, the `netkb.csv` knowledge base, and the scan → act → idle orchestrator loop. Every module this fork adds plugs into their design without changing it.
+- **The attack chain** — SSH, FTP, SMB, Telnet, SQL and RDP brute-force plus the matching steal modules, and the nmap vulnerability scanner. This fork did not rewrite them; it feeds them better targets.
+- **The installer, the e-Paper driver work, and the whole hardware story.**
+
+This fork is **modernization and reach**, not reinvention. If you are new here, star
+[the original](https://github.com/infinition/Bjorn) first — and the
+[bjorn-detector](https://github.com/infinition/bjorn-detector) companion tool is theirs too.
+
+### What this fork adds on top
+
+| | infinition/Bjorn | Bjorn V3 |
+|---|---|---|
+| **Reach** | IP hosts on the one LAN it joined | **+ every subnet on every interface**, Bluetooth/BLE devices, 802.11 access points and clients, WPA handshakes |
+| **Works offline** | Idles until a network appears | **Surveys the air, hunts handshakes, and auto-rejoins** — the pocket-carry feature |
+| **Port discovery** | nmap | **RustScan by default — 29× faster** on a Pi Zero 2 W, with automatic nmap fallback |
+| **Target selection** | Actions run in load order | **Scored planner** — ranks every (host, action) pair each cycle and shows *why* it chose |
+| **Recon depth** | Port scan + nmap vuln scan | **+ HTTP fingerprinting, templated web checks, SNMP enum, offline CVE matching** |
+| **Credentials** | Cracked per host | **Shared pool, replayed first on every other host and protocol** — one crack cascades |
+| **Getting data out** | Read it on the device | **Telegram + SMTP auto-reporting, per-page dumps, one-click "everything in a zip"** |
+| **Score** | Recomputed live, could drop to zero | **Monotonic high-water mark, persisted across restarts** |
+| **Web UI** | 7 pages on `http.server` | **14 pages on FastAPI** + live WebSocket stats dashboard, log viewer, and a built-in `/help` |
+| **Reliability** | — | Atomic netkb writes, systemd watchdog, fail-fast config validation, battery-aware shutdown |
+| **Tests** | — | **281 tests + CI**, none requiring hardware |
+
+In numbers: **17 → 24 action modules, 10 → 22 core modules, 7 → 14 web pages, 0 → 281 tests.**
+
+---
+
 ## 📸 See it
 
 <!-- ─────────────────────────────────────────────────────────────────────────
@@ -42,15 +78,27 @@ WPA handshake capture on a second radio, all running while it tries to find its 
        5. The Wi-Fi survey page with APs and clients
      ───────────────────────────────────────────────────────────────────────── -->
 
-| | |
-|:--:|:--:|
-| <img width="122" height="251" alt="image" src="https://github.com/user-attachments/assets/00a71f0c-0fa4-4407-9260-0703ba3ad810" />
- | <img width="2551" height="784" alt="image" src="https://github.com/user-attachments/assets/87791aab-4fc7-4b2a-941b-0f59a921203b" />
- |
- | <img width="2023" height="579" alt="image" src="https://github.com/user-attachments/assets/6d4f64ca-cf79-44c0-8d7b-17c5df76eaad" />
- |
+<p align="center">
+  <img width="180" alt="Bjorn on the e-Paper panel" src="https://github.com/user-attachments/assets/00a71f0c-0fa4-4407-9260-0703ba3ad810" />
+  <br><em>The e-Paper panel — live stats, mood and a running commentary.</em>
+</p>
 
-<p align="center"><em>Demo GIF placeholder — a full scan → attack → loot cycle.</em></p>
+<p align="center">
+  <img width="100%" alt="Live stats dashboard" src="https://github.com/user-attachments/assets/87791aab-4fc7-4b2a-941b-0f59a921203b" />
+  <br><em>The web dashboard — coins, level and every counter, pushed live over a WebSocket.</em>
+</p>
+
+<p align="center">
+  <img width="100%" alt="Network knowledge base" src="https://github.com/user-attachments/assets/6d4f64ca-cf79-44c0-8d7b-17c5df76eaad" />
+  <br><em>NetKB — every host, its open ports, and the state of every action against it.</em>
+</p>
+
+<!-- Room for more: the Wi-Fi survey page (APs + clients), and a GIF of a full
+     scan -> attack -> loot cycle in the live console. Drag an image or GIF into
+     a GitHub issue/PR comment to get a user-attachments URL, then add a block
+     in the same shape as those above. -->
+
+<p align="center"><em>More to come: the Wi-Fi survey page, and a demo GIF of a full scan → attack → loot cycle.</em></p>
 
 ---
 
@@ -214,12 +262,29 @@ Report issues via GitHub with reproduction steps, logs and context.
 
 ## 📫 Credits
 
-- **Original author:** __infinition__ — [infinition/Bjorn](https://github.com/infinition/Bjorn)
-- **This fork:** [Gixar/Bjorn-V3](https://github.com/Gixar/Bjorn-V3)
+### The original
 
-Reused with attribution from the wider Bjorn ecosystem (all MIT): `HackCocaine/BjornCocaine`
-(WebUI-first ideas, Logs page), `LOCOSP/BjornWpaSecHarvester` (wpa-sec import),
-`PierreGode/Ragnar` (predecessor).
+**[__infinition__](https://github.com/infinition) created Bjorn** —
+[infinition/Bjorn](https://github.com/infinition/Bjorn). The concept, the Viking on the e-Paper
+screen, the module architecture, the attack chain and the hardware work are all theirs, and this
+fork inherits every one of them intact. Go star the original, join the
+[Discord](https://discord.com/invite/B3ZH9taVfT) and
+[r/Bjorn_CyberViking](https://www.reddit.com/r/Bjorn_CyberViking), and use their
+[bjorn-detector](https://github.com/infinition/bjorn-detector) to find your Pi on the network.
+
+If you want to support the person who built this thing, support them.
+
+### This fork
+
+[Gixar/Bjorn-V3](https://github.com/Gixar/Bjorn-V3) — pocket-carry recon, RustScan, the scored
+planner, the offline mode, and the test suite. MIT, same as upstream.
+
+### Also borrowed from the ecosystem (all MIT, with thanks)
+
+- [`HackCocaine/BjornCocaine`](https://github.com/HackCocaine/BjornCocaine) — WebUI-first thinking, the Logs page
+- [`LOCOSP/BjornWpaSecHarvester`](https://github.com/LOCOSP/BjornWpaSecHarvester) — wpa-sec import
+- [`PierreGode/Ragnar`](https://github.com/PierreGode/Ragnar) — the predecessor project
+- Adjacent projects that shaped features here: Pwnagotchi (display auto-detect, atomic writes, watchdog, battery), Kismet/airodump (the Wi-Fi survey), OpenHaystack/AirGuard (BLE tracker signatures), ProjectDiscovery nuclei (templated web checks), RustScan, and bettercap.
 
 ## 🌠 Stargazers
 

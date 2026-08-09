@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+## [2.5.1-beta] — 2026-08-08
+
+First **beta**: the alpha line's Pi-facing work is now confirmed on real hardware. A verification
+sweep on a Pi Zero 2 W closed most of the outstanding "needs the Pi" backlog (22 PASS on the first
+full run), and the two failures it found were real bugs, both fixed here.
+
+**Confirmed on hardware this cycle:** the collect-by-default flips (BLE recon writes
+`ble_devices.csv` unprompted; RustScan is the engine actually selected, 29× over nmap on 8 hosts),
+the radio-ownership rule, the action planner, offline mode, per-page dumps, and the whole
+previously-unreleased wave.
+
+**Implemented but NOT yet verified on hardware:** the entire Bettercap integration and Handshake
+Hunter (Stages A–E of `docs/BETTERCAP_PLAN.md`). Every part of it is **off by default**; a default
+install starts no thread, makes no request and installs no enabled service. Two version-specific
+unknowns remain deliberately isolated to one place each, and both self-report in the log rather
+than failing silently: bettercap's event schema and its per-AP handshake filenames. Treat the
+hunter as beta in the literal sense — the code is complete and tested, the hardware is not.
+
 ### Added
 - **Offline recon mode** (`offline_mode.py`, `offline_mode_enabled` default on) — the orchestrator
   had no idea whether it was connected to anything: with no network it swept an empty netkb forever

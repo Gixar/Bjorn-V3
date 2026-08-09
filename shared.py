@@ -906,3 +906,6 @@ def dedupe_csv(path):
 # dependency-free credential_pool module (unit-testable without SharedData); re-exported here so
 # the connectors keep importing them from `shared`.
 from credential_pool import known_cred_pairs, record_cracked_cred, credential_candidates  # noqa: E402,F401
+# Same reasoning for the display-settle pause: pure timing logic, so it lives in
+# retry_policy (the 'how long to wait' module) and is re-exported for the actions.
+from retry_policy import status_settle_seconds, settle_for_display  # noqa: E402,F401

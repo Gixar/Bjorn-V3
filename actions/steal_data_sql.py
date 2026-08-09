@@ -4,7 +4,7 @@ import time
 from sqlalchemy import create_engine
 from rich.console import Console
 from threading import Timer
-from shared import SharedData
+from shared import SharedData, settle_for_display
 from logger import Logger
 
 # Configure the logger
@@ -93,7 +93,7 @@ class StealDataSQL:
         try:
             if 'success' in row.get(self.b_parent_action, ''):
                 self.shared_data.bjornorch_status = "StealDataSQL"
-                time.sleep(5)
+                settle_for_display(self.shared_data)  # let the panel show this action's name
                 logger.info(f"Stealing data from {ip}:{port}...")
 
                 sqlfile = self.shared_data.sqlfile

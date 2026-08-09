@@ -6,7 +6,7 @@ from rich.console import Console
 from rich.progress import Progress, BarColumn, TextColumn, SpinnerColumn
 from ftplib import FTP
 from queue import Queue
-from shared import SharedData, netkb_targets, append_csv_rows, dedupe_csv, credential_candidates, record_cracked_cred
+from shared import SharedData, netkb_targets, append_csv_rows, dedupe_csv, credential_candidates, record_cracked_cred, settle_for_display
 from logger import Logger
 
 logger = Logger(name="ftp_connector.py", level=logging.DEBUG)
@@ -37,8 +37,7 @@ class FTPBruteforce:
         Executes the brute force attack and updates the shared data status.
         """
         self.shared_data.bjornorch_status = "FTPBruteforce"
-        # Wait a bit because it's too fast to see the status change
-        time.sleep(5)
+        settle_for_display(self.shared_data)  # let the panel show this action's name
         logger.info(f"Brute forcing FTP on {ip}:{port}...")
         success, results = self.bruteforce_ftp(ip, port)
         return 'success' if success else 'failed'

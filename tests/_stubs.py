@@ -82,6 +82,9 @@ def install():
         shared.credential_candidates = credential_candidates
         shared.record_cracked_cred = record_cracked_cred
         shared.known_cred_pairs = known_cred_pairs
+        from retry_policy import status_settle_seconds, settle_for_display
+        shared.status_settle_seconds = status_settle_seconds
+        shared.settle_for_display = settle_for_display
         shared.netkb_targets = lambda *a, **k: []
         shared.append_csv_rows = lambda *a, **k: None
         shared.dedupe_csv = lambda *a, **k: None

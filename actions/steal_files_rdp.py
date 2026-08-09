@@ -8,7 +8,7 @@ import logging
 import time
 from threading import Timer
 from rich.console import Console
-from shared import SharedData
+from shared import SharedData, settle_for_display
 from logger import Logger
 
 # Configure the logger
@@ -104,8 +104,7 @@ class StealFilesRDP:
         try:
             if 'success' in row.get(self.b_parent_action, ''):  # Verify if the parent action is successful
                 self.shared_data.bjornorch_status = "StealFilesRDP"
-                # Wait a bit because it's too fast to see the status change
-                time.sleep(5)
+                settle_for_display(self.shared_data)  # let the panel show this action's name
                 logger.info(f"Stealing files from {ip}:{port}...")
 
                 # Get RDP credentials from the cracked passwords file

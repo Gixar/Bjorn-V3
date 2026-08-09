@@ -2,6 +2,42 @@
 
 ## [Unreleased]
 
+## [3.0.0-beta] — 2026-08-09
+
+**First public release of the V3 fork** — [Gixar/Bjorn-V3](https://github.com/Gixar/Bjorn-V3),
+built on [infinition/Bjorn](https://github.com/infinition/Bjorn) and MIT like the original.
+
+The major-version bump is about *reach*, not a rewrite. Upstream Bjorn works on the one LAN it has
+joined; V3 keeps collecting when there is no network at all — Bluetooth recon, an 802.11 survey,
+and WPA handshake capture on a second radio, all running while it tries to find its way back
+online. Everything infinition built (the concept, the e-Paper personality, the `b_class` module
+contract, the netkb pipeline, the whole brute-force and steal chain) is inherited intact; the new
+modules plug into that design rather than replacing it.
+
+**Headline changes since the last public state of the fork:**
+
+- **Works in your pocket.** Offline mode surveys the air, hunts handshakes, and auto-rejoins.
+- **Collects by default.** BLE recon, the Wi-Fi survey and RustScan are on out of the box.
+- **RustScan is the default engine** — 29× faster than nmap on a Pi Zero 2 W, and the armv7 binary
+  now ships in the repo, so a Pi install needs no download and no hour-long compile.
+- **Scored work selection** — the orchestrator ranks every (host, action) pair each cycle and says
+  why it picked what it picked.
+- **Bettercap integration and a Handshake Hunter**, both off by default.
+- **Reach:** BLE tracker detection, 802.11 survey, HTTP fingerprinting, templated web checks, SNMP
+  enumeration, offline CVE matching, and a shared credential pool replayed across every host.
+- **Getting data out:** Telegram + SMTP reporting, per-page dumps, and one-click "everything in a
+  zip".
+- **Engineering:** FastAPI web UI (14 pages), live WebSocket stats, atomic netkb writes, a systemd
+  watchdog, fail-fast config validation, and **281 tests** that need no hardware.
+
+**Why beta, stated plainly.** The alpha line's Pi-facing work is confirmed on a Pi Zero 2 W:
+RustScan, BLE recon, monitor-mode capture *and* release with the uplink guard, the planner, offline
+mode, the web UI, the USB gadget, the e-Paper pipeline. **The Bettercap integration and Handshake
+Hunter are complete and unit-tested but have never run on a radio.** Both are off by default, and
+their two version-specific unknowns — bettercap's event schema and its handshake filenames — are
+each isolated to one place and warn in the log rather than failing silently. When a hunting session
+has been observed working on hardware, this becomes 3.0.0.
+
 ### Added
 - **"Everything in one file" on the Telegram page** — a **Compile** button packs every non-empty
   collected file (netkb, scan results, fingerprints, BLE and Wi-Fi surveys, vulnerabilities,

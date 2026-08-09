@@ -47,7 +47,7 @@ WPA handshake capture on a second radio, all running while it tries to find its 
 | <img width="122" height="251" alt="image" src="https://github.com/user-attachments/assets/00a71f0c-0fa4-4407-9260-0703ba3ad810" />
  | <img width="2551" height="784" alt="image" src="https://github.com/user-attachments/assets/87791aab-4fc7-4b2a-941b-0f59a921203b" />
  |
-| _**NetKB / cracked hosts** — screencap placeholder_ | <img width="2023" height="579" alt="image" src="https://github.com/user-attachments/assets/6d4f64ca-cf79-44c0-8d7b-17c5df76eaad" />
+ | <img width="2023" height="579" alt="image" src="https://github.com/user-attachments/assets/6d4f64ca-cf79-44c0-8d7b-17c5df76eaad" />
  |
 
 <p align="center"><em>Demo GIF placeholder — a full scan → attack → loot cycle.</em></p>

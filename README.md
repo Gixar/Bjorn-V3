@@ -1,7 +1,8 @@
 # <img src="https://github.com/user-attachments/assets/c5eb4cc1-0c3d-497d-9422-1614651a84ab" alt="Bjorn" width="33"> Bjorn V3
 
 ![Python](https://img.shields.io/badge/Python-3776AB?logo=python&logoColor=fff)
-![Status](https://img.shields.io/badge/Status-Beta-blue.svg)
+![Version](https://img.shields.io/badge/version-3.0.0--beta-blue.svg)
+![Status](https://img.shields.io/badge/status-beta-orange.svg)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 ![CI](https://github.com/Gixar/Bjorn-V3/actions/workflows/ci.yml/badge.svg)
 ![Tests](https://img.shields.io/badge/tests-281%20passing-brightgreen)
@@ -203,7 +204,7 @@ turn it on.
 
 ## ✅ What's verified, and what isn't
 
-This project distinguishes "the code is done" from "the hardware agrees", because they are
+**`v3.0.0-beta`** — this project distinguishes "the code is done" from "the hardware agrees", because they are
 different claims.
 
 **Confirmed on a Pi Zero 2 W:** RustScan at 29×, BLE recon, monitor-mode capture *and* release with

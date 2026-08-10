@@ -5,7 +5,7 @@
 ![Status](https://img.shields.io/badge/status-beta-orange.svg)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 ![CI](https://github.com/Gixar/Bjorn-V3/actions/workflows/ci.yml/badge.svg)
-![Tests](https://img.shields.io/badge/tests-281%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-313%20passing-brightgreen)
 
 [![Reddit](https://img.shields.io/badge/Reddit-Bjorn__CyberViking-orange?style=for-the-badge&logo=reddit)](https://www.reddit.com/r/Bjorn_CyberViking)
 [![Discord](https://img.shields.io/badge/Discord-Join%20Us-7289DA?style=for-the-badge&logo=discord)](https://discord.com/invite/B3ZH9taVfT)
@@ -60,9 +60,9 @@ This fork is **modernization and reach**, not reinvention. If you are new here, 
 | **Score** | Recomputed live, could drop to zero | **Monotonic high-water mark, persisted across restarts** |
 | **Web UI** | 7 pages on `http.server` | **14 pages on FastAPI** + live WebSocket stats dashboard, log viewer, and a built-in `/help` |
 | **Reliability** | — | Atomic netkb writes, systemd watchdog, fail-fast config validation, battery-aware shutdown |
-| **Tests** | — | **281 tests + CI**, none requiring hardware |
+| **Tests** | — | **313 tests + CI**, none requiring hardware |
 
-In numbers: **17 → 24 action modules, 10 → 22 core modules, 7 → 14 web pages, 0 → 281 tests.**
+In numbers: **17 → 22 action modules, 10 → 22 core modules, 7 → 14 web pages, 0 → 313 tests.**
 
 ---
 
@@ -247,7 +247,7 @@ Attack modules follow a small contract — drop a file in `actions/`, declare `b
 it. See [`DEVELOPMENT.md`](DEVELOPMENT.md).
 
 ```bash
-pytest tests/          # 281 tests, no hardware required
+pytest tests/          # 313 tests, no hardware required
 ```
 
 ---

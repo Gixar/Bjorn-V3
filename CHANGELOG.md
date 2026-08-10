@@ -2,6 +2,51 @@
 
 ## [Unreleased]
 
+## [3.0.1-beta] — 2026-08-09
+
+A consolidation release: no new features, only hardening and performance of what
+3.0.0-beta already shipped. **3.0.0-beta users should upgrade** — the first item is a
+crash that release introduced.
+
+### Fixed
+- **`NameError` when the Handshake Hunter was enabled.** `orchestrator.py` called
+  `bettercap_pwn.Hunter(...)` without importing the module, so `bettercap_pwn_enabled`
+  raised on every offline cycle. Shipped in 3.0.0-beta; the tests missed it because they
+  injected a fake hunter, stubbing out the exact broken line.
+- **`systemctl stop/restart` never completed cleanly.** The shutdown path joined the web
+  thread without telling uvicorn to stop, so every restart waited out `TimeoutStopSec` and
+  died to `SIGKILL` — on a device whose atomic-write and watchdog design exists to avoid
+  exactly that.
+- **A single steal timeout latched the whole steal subsystem off.** The five steal modules
+  are long-lived singletons; once the 240s timer fired for any host, every later steal on
+  every host returned `'failed'` until restart. Reset per run now.
+- **A brute-force worker that raised hung the orchestrator forever.** If a connect raised —
+  a missing `xfreerdp` (a stock Pi), a non-ASCII wordlist entry — the worker died before
+  `queue.task_done()` and `queue.join()` blocked permanently. All six connectors guarded.
+- **Command injection** in the RDP/SMB attack paths, where a filename read off the *target's*
+  redirected drive was run through a shell as root. argv lists and `shutil.copy2` throughout;
+  no `shell=True` remains in `actions/`.
+- **`nmap_vuln_scanner` reported failure as success** in writing, so a failed scan was never
+  retried. Now `'skipped'`.
+- FTP connects are bounded by a timeout; an unreachable host no longer stalls the worker.
+
+### Performance (Pi Zero)
+- **`screen.png` is written only when the frame changed** — was PNG-encoded and `fsync()`d to
+  the SD card once a second regardless, the largest single source of card wear.
+- **Six brute-force loops no longer pin a core** for the whole of every attack.
+- **Connectors stopped re-parsing `netkb.csv`** for two fields the orchestrator already passed in.
+- **Telegram checks the rate-limit clock before** compiling and hashing the whole dataset it
+  usually throws away.
+- The per-action panel pause is derived from the display cadence (≈2s) instead of a hardcoded 5s.
+
+### Removed
+- Dead code: the two `log_standalone` stub actions (which ran every idle cycle), several
+  unreferenced/broken methods, and a startup `clear` shell fork.
+
+### Tests
+- The offensive core — six brute-force connectors and five steal modules — went from almost no
+  coverage to a real suite. **281 → 313 tests**, none requiring hardware.
+
 ## [3.0.0-beta] — 2026-08-09
 
 **First public release of the V3 fork** — [Gixar/Bjorn-V3](https://github.com/Gixar/Bjorn-V3),

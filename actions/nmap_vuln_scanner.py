@@ -113,8 +113,15 @@ class NmapVulnScanner:
             self.save_results(row["MAC Address"], ip, scan_result)
             return 'success'
         else:
-            return 'success' # considering failed as success as we just need to scan vulnerabilities once
-            # return 'failed'
+            # 'skipped', not 'success'. scan_vulnerabilities() returns None only when it raised, so
+            # this branch is "the scan did not happen". Reporting it as success wrote
+            # success_<ts> into netkb, counted a success in the run report, and — with
+            # retry_success_actions off — meant the host was never scanned again. The original
+            # intent ("only scan once") is preserved by 'skipped': it leaves no netkb mark and no
+            # run-report entry, so the host is retried, but nothing claims work that did not happen.
+            # This is the defect class the codebase keeps rediscovering: a status that cannot fail.
+            logger.warning(f"Vulnerability scan did not complete for {ip}; reporting skipped.")
+            return 'skipped'
 
     def parse_vulnerabilities(self, scan_result):
         """

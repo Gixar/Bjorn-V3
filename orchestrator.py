@@ -32,6 +32,7 @@ from retry_policy import retry_wait_remaining
 from action_planner import Planner, load_service_hints, load_vuln_ips, plan_idle_seconds
 import offline_mode
 import bettercap_client
+import bettercap_pwn
 
 logger = Logger(name="orchestrator.py", level=logging.DEBUG)
 

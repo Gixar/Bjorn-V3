@@ -93,6 +93,14 @@ class StealDataSQL:
         try:
             if 'success' in row.get(self.b_parent_action, ''):
                 self.shared_data.bjornorch_status = "StealDataSQL"
+                # Per-run state, reset here rather than only in __init__. These objects are
+                # long-lived singletons built once by orchestrator.load_action, so the flags
+                # latched: once the 240s timer fired for ANY host, stop_execution stayed True
+                # and every later steal on every host broke out immediately and returned
+                # 'failed' — permanently, until the service restarted. Conversely a single
+                # success left *_connected True and disarmed the timeout for good.
+                self.stop_execution = False
+                self.sql_connected = False
                 settle_for_display(self.shared_data)  # let the panel show this action's name
                 logger.info(f"Stealing data from {ip}:{port}...")
 
@@ -112,12 +120,21 @@ class StealDataSQL:
                     logger.error(f"No valid credentials found for {ip}. Skipping...")
                     return 'failed'
 
+                # Token this run. timer.cancel() is only reached on the success path, so a failed
+                # steal leaves a live 240s timer behind; without this it would fire midway
+                # through a LATER host's steal and abort it by setting stop_execution.
+                run_token = object()
+                self._run_token = run_token
+
                 def timeout():
+                    if getattr(self, '_run_token', None) is not run_token:
+                        return  # a later execute() owns the flags now
                     if not self.sql_connected:
                         logger.error(f"No SQL connection established within 4 minutes for {ip}. Marking as failed.")
                         self.stop_execution = True
 
                 timer = Timer(240, timeout)
+                timer.daemon = True  # never hold up shutdown waiting for a 4-minute timer
                 timer.start()
 
                 success = False

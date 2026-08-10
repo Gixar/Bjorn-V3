@@ -76,6 +76,27 @@ def _run_idle(shared, hunter, events):
     return events
 
 
+def test_hunter_really_constructs_one():
+    """The real `_hunter()`, not an injected fake.
+
+    Every other test in this file passes `_hunter=lambda: hunter`, which stubs out the exact line
+    that was broken: `_hunter` called `bettercap_pwn.Hunter(...)` while orchestrator.py only
+    imported `bettercap_client`, so enabling the hunter raised NameError on every offline cycle —
+    shipped in v3.0.0-beta and invisible to a suite that mocked the call away. A test that replaces
+    the thing under test does not test it.
+    """
+    import bettercap_pwn
+    import orchestrator as orch
+
+    shared = _shared()
+    me = types.SimpleNamespace(shared_data=shared)
+    hunter = orch.Orchestrator._hunter(me)
+    assert isinstance(hunter, bettercap_pwn.Hunter)
+    # cached on shared_data so the web panel and the orchestrator see the same object
+    assert shared.hunter is hunter
+    assert orch.Orchestrator._hunter(me) is hunter
+
+
 def test_the_hunter_never_outlives_the_idle_window():
     """The invariant the whole feature rests on: whatever happens inside the window, the hunter is
     stopped before it returns — so the next cycle's reconnect always finds a managed radio."""

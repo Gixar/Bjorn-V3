@@ -364,16 +364,21 @@ def send_targets(shared_data, force=False):
     if not have_telegram and not getattr(shared_data, "smtp_enabled", False):
         return (False, "no delivery channel configured", False)
 
-    data = compile_targets(shared_data, getattr(shared_data, "telegram_include_creds", True))
-    sig = _signature(data)
     state_path = os.path.join(shared_data.datadir, "telegram_state.json")
     state = _load_json(state_path)
     now = time.time()
-    if not force:
-        if sig == state.get("hash"):
-            return (True, "no change since last send", False)
-        if now - state.get("ts", 0) < getattr(shared_data, "telegram_min_interval", 300):
-            return (True, "rate-limited (min interval not elapsed)", False)
+
+    # Clock first, data second. TelegramReport gets a turn on every idle cycle, and the rate floor
+    # (default 300s) rejects most of them — but compile_targets() + _signature() ran *before* the
+    # check, so every rejected turn still read netkb plus seven CSVs and SHA-256'd the lot before
+    # throwing the result away. The interval check needs no data at all.
+    if not force and now - state.get("ts", 0) < getattr(shared_data, "telegram_min_interval", 300):
+        return (True, "rate-limited (min interval not elapsed)", False)
+
+    data = compile_targets(shared_data, getattr(shared_data, "telegram_include_creds", True))
+    sig = _signature(data)
+    if not force and sig == state.get("hash"):
+        return (True, "no change since last send", False)
 
     payload = json.dumps(
         {"generated_at": datetime.now(timezone.utc).isoformat(), "targets": data},

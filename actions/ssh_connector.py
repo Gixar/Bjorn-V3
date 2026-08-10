@@ -6,6 +6,7 @@ import os
 import paramiko
 import socket
 import threading
+import time
 import logging
 from queue import Queue
 from rich.console import Console
@@ -32,12 +33,12 @@ class SSHBruteforce:
         self.ssh_connector = SSHConnector(shared_data)
         logger.info("SSHConnector initialized.")
 
-    def bruteforce_ssh(self, ip, port):
+    def bruteforce_ssh(self, ip, port, row=None):
         """
         Run the SSH brute force attack on the given IP and port.
         """
         logger.info(f"Running bruteforce_ssh on {ip}:{port}...")
-        return self.ssh_connector.run_bruteforce(ip, port)
+        return self.ssh_connector.run_bruteforce(ip, port, row)
     
     def execute(self, ip, port, row, status_key):
         """
@@ -45,7 +46,7 @@ class SSHBruteforce:
         """
         logger.info(f"Executing SSHBruteforce on {ip}:{port}...")
         self.shared_data.bjornorch_status = "SSHBruteforce"
-        success, results = self.bruteforce_ssh(ip, port)
+        success, results = self.bruteforce_ssh(ip, port, row)
         return 'success' if success else 'failed'
 
 class SSHConnector:
@@ -112,15 +113,22 @@ class SSHConnector:
             progress.update(task_id, advance=1)
 
 
-    def run_bruteforce(self, adresse_ip, port):
-        self.load_scan_file()  # Reload the scan file to get the latest IPs and ports
-
-        match = next((r for r in self.scan if r.get('IPs') == adresse_ip), None)
-        if match is None:
-            logger.error(f"No netkb entry for {adresse_ip}; skipping.")
-            return False, []
-        mac_address = match['MAC Address']
-        hostname = match['Hostnames']
+    def run_bruteforce(self, adresse_ip, port, row=None):
+        # netkb already came in as `row` from the orchestrator, which read it this cycle.
+        # Re-parsing the whole file here to recover two fields we were handed cost a full
+        # csv.DictReader pass per host per action. `row=None` keeps the standalone __main__
+        # path (and any other caller) working by falling back to the old lookup.
+        if row is not None:
+            mac_address = row.get('MAC Address', '')
+            hostname = row.get('Hostnames', '')
+        else:
+            self.load_scan_file()  # Reload the scan file to get the latest IPs and ports
+            match = next((r for r in self.scan if r.get('IPs') == adresse_ip), None)
+            if match is None:
+                logger.error(f"No netkb entry for {adresse_ip}; skipping.")
+                return False, []
+            mac_address = match['MAC Address']
+            hostname = match['Hostnames']
 
         candidates = credential_candidates(self.shared_data, self.users, self.passwords)
         total_tasks = len(candidates)
@@ -149,6 +157,11 @@ class SSHConnector:
                         self.queue.get()
                         self.queue.task_done()
                     break
+                # Yield. With no exit signal this body does nothing, so it span a core flat
+                # out for the whole attack, competing with the worker threads it waits on.
+                # queue.join() below already blocks correctly; this loop exists only to
+                # notice an exit signal and drain the queue.
+                time.sleep(0.2)
 
             self.queue.join()
 

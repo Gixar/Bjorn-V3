@@ -32,12 +32,12 @@ class RDPBruteforce:
         self.rdp_connector = RDPConnector(shared_data)
         logger.info("RDPConnector initialized.")
 
-    def bruteforce_rdp(self, ip, port):
+    def bruteforce_rdp(self, ip, port, row=None):
         """
         Run the RDP brute force attack on the given IP and port.
         """
         logger.info(f"Running bruteforce_rdp on {ip}:{port}...")
-        return self.rdp_connector.run_bruteforce(ip, port)
+        return self.rdp_connector.run_bruteforce(ip, port, row)
     
     def execute(self, ip, port, row, status_key):
         """
@@ -45,7 +45,7 @@ class RDPBruteforce:
         """
         logger.info(f"Executing RDPBruteforce on {ip}:{port}...")
         self.shared_data.bjornorch_status = "RDPBruteforce"
-        success, results = self.bruteforce_rdp(ip, port)
+        success, results = self.bruteforce_rdp(ip, port, row)
         return 'success' if success else 'failed'
 
 class RDPConnector:
@@ -116,8 +116,7 @@ class RDPConnector:
             self.queue.task_done()
             progress.update(task_id, advance=1)
 
-    def run_bruteforce(self, adresse_ip, port):
-        self.load_scan_file()  # Reload the scan file to get the latest IPs and ports
+    def run_bruteforce(self, adresse_ip, port, row=None):
 
         candidates = credential_candidates(self.shared_data, self.users, self.passwords)
         total_tasks = len(candidates)
@@ -134,12 +133,21 @@ class RDPConnector:
         with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), BarColumn(), TextColumn("[progress.percentage]{task.percentage:>3.0f}%")) as progress:
             task_id = progress.add_task("[cyan]Bruteforcing RDP...", total=total_tasks)
 
-            match = next((r for r in self.scan if r.get('IPs') == adresse_ip), None)
-            if match is None:
-                logger.error(f"No netkb entry for {adresse_ip}; skipping.")
-                return False, []
-            mac_address = match['MAC Address']
-            hostname = match['Hostnames']
+            # netkb already came in as `row` from the orchestrator, which read it this cycle.
+            # Re-parsing the whole file to recover two fields we were handed cost a full
+            # csv.DictReader pass per host per action. `row=None` keeps the standalone __main__
+            # path working by falling back to the old lookup.
+            if row is not None:
+                mac_address = row.get('MAC Address', '')
+                hostname = row.get('Hostnames', '')
+            else:
+                self.load_scan_file()
+                match = next((r for r in self.scan if r.get('IPs') == adresse_ip), None)
+                if match is None:
+                    logger.error(f"No netkb entry for {adresse_ip}; skipping.")
+                    return False, []
+                mac_address = match['MAC Address']
+                hostname = match['Hostnames']
 
             for _ in range(self.shared_data.bruteforce_threads):  # config-driven, core-aware (shared_data.bruteforce_threads)
                 t = threading.Thread(target=self.worker, args=(progress, task_id, success_flag))
@@ -153,6 +161,11 @@ class RDPConnector:
                         self.queue.get()
                         self.queue.task_done()
                     break
+                # Yield. With no exit signal this body does nothing, so it span a core flat
+                # out for the whole attack, competing with the worker threads it waits on.
+                # queue.join() below already blocks correctly; this loop exists only to
+                # notice an exit signal and drain the queue.
+                time.sleep(0.2)
 
             self.queue.join()
 

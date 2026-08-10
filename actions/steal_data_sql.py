@@ -4,7 +4,7 @@ import time
 from sqlalchemy import create_engine
 from rich.console import Console
 from threading import Timer
-from shared import SharedData
+from shared import SharedData, settle_for_display
 from logger import Logger
 
 # Configure the logger
@@ -93,7 +93,15 @@ class StealDataSQL:
         try:
             if 'success' in row.get(self.b_parent_action, ''):
                 self.shared_data.bjornorch_status = "StealDataSQL"
-                time.sleep(5)
+                # Per-run state, reset here rather than only in __init__. These objects are
+                # long-lived singletons built once by orchestrator.load_action, so the flags
+                # latched: once the 240s timer fired for ANY host, stop_execution stayed True
+                # and every later steal on every host broke out immediately and returned
+                # 'failed' — permanently, until the service restarted. Conversely a single
+                # success left *_connected True and disarmed the timeout for good.
+                self.stop_execution = False
+                self.sql_connected = False
+                settle_for_display(self.shared_data)  # let the panel show this action's name
                 logger.info(f"Stealing data from {ip}:{port}...")
 
                 sqlfile = self.shared_data.sqlfile
@@ -112,12 +120,21 @@ class StealDataSQL:
                     logger.error(f"No valid credentials found for {ip}. Skipping...")
                     return 'failed'
 
+                # Token this run. timer.cancel() is only reached on the success path, so a failed
+                # steal leaves a live 240s timer behind; without this it would fire midway
+                # through a LATER host's steal and abort it by setting stop_execution.
+                run_token = object()
+                self._run_token = run_token
+
                 def timeout():
+                    if getattr(self, '_run_token', None) is not run_token:
+                        return  # a later execute() owns the flags now
                     if not self.sql_connected:
                         logger.error(f"No SQL connection established within 4 minutes for {ip}. Marking as failed.")
                         self.stop_execution = True
 
                 timer = Timer(240, timeout)
+                timer.daemon = True  # never hold up shutdown waiting for a 4-minute timer
                 timer.start()
 
                 success = False
@@ -160,18 +177,16 @@ class StealDataSQL:
                     return 'success'
 
             else:
+                # 'failed', to match the four sibling steal modules. For a host action the
+                # orchestrator already gates on the parent before calling execute() and maps any
+                # non-'success' return to failed_<ts> regardless, so this is purely about removing
+                # the odd-one-out drift the four others don't have.
                 logger.info(f"Skipping {ip} as it was not successfully bruteforced")
-                return 'skipped'
+                return 'failed'
                 
         except Exception as e:
             logger.error(f"Unexpected error during execution for {ip}:{port}: {e}")
             return 'failed'
-
-    def b_parent_action(self, row):
-        """
-        Get the parent action status from the row.
-        """
-        return row.get(b_parent, {}).get(b_status, '')
 
 if __name__ == "__main__":
     shared_data = SharedData()

@@ -29,17 +29,20 @@ class SQLBruteforce:
         self.sql_connector = SQLConnector(shared_data)
         logger.info("SQLConnector initialized.")
     
-    def bruteforce_sql(self, ip, port):
+    def bruteforce_sql(self, ip, port, row=None):
         """
         Run the SQL brute force attack on the given IP and port.
         """
-        return self.sql_connector.run_bruteforce(ip, port)
+        return self.sql_connector.run_bruteforce(ip, port, row)
     
     def execute(self, ip, port, row, status_key):
         """
         Execute the brute force attack and update status.
         """
-        success, results = self.bruteforce_sql(ip, port)
+        # The only connector that never set this, so the panel kept showing the previous
+        # action for the whole SQL attack.
+        self.shared_data.bjornorch_status = "SQLBruteforce"
+        success, results = self.bruteforce_sql(ip, port, row)
         return 'success' if success else 'failed'
 
 class SQLConnector:
@@ -107,26 +110,32 @@ class SQLConnector:
                 break
 
             adresse_ip, user, password, port = self.queue.get()
-            success, databases = self.sql_connect(adresse_ip, user, password)
-            
-            if success:
-                with self.lock:
-                    # Ajouter une entrée pour chaque base de données trouvée
-                    for db in databases:
-                        self.results.append([adresse_ip, user, password, port, db])
-                    record_cracked_cred(self.shared_data, user, password)
+            # try/finally so task_done() ALWAYS runs — a raise here would otherwise kill the worker
+            # before it and hang the orchestrator on queue.join().
+            try:
+                success, databases = self.sql_connect(adresse_ip, user, password)
 
-                    logger.success(f"Found credentials for IP: {adresse_ip} | User: {user} | Password: {password}")
-                    logger.success(f"Databases found: {', '.join(databases)}")
-                    self.save_results()
-                    self.remove_duplicates()
-                    success_flag[0] = True
-                    
-            self.queue.task_done()
+                if success:
+                    with self.lock:
+                        # Ajouter une entrée pour chaque base de données trouvée
+                        for db in databases:
+                            self.results.append([adresse_ip, user, password, port, db])
+                        record_cracked_cred(self.shared_data, user, password)
+
+                        logger.success(f"Found credentials for IP: {adresse_ip} | User: {user} | Password: {password}")
+                        logger.success(f"Databases found: {', '.join(databases)}")
+                        self.save_results()
+                        self.remove_duplicates()
+                        success_flag[0] = True
+            except Exception as e:
+                logger.error(f"sql_connect failed for {adresse_ip} as {user}: {e}")
+            finally:
+                self.queue.task_done()
             progress.update(task_id, advance=1)
 
-    def run_bruteforce(self, adresse_ip, port):
-        self.load_scan_file()
+    def run_bruteforce(self, adresse_ip, port, row=None):
+        # No load_scan_file() here: this connector parsed the whole of netkb.csv and then never
+        # touched self.scan — a full CSV read per host per cycle for nothing.
 
         candidates = credential_candidates(self.shared_data, self.users, self.passwords)
         total_tasks = len(candidates)
@@ -155,6 +164,11 @@ class SQLConnector:
                         self.queue.get()
                         self.queue.task_done()
                     break
+                # Yield. With no exit signal this body does nothing, so it span a core flat
+                # out for the whole attack, competing with the worker threads it waits on.
+                # queue.join() below already blocks correctly; this loop exists only to
+                # notice an exit signal and drain the queue.
+                time.sleep(0.2)
 
             self.queue.join()
 

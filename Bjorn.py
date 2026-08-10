@@ -8,7 +8,6 @@
 
 # Functions:
 # - handle_exit:  handles the termination of the main and display threads.
-# - handle_exit_webserver:  handles the termination of the web server thread.
 # - is_wifi_connected: Checks for Wi-Fi connectivity using the nmcli command.
 
 # The script starts by loading shared data configurations, then initializes and sta
@@ -26,7 +25,7 @@ import bettercap_client
 from init_shared import shared_data
 from display import Display, handle_exit_display
 from comment import Commentaireia
-from webapp import web_thread, handle_exit_web
+from webapp import web_thread
 from orchestrator import Orchestrator
 from logger import Logger
 
@@ -144,6 +143,12 @@ class Bjorn:
         display_thread.start()
         return display_thread
 
+# Longest any single thread may hold up shutdown. systemd will SIGKILL on TimeoutStopSec anyway;
+# the point of bounding each join is to reach the clean-exit log and flush, rather than being
+# killed mid-write on a device whose atomic-write and watchdog design exists to avoid exactly that.
+_JOIN_TIMEOUT = 10
+
+
 def handle_exit(sig, frame, display_thread, bjorn_thread, web_thread):
     """Handles the termination of the main, display, and web threads."""
     shared_data.should_exit = True
@@ -151,12 +156,20 @@ def handle_exit(sig, frame, display_thread, bjorn_thread, web_thread):
     shared_data.display_should_exit = True  # Ensure display stops
     shared_data.webapp_should_exit = True  # Ensure web server stops
     handle_exit_display(sig, frame, display_thread)
-    if display_thread.is_alive():
-        display_thread.join()
-    if bjorn_thread.is_alive():
-        bjorn_thread.join()
+
+    # Uvicorn only returns from serve() when server.should_exit is set, and shutdown() is the only
+    # thing that sets it. Without this the join below blocked forever: webapp.py registers its own
+    # SIGINT/SIGTERM handlers at import, but __main__ re-registers these ones afterwards and wins,
+    # so handle_exit_web never ran. Every `systemctl stop/restart` waited out TimeoutStopSec and
+    # died to SIGKILL.
     if web_thread.is_alive():
-        web_thread.join()
+        web_thread.shutdown()
+
+    for name, thread in (("display", display_thread), ("main", bjorn_thread), ("web", web_thread)):
+        if thread.is_alive():
+            thread.join(timeout=_JOIN_TIMEOUT)
+            if thread.is_alive():
+                logger.warning(f"{name} thread did not stop within {_JOIN_TIMEOUT}s; exiting anyway.")
     logger.info("Main loop finished. Clean exit.")
     sys.exit(0)  # Used sys.exit(0) instead of exit(0)
 
@@ -193,5 +206,8 @@ if __name__ == "__main__":
 
     except Exception as e:
         logger.error(f"An exception occurred during thread start: {e}")
-        handle_exit_display(signal.SIGINT, None)
+        # 3 args, not 2: handle_exit_display(signum, frame, display_thread). The old
+        # two-arg call raised TypeError from inside the error handler, replacing the
+        # real startup failure with a confusing one.
+        handle_exit_display(signal.SIGINT, None, locals().get('display_thread'))
         exit(1)

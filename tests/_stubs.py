@@ -82,10 +82,97 @@ def install():
         shared.credential_candidates = credential_candidates
         shared.record_cracked_cred = record_cracked_cred
         shared.known_cred_pairs = known_cred_pairs
+        from retry_policy import status_settle_seconds, settle_for_display
+        shared.status_settle_seconds = status_settle_seconds
+        shared.settle_for_display = settle_for_display
         shared.netkb_targets = lambda *a, **k: []
         shared.append_csv_rows = lambda *a, **k: None
         shared.dedupe_csv = lambda *a, **k: None
         sys.modules["shared"] = shared
+
+    # pysmb, pymysql and sqlalchemy: the last three third-party imports blocking the offensive
+    # core from being importable under test. smb_connector / steal_files_smb / sql_connector /
+    # steal_data_sql could not be imported at all before these existed, which is most of why they
+    # had no tests.
+    if "smb" not in sys.modules:
+        smb_pkg = types.ModuleType("smb")
+        smb_conn_mod = types.ModuleType("smb.SMBConnection")
+        smb_base_mod = types.ModuleType("smb.base")
+
+        class SMBConnection:
+            def __init__(self, *a, **k):
+                pass
+
+            def connect(self, *a, **k):
+                return True
+
+            def listShares(self, *a, **k):
+                return []
+
+            def listPath(self, *a, **k):
+                return []
+
+            def close(self):
+                pass
+
+        class NotConnectedError(Exception):
+            pass
+
+        smb_conn_mod.SMBConnection = SMBConnection
+        smb_base_mod.NotConnectedError = NotConnectedError
+        smb_base_mod.SharedFile = type("SharedFile", (), {})
+        smb_pkg.SMBConnection = smb_conn_mod
+        smb_pkg.base = smb_base_mod
+        sys.modules["smb"] = smb_pkg
+        sys.modules["smb.SMBConnection"] = smb_conn_mod
+        sys.modules["smb.base"] = smb_base_mod
+
+    # telnetlib was DEPRECATED in 3.11 and REMOVED from the stdlib in 3.13. The Pi runs 3.11 so
+    # telnet_connector / steal_files_telnet import fine there today, but they will stop importing
+    # on any newer interpreter — recorded in docs/BACKLOG.md. Stubbed here so the suite runs on a
+    # modern dev box regardless.
+    if "telnetlib" not in sys.modules:
+        telnetlib = types.ModuleType("telnetlib")
+
+        class Telnet:
+            def __init__(self, *a, **k):
+                pass
+
+            def read_until(self, *a, **k):
+                return b""
+
+            def write(self, *a, **k):
+                pass
+
+            def expect(self, *a, **k):
+                return (-1, None, b"")
+
+            def close(self):
+                pass
+
+        telnetlib.Telnet = Telnet
+        sys.modules["telnetlib"] = telnetlib
+
+    if "pymysql" not in sys.modules:
+        pymysql = types.ModuleType("pymysql")
+
+        class _MySQLError(Exception):
+            pass
+
+        pymysql.Error = _MySQLError
+        pymysql.MySQLError = _MySQLError
+        pymysql.connect = lambda *a, **k: (_ for _ in ()).throw(_MySQLError("stubbed"))
+        sys.modules["pymysql"] = pymysql
+
+    if "sqlalchemy" not in sys.modules:
+        sqlalchemy = types.ModuleType("sqlalchemy")
+        sqlalchemy.create_engine = lambda *a, **k: None
+        sqlalchemy.text = lambda q: q
+        exc_mod = types.ModuleType("sqlalchemy.exc")
+        exc_mod.SQLAlchemyError = type("SQLAlchemyError", (Exception,), {})
+        sqlalchemy.exc = exc_mod
+        sys.modules["sqlalchemy"] = sqlalchemy
+        sys.modules["sqlalchemy.exc"] = exc_mod
 
     if "logger" not in sys.modules:
         logger_mod = types.ModuleType("logger")

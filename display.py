@@ -12,6 +12,7 @@
 # - Checking and displaying the status of Bluetooth, Wi-Fi, PAN, and USB connections.
 # - Providing methods to update the display with comments from an AI (Commentaireia) and generating images dynamically.
 
+import io
 import threading
 import time
 import os
@@ -44,6 +45,11 @@ class Display:
         # -1 forces a compute on the first tick (data_generation starts at 0).
         self._last_shared_gen = -1
         self._last_vuln_gen = -1
+        # Last screen.png we actually wrote, so an unchanged frame costs no SD write.
+        self._last_screen_png = None
+        # Assigned by the update_main_image thread; the render loop reads it before
+        # that thread's first pass, which raised AttributeError into the retry loop.
+        self.main_image = None
 
         # Define frise positions for different display types
         self.frise_positions = {
@@ -115,7 +121,15 @@ class Display:
                 logger.error(f"An error occurred in update_main_image: {e}")
 
     def get_open_files(self):
-        """Get the number of open FD files on the system."""
+        """Count open file descriptors system-wide. Debug-only.
+
+        `glob('/proc/*/fd/*')` stats every descriptor of every process on the box. It ran every
+        25s and its return value is discarded by the only caller — the number existed purely for
+        the debug line below. That is thousands of syscalls a minute on a Pi Zero to produce a log
+        entry nobody reads unless they are debugging, so it is now gated on debug_mode.
+        """
+        if not getattr(self.shared_data, "debug_mode", False):
+            return None
         try:
             open_files = len(glob.glob('/proc/*/fd/*'))
             logger.debug(f"FD : {open_files}")
@@ -377,14 +391,39 @@ class Display:
 
                 if self.web_screen_reversed:
                     image = image.transpose(Image.ROTATE_180)
-                with open(os.path.join(self.shared_data.webdir, "screen.png"), 'wb') as img_file:
-                    image.save(img_file)
-                    img_file.flush()
-                    os.fsync(img_file.fileno())
-                
+                self._write_screen_png(image)
+
                 time.sleep(self.shared_data.screen_delay)
             except Exception as e:
                 logger.error(f"An error occurred: {e}")
+                # The sleep above is inside the try, so an exception skipped it and the loop
+                # re-entered instantly. A persistent fault (missing font, dead SPI) turned this
+                # thread into a 100%-CPU spinner that also flooded the log.
+                time.sleep(max(1, self.shared_data.screen_delay))
+
+    def _write_screen_png(self, image):
+        """Write web/screen.png, but only when the frame actually changed.
+
+        This used to PNG-encode and fsync() to the SD card on every loop iteration — once a second
+        by default, ~86,000 forced writes a day, whether or not a single pixel differed. It was the
+        largest single source of SD wear in the process, and the card is the part of a Pi Zero that
+        dies first.
+
+        Comparing encoded bytes rather than the PIL image: encoding is the cheap half (the fsync
+        and the erase-write cycle underneath it are what cost), and bytes give an exact answer
+        where image equality would need a pixel walk.
+        """
+        buffer = io.BytesIO()
+        image.save(buffer, format="PNG")
+        payload = buffer.getvalue()
+        if payload == self._last_screen_png:
+            return
+        path = os.path.join(self.shared_data.webdir, "screen.png")
+        with open(path, "wb") as img_file:
+            img_file.write(payload)
+            img_file.flush()
+            os.fsync(img_file.fileno())
+        self._last_screen_png = payload
 
 def handle_exit_display(signum, frame, display_thread):
     """Handle the exit signal and close the display."""

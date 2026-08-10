@@ -4,9 +4,39 @@
 # no hardware/heavy imports). netKB status strings look like 'success_20250101_120000' or
 # 'failed_20250101_120000'.
 
+import time
 from datetime import datetime, timedelta
 
 _STATUS_TIME_FORMAT = "%Y%m%d_%H%M%S"
+
+
+def status_settle_seconds(shared_data):
+    """How long an action should pause so its name is actually readable on the e-Paper panel.
+
+    Seven actions each hardcoded `time.sleep(5)` with the comment "too fast to see the status
+    change". Five seconds was never measured: the display loop renders, calls display_partial
+    twice, writes screen.png and sleeps `screen_delay` (default 1s), so two full iterations is the
+    real requirement and that is ~2s. At four host actions per cycle the old number spent 20s of
+    every working cycle asleep, which on a Pi Zero is throughput, not comfort.
+
+    Derived rather than fixed, so raising screen_delay for a slow panel keeps the status readable
+    instead of silently breaking the thing the pause exists for. Floored at 1s so it can never
+    vanish, capped at 5s so no config makes it worse than the number it replaced.
+    """
+    delay = getattr(shared_data, "screen_delay", None)
+    # `0` is a real setting ("don't pace the display loop"), not a missing one — `or 1` would have
+    # silently promoted it to the default and waited twice as long as asked. Only None/unparseable
+    # falls back.
+    try:
+        delay = 1.0 if delay is None else float(delay)
+    except (TypeError, ValueError):
+        delay = 1.0
+    return max(1.0, min(5.0, 2.0 * delay))
+
+
+def settle_for_display(shared_data):
+    """Pause just long enough for the panel to show the status this action just set."""
+    time.sleep(status_settle_seconds(shared_data))
 
 
 def parse_status_time(status):

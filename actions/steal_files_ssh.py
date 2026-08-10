@@ -8,7 +8,7 @@ import logging
 import time
 from rich.console import Console
 from threading import Timer
-from shared import SharedData
+from shared import SharedData, settle_for_display
 from logger import Logger
 
 # Configure the logger
@@ -94,8 +94,15 @@ class StealFilesSSH:
         try:
             if 'success' in row.get(self.b_parent_action, ''):  # Verify if the parent action is successful
                 self.shared_data.bjornorch_status = "StealFilesSSH"
-                # Wait a bit because it's too fast to see the status change
-                time.sleep(5)
+                # Per-run state, reset here rather than only in __init__. These objects are
+                # long-lived singletons built once by orchestrator.load_action, so the flags
+                # latched: once the 240s timer fired for ANY host, stop_execution stayed True
+                # and every later steal on every host broke out immediately and returned
+                # 'failed' — permanently, until the service restarted. Conversely a single
+                # success left *_connected True and disarmed the timeout for good.
+                self.stop_execution = False
+                self.sftp_connected = False
+                settle_for_display(self.shared_data)  # let the panel show this action's name
                 logger.info(f"Stealing files from {ip}:{port}...")
 
                 # Get SSH credentials from the cracked passwords file
@@ -114,15 +121,24 @@ class StealFilesSSH:
                     logger.error(f"No valid credentials found for {ip}. Skipping...")
                     return 'failed'
 
+                # Token this run. timer.cancel() is only reached on the success path, so a failed
+                # steal leaves a live 240s timer behind; without this it would fire midway
+                # through a LATER host's steal and abort it by setting stop_execution.
+                run_token = object()
+                self._run_token = run_token
+
                 def timeout():
                     """
                     Timeout function to stop the execution if no SFTP connection is established.
                     """
+                    if getattr(self, '_run_token', None) is not run_token:
+                        return  # a later execute() owns the flags now
                     if not self.sftp_connected:
                         logger.error(f"No SFTP connection established within 4 minutes for {ip}. Marking as failed.")
                         self.stop_execution = True
 
                 timer = Timer(240, timeout)  # 4 minutes timeout
+                timer.daemon = True  # never hold up shutdown waiting for a 4-minute timer
                 timer.start()
 
                 # Attempt to steal files using each credential

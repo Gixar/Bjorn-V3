@@ -541,12 +541,6 @@ class NetworkScanner:
                 self.outer_instance.logger.error(f"Error getting MAC address or writing to file for IP {ip}: {e}")
             self.progress += 1
 
-        def get_progress(self):
-            """
-            Returns the progress of the scanning process.
-            """
-            return (self.progress / self.total_ips) * 100
-
         def start(self):
             """
             Starts the network and port scanning process.
@@ -807,25 +801,6 @@ class NetworkScanner:
         except Exception as e:
             self.logger.error(f"Error writing benchmark results: {e}")
 
-    def start(self):
-        """
-        Starts the scanner in a separate thread.
-        """
-        if not self.running:
-            self.running = True
-            self.thread = threading.Thread(target=self.scan)
-            self.thread.start()
-            logger.info("NetworkScanner started.")
-
-    def stop(self):
-        """
-        Stops the scanner.
-        """
-        if self.running:
-            self.running = False
-            if self.thread.is_alive():
-                self.thread.join()
-            logger.info("NetworkScanner stopped.")
 
 if __name__ == "__main__":
     import sys

@@ -33,18 +33,18 @@ class TelnetBruteforce:
         self.telnet_connector = TelnetConnector(shared_data)
         logger.info("TelnetConnector initialized.")
 
-    def bruteforce_telnet(self, ip, port):
+    def bruteforce_telnet(self, ip, port, row=None):
         """
         Perform brute-force attack on a Telnet server.
         """
-        return self.telnet_connector.run_bruteforce(ip, port)
+        return self.telnet_connector.run_bruteforce(ip, port, row)
     
     def execute(self, ip, port, row, status_key):
         """
         Execute the brute-force attack.
         """
         self.shared_data.bjornorch_status = "TelnetBruteforce"
-        success, results = self.bruteforce_telnet(ip, port)
+        success, results = self.bruteforce_telnet(ip, port, row)
         return 'success' if success else 'failed'
 
 class TelnetConnector:
@@ -109,26 +109,40 @@ class TelnetConnector:
                 break
 
             adresse_ip, user, password, mac_address, hostname, port = self.queue.get()
-            if self.telnet_connect(adresse_ip, user, password):
-                with self.lock:
-                    self.results.append([mac_address, adresse_ip, hostname, user, password, port])
-                    record_cracked_cred(self.shared_data, user, password)
-                    logger.success(f"Found credentials  IP: {adresse_ip} | User: {user} | Password: {password}")
-                    self.save_results()
-                    self.removeduplicates()
-                    success_flag[0] = True
-            self.queue.task_done()
+            # try/finally so task_done() ALWAYS runs — a non-ASCII wordlist entry makes
+            # user.encode('ascii') raise, which would otherwise kill the worker before task_done()
+            # and hang the orchestrator on queue.join().
+            try:
+                if self.telnet_connect(adresse_ip, user, password):
+                    with self.lock:
+                        self.results.append([mac_address, adresse_ip, hostname, user, password, port])
+                        record_cracked_cred(self.shared_data, user, password)
+                        logger.success(f"Found credentials  IP: {adresse_ip} | User: {user} | Password: {password}")
+                        self.save_results()
+                        self.removeduplicates()
+                        success_flag[0] = True
+            except Exception as e:
+                logger.error(f"telnet_connect failed for {adresse_ip} as {user}: {e}")
+            finally:
+                self.queue.task_done()
             progress.update(task_id, advance=1)
 
-    def run_bruteforce(self, adresse_ip, port):
-        self.load_scan_file()  # Reload the scan file to get the latest IPs and ports
-
-        match = next((r for r in self.scan if r.get('IPs') == adresse_ip), None)
-        if match is None:
-            logger.error(f"No netkb entry for {adresse_ip}; skipping.")
-            return False, []
-        mac_address = match['MAC Address']
-        hostname = match['Hostnames']
+    def run_bruteforce(self, adresse_ip, port, row=None):
+        # netkb already came in as `row` from the orchestrator, which read it this cycle.
+        # Re-parsing the whole file here to recover two fields we were handed cost a full
+        # csv.DictReader pass per host per action. `row=None` keeps the standalone __main__
+        # path (and any other caller) working by falling back to the old lookup.
+        if row is not None:
+            mac_address = row.get('MAC Address', '')
+            hostname = row.get('Hostnames', '')
+        else:
+            self.load_scan_file()  # Reload the scan file to get the latest IPs and ports
+            match = next((r for r in self.scan if r.get('IPs') == adresse_ip), None)
+            if match is None:
+                logger.error(f"No netkb entry for {adresse_ip}; skipping.")
+                return False, []
+            mac_address = match['MAC Address']
+            hostname = match['Hostnames']
 
         candidates = credential_candidates(self.shared_data, self.users, self.passwords)
         total_tasks = len(candidates)
@@ -157,6 +171,11 @@ class TelnetConnector:
                         self.queue.get()
                         self.queue.task_done()
                     break
+                # Yield. With no exit signal this body does nothing, so it span a core flat
+                # out for the whole attack, competing with the worker threads it waits on.
+                # queue.join() below already blocks correctly; this loop exists only to
+                # notice an exit signal and drain the queue.
+                time.sleep(0.2)
 
             self.queue.join()
 

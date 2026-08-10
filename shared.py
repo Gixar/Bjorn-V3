@@ -275,7 +275,8 @@ class SharedData:
 
     def setup_environment(self):
         """Setup the environment with the necessary directories and files."""
-        os.system('cls' if os.name == 'nt' else 'clear')
+        # No screen-clear: setup_environment runs once at startup, and under systemd there is no
+        # terminal to clear — it was only ever a shell fork writing an escape sequence to a journal.
         self.save_config()
         self.generate_actions_json()
         self.delete_webconsolelog()

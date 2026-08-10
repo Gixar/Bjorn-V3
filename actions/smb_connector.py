@@ -145,18 +145,25 @@ class SMBConnector:
                 break
 
             adresse_ip, user, password, mac_address, hostname, port = self.queue.get()
-            shares = self.smb_connect(adresse_ip, user, password)
-            if shares:
-                with self.lock:
-                    for share in shares:
-                        if share not in IGNORED_SHARES:
-                            self.results.append([mac_address, adresse_ip, hostname, share, user, password, port])
-                            logger.success(f"Found credentials for IP: {adresse_ip} | User: {user} | Share: {share}")
-                    record_cracked_cred(self.shared_data, user, password)
-                    self.save_results()
-                    self.removeduplicates()
-                    success_flag[0] = True
-            self.queue.task_done()
+            # try/finally so task_done() ALWAYS runs — a raise here (smbclient missing, a pysmb
+            # protocol error) would otherwise kill the worker before it and hang the orchestrator
+            # on queue.join().
+            try:
+                shares = self.smb_connect(adresse_ip, user, password)
+                if shares:
+                    with self.lock:
+                        for share in shares:
+                            if share not in IGNORED_SHARES:
+                                self.results.append([mac_address, adresse_ip, hostname, share, user, password, port])
+                                logger.success(f"Found credentials for IP: {adresse_ip} | User: {user} | Share: {share}")
+                        record_cracked_cred(self.shared_data, user, password)
+                        self.save_results()
+                        self.removeduplicates()
+                        success_flag[0] = True
+            except Exception as e:
+                logger.error(f"smb_connect failed for {adresse_ip} as {user}: {e}")
+            finally:
+                self.queue.task_done()
             progress.update(task_id, advance=1)
 
     def run_bruteforce(self, adresse_ip, port, row=None):

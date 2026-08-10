@@ -110,22 +110,27 @@ class SQLConnector:
                 break
 
             adresse_ip, user, password, port = self.queue.get()
-            success, databases = self.sql_connect(adresse_ip, user, password)
-            
-            if success:
-                with self.lock:
-                    # Ajouter une entrée pour chaque base de données trouvée
-                    for db in databases:
-                        self.results.append([adresse_ip, user, password, port, db])
-                    record_cracked_cred(self.shared_data, user, password)
+            # try/finally so task_done() ALWAYS runs — a raise here would otherwise kill the worker
+            # before it and hang the orchestrator on queue.join().
+            try:
+                success, databases = self.sql_connect(adresse_ip, user, password)
 
-                    logger.success(f"Found credentials for IP: {adresse_ip} | User: {user} | Password: {password}")
-                    logger.success(f"Databases found: {', '.join(databases)}")
-                    self.save_results()
-                    self.remove_duplicates()
-                    success_flag[0] = True
-                    
-            self.queue.task_done()
+                if success:
+                    with self.lock:
+                        # Ajouter une entrée pour chaque base de données trouvée
+                        for db in databases:
+                            self.results.append([adresse_ip, user, password, port, db])
+                        record_cracked_cred(self.shared_data, user, password)
+
+                        logger.success(f"Found credentials for IP: {adresse_ip} | User: {user} | Password: {password}")
+                        logger.success(f"Databases found: {', '.join(databases)}")
+                        self.save_results()
+                        self.remove_duplicates()
+                        success_flag[0] = True
+            except Exception as e:
+                logger.error(f"sql_connect failed for {adresse_ip} as {user}: {e}")
+            finally:
+                self.queue.task_done()
             progress.update(task_id, advance=1)
 
     def run_bruteforce(self, adresse_ip, port, row=None):

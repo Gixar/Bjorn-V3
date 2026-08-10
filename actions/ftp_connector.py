@@ -93,15 +93,21 @@ class FTPConnector:
                 break
 
             adresse_ip, user, password, mac_address, hostname, port = self.queue.get()
-            if self.ftp_connect(adresse_ip, user, password):
-                with self.lock:
-                    self.results.append([mac_address, adresse_ip, hostname, user, password, port])
-                    record_cracked_cred(self.shared_data, user, password)
-                    logger.success(f"Found credentials for IP: {adresse_ip} | User: {user}")
-                    self.save_results()
-                    self.removeduplicates()
-                    success_flag[0] = True
-            self.queue.task_done()
+            # try/finally so task_done() ALWAYS runs — otherwise a raise here kills the worker
+            # before it and queue.join() blocks forever, hanging the orchestrator.
+            try:
+                if self.ftp_connect(adresse_ip, user, password):
+                    with self.lock:
+                        self.results.append([mac_address, adresse_ip, hostname, user, password, port])
+                        record_cracked_cred(self.shared_data, user, password)
+                        logger.success(f"Found credentials for IP: {adresse_ip} | User: {user}")
+                        self.save_results()
+                        self.removeduplicates()
+                        success_flag[0] = True
+            except Exception as e:
+                logger.error(f"ftp_connect failed for {adresse_ip} as {user}: {e}")
+            finally:
+                self.queue.task_done()
             progress.update(task_id, advance=1)
 
     def run_bruteforce(self, adresse_ip, port, row=None):

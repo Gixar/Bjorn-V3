@@ -181,6 +181,50 @@ def test_smbclient_l_parses_nothing_out_of_a_failed_run(monkeypatch):
     assert conn.smbclient_l("10.0.0.5", "root", "wrong") == []
 
 
+# --- the worker must never leave the queue undrained --------------------------
+
+import queue as _queue  # noqa: E402
+import threading  # noqa: E402
+
+WORKERS = [
+    ("ssh_connector", "SSHConnector", "ssh_connect", 6),
+    ("ftp_connector", "FTPConnector", "ftp_connect", 6),
+    ("smb_connector", "SMBConnector", "smb_connect", 6),
+    ("telnet_connector", "TelnetConnector", "telnet_connect", 6),
+    ("sql_connector", "SQLConnector", "sql_connect", 4),
+    ("rdp_connector", "RDPConnector", "rdp_connect", 6),
+]
+
+
+def test_a_raising_connect_still_drains_the_queue(monkeypatch):
+    """The hang the RDP fix uncovered, pinned for all six. If <proto>_connect raises, the worker
+    used to die before task_done() and queue.join() then blocked forever, hanging the orchestrator.
+    task_done() must run regardless, so queue.join() returns."""
+    for module_name, class_name, connect_name, arity in WORKERS:
+        mod, obj = _bare(module_name, class_name)
+        obj.queue = _queue.Queue()
+        obj.lock = threading.Lock()
+        obj.results = []
+        obj.shared_data = SimpleNamespace(orchestrator_should_exit=False)
+
+        def boom(*_a, **_k):
+            raise RuntimeError("binary missing / protocol blew up")
+
+        monkeypatch.setattr(obj, connect_name, boom)
+        # queue item shape differs: SQL has no mac/hostname column
+        item = ("10.0.0.5", "root", "toor", 22) if arity == 4 \
+            else ("10.0.0.5", "root", "toor", "AA:BB", "host", 22)
+        obj.queue.put(item)
+
+        progress = SimpleNamespace(update=lambda *a, **k: None)
+        type(obj).worker(obj, progress, task_id=0, success_flag=[False])
+
+        # If task_done() did not run, this join would hang the test rather than return.
+        done = threading.Event()
+        threading.Thread(target=lambda: (obj.queue.join(), done.set()), daemon=True).start()
+        assert done.wait(timeout=2.0), f"{module_name}: queue.join() blocked — task_done() was skipped"
+
+
 if __name__ == "__main__":
     import inspect
     for name, fn in sorted(globals().items()):

@@ -101,15 +101,22 @@ class SSHConnector:
                 break
 
             adresse_ip, user, password, mac_address, hostname, port = self.queue.get()
-            if self.ssh_connect(adresse_ip, user, password):
-                with self.lock:
-                    self.results.append([mac_address, adresse_ip, hostname, user, password, port])
-                    record_cracked_cred(self.shared_data, user, password)
-                    logger.success(f"Found credentials  IP: {adresse_ip} | User: {user} | Password: {password}")
-                    self.save_results()
-                    self.removeduplicates()
-                    success_flag[0] = True
-            self.queue.task_done()
+            # try/finally so task_done() ALWAYS runs. Anything raising out of the connect kills
+            # this worker before task_done(), and the queue.join() in run_bruteforce then blocks
+            # forever, hanging the orchestrator (see rdp_connector for the case that surfaced it).
+            try:
+                if self.ssh_connect(adresse_ip, user, password):
+                    with self.lock:
+                        self.results.append([mac_address, adresse_ip, hostname, user, password, port])
+                        record_cracked_cred(self.shared_data, user, password)
+                        logger.success(f"Found credentials  IP: {adresse_ip} | User: {user} | Password: {password}")
+                        self.save_results()
+                        self.removeduplicates()
+                        success_flag[0] = True
+            except Exception as e:
+                logger.error(f"ssh_connect failed for {adresse_ip} as {user}: {e}")
+            finally:
+                self.queue.task_done()
             progress.update(task_id, advance=1)
 
 

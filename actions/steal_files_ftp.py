@@ -40,7 +40,7 @@ class StealFilesFTP:
         """
         try:
             ftp = FTP()
-            ftp.connect(ip, 21)
+            ftp.connect(ip, 21, timeout=10)  # bounded: no timeout blocked the orchestrator on a filtered host
             ftp.login(user=username, passwd=password)
             self.ftp_connected = True
             logger.info(f"Connected to {ip} via FTP with username {username}")

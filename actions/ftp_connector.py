@@ -75,7 +75,7 @@ class FTPConnector:
         """
         try:
             conn = FTP()
-            conn.connect(adresse_ip, 21)
+            conn.connect(adresse_ip, 21, timeout=10)  # bounded: an unresponsive host must not stall the worker
             conn.login(user, password)
             conn.quit()
             logger.info(f"Access to FTP successful on {adresse_ip} with user '{user}'")

@@ -177,8 +177,12 @@ class StealDataSQL:
                     return 'success'
 
             else:
+                # 'failed', to match the four sibling steal modules. For a host action the
+                # orchestrator already gates on the parent before calling execute() and maps any
+                # non-'success' return to failed_<ts> regardless, so this is purely about removing
+                # the odd-one-out drift the four others don't have.
                 logger.info(f"Skipping {ip} as it was not successfully bruteforced")
-                return 'skipped'
+                return 'failed'
                 
         except Exception as e:
             logger.error(f"Unexpected error during execution for {ip}:{port}: {e}")

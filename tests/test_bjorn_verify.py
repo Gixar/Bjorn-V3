@@ -210,6 +210,89 @@ def test_summarize_counts_every_verdict_including_absent_ones():
     assert bv.summarize([]) == {bv.PASS: 0, bv.FAIL: 0, bv.WARN: 0, bv.SKIP: 0}
 
 
+# --- source-read checks for the connector bug classes (section 9) ----------
+
+_FIXED_BRUTEFORCE = '''
+def run_bruteforce(self, ip, port, row=None):
+    if row is not None:
+        mac_address = row.get('MAC Address', '')
+        hostname = row.get('Hostnames', '')
+    else:
+        mac_address = 'x'
+        hostname = 'y'
+    for user, password in candidates:
+        self.queue.put((ip, user, password, mac_address, hostname, port))
+'''
+
+_BUGGY_BRUTEFORCE = '''
+def run_bruteforce(self, ip, port, row=None):
+    for user, password in candidates:
+        self.queue.put((ip, user, password, mac_address, hostname, port))
+    with Progress() as progress:
+        if row is not None:
+            mac_address = row.get('MAC Address', '')
+            hostname = row.get('Hostnames', '')
+        else:
+            mac_address = 'x'
+            hostname = 'y'
+'''
+
+
+def test_used_before_assigned_catches_the_rdp_ordering_bug():
+    """The RDP fix, made checkable on a device: mac_address must be assigned before the queue.put()
+    that reads it, or run_bruteforce raises UnboundLocalError on every real attack. True = bug."""
+    assert bv.used_before_assigned(_BUGGY_BRUTEFORCE, "run_bruteforce", "mac_address") is True
+    assert bv.used_before_assigned(_FIXED_BRUTEFORCE, "run_bruteforce", "mac_address") is False
+    # never read (the SQL-connector shape) is safe — not a bug, and not unknown
+    assert bv.used_before_assigned(
+        "def run_bruteforce(self):\n    self.queue.put((ip, user, password, port))\n",
+        "run_bruteforce", "mac_address") is False
+    # unknown must never read as a false safe: missing function / unparsable -> None
+    assert bv.used_before_assigned("def other():\n    pass\n", "run_bruteforce", "mac_address") is None
+    assert bv.used_before_assigned("def run_bruteforce(:\n    pass\n", "run_bruteforce",
+                                   "mac_address") is None
+
+
+_GUARDED_WORKER = '''
+def worker(self):
+    while True:
+        item = self.queue.get()
+        try:
+            self.connect(item)
+        finally:
+            self.queue.task_done()
+'''
+
+_UNGUARDED_WORKER = '''
+def worker(self):
+    while True:
+        item = self.queue.get()
+        self.connect(item)
+        self.queue.task_done()
+'''
+
+
+def test_call_in_finally_confirms_the_connector_hang_guard():
+    """task_done() must sit in a finally so a raising connect can't hang queue.join() forever."""
+    assert bv.call_in_finally(_GUARDED_WORKER, "worker", "task_done") is True
+    assert bv.call_in_finally(_UNGUARDED_WORKER, "worker", "task_done") is False
+    assert bv.call_in_finally("def nope():\n    pass\n", "worker", "task_done") is None
+    assert bv.call_in_finally("def worker(:\n    pass\n", "worker", "task_done") is None
+
+
+def test_the_shipped_connectors_pass_both_source_checks():
+    """Not a fixture — the real files. This is the regression that would have caught the RDP bug in
+    CI: parse each deployed connector and assert no used-before-assigned + the hang guard holds. All
+    six are safe (SQL never reads mac_address; the other five assign it before the queue.put)."""
+    actions = Path(__file__).resolve().parent.parent / "actions"
+    for fn in ("ssh_connector.py", "ftp_connector.py", "smb_connector.py",
+               "rdp_connector.py", "telnet_connector.py", "sql_connector.py"):
+        src = (actions / fn).read_text(encoding="utf-8")
+        assert bv.used_before_assigned(src, "run_bruteforce", "mac_address") is False, \
+            f"{fn}: mac_address read before assigned (the RDP bug class)"
+        assert bv.call_in_finally(src, "worker", "task_done") is True, f"{fn}: unguarded worker"
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

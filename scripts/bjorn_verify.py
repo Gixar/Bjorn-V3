@@ -26,6 +26,7 @@ Usage:
 """
 import os
 import re
+import ast
 import csv
 import sys
 import glob
@@ -204,6 +205,68 @@ def resolve_repo(override="", script_dir="", probe=os.path.isfile):
         if path and probe(os.path.join(path, "config", "shared_config.json")):
             return path
     return ""
+
+
+def used_before_assigned(source, func_name, target="mac_address"):
+    """Is `target` READ on a line before its first assignment inside `func_name`? That is exactly
+    the UnboundLocalError condition. Parses the source with `ast`; it never executes it — the whole
+    point on a script that runs under sudo and must not run code out of the tree it located.
+
+    This makes the RDP fix checkable on a device. run_bruteforce referenced mac_address/hostname in
+    the queue.put() loop before assigning them (they were resolved lower, inside the Progress
+    block), so every real attack raised UnboundLocalError and the host was marked failed with no
+    credential tried. On a device the tree is a copy, not a git checkout, so 'is the fix in the
+    running code' cannot be answered with git — only by reading it.
+
+    True = the bug is present (read before assigned). False = safe: assigned first, OR never read at
+    all — the SQL connector legitimately never puts mac_address on its queue, and must not be
+    flagged. None = couldn't tell (function absent, or the file won't parse): a WARN upstream, never
+    a false PASS."""
+    try:
+        tree = ast.parse(source or "")
+    except SyntaxError:
+        return None
+    func = next((n for n in ast.walk(tree)
+                 if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == func_name),
+                None)
+    if func is None:
+        return None
+    reads = [n.lineno for n in ast.walk(func) if isinstance(n, ast.Name)
+             and isinstance(n.ctx, ast.Load) and n.id == target]
+    if not reads:
+        return False  # never read -> no unbound risk (the SQL-connector shape)
+    first_assign = min((n.lineno for n in ast.walk(func) if isinstance(n, ast.Assign)
+                        and any(isinstance(t, ast.Name) and t.id == target for t in n.targets)),
+                       default=None)
+    if first_assign is None:
+        return True   # read but never assigned in-scope -> unbound on the first read
+    return min(reads) < first_assign
+
+
+def call_in_finally(source, func_name, attr):
+    """Does `func_name` call `<x>.attr(...)` inside a `finally:` block? Parses, never executes.
+
+    Confirms the connector-hang fix (3.0.1-beta): queue.task_done() belongs in a finally so a
+    connect that raises (a missing xfreerdp, a non-ASCII wordlist entry) can't skip it and block
+    queue.join() — and the single-threaded orchestrator — forever. True = guarded, False = present
+    but unguarded, None = function absent / won't parse."""
+    try:
+        tree = ast.parse(source or "")
+    except SyntaxError:
+        return None
+    func = next((n for n in ast.walk(tree)
+                 if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == func_name),
+                None)
+    if func is None:
+        return None
+    for node in ast.walk(func):
+        if isinstance(node, ast.Try):
+            for stmt in node.finalbody:
+                for sub in ast.walk(stmt):
+                    if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute) \
+                            and sub.func.attr == attr:
+                        return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -758,10 +821,81 @@ class Verifier:
                        "no theme-miss warnings" if misses == 0
                        else f"{misses} misses - an action falls back to IDLE")
 
+    # -- 9 ------------------------------------------------------------------
+    def offensive_core(self):
+        """Source-read integrity of the brute-force chain. No execution: this script runs under
+        sudo and must never exec code out of the tree it merely located (module docstring), so it
+        *parses* the connectors rather than importing them — and parsing is also the only way to
+        confirm a fix on a device, where the tree is a copy and build_info is the only commit stamp.
+        Behavioural backstops (logs, cracked files) sit alongside the static checks."""
+        self.r.section("9. Offensive core integrity (source-read, no execution)")
+        connectors = [("ssh_connector.py", "SSH"), ("ftp_connector.py", "FTP"),
+                      ("smb_connector.py", "SMB"), ("rdp_connector.py", "RDP"),
+                      ("telnet_connector.py", "Telnet"), ("sql_connector.py", "SQL")]
+        sources = {proto: _read(os.path.join(self.repo, "actions", fn)) for fn, proto in connectors}
+
+        # THE LATEST FIX. run_bruteforce must assign mac_address/hostname BEFORE the queue.put() that
+        # uses them. RDP had them the other way round, so every real attack (orchestrator_should_exit
+        # False) raised UnboundLocalError and the host was marked failed with no credential tried.
+        # Checked for all six: the ~85% copy-paste that caused the RDP divergence could hide the same
+        # ordering bug in any of them.
+        order = {p: used_before_assigned(src, "run_bruteforce", "mac_address")
+                 for p, src in sources.items()}
+        bad = [p for p, r in order.items() if r is True]
+        unknown = [p for p, r in order.items() if r is None]
+        if bad:
+            self.r.verdict(FAIL, "brute force resolves mac/hostname before the queue fill",
+                           f"{', '.join(bad)}: referenced before assignment -> UnboundLocalError "
+                           f"every run; pull/reinstall the fix")
+        elif unknown:
+            self.r.verdict(WARN, "brute force resolves mac/hostname before the queue fill",
+                           f"could not parse run_bruteforce in: {', '.join(unknown)}")
+        else:
+            self.r.verdict(PASS, "brute force resolves mac/hostname before the queue fill",
+                           "all six ordered correctly (the RDP fix is in the running code)")
+
+        # The connector-hang fix (3.0.1-beta): task_done() in a finally, so a raising connect can't
+        # skip it and hang queue.join() — and with it the single-threaded orchestrator — forever.
+        guarded = {p: call_in_finally(src, "worker", "task_done") for p, src in sources.items()}
+        unguarded = [p for p, ok in guarded.items() if ok is False]
+        if unguarded:
+            self.r.verdict(FAIL, "a raising worker still drains its queue",
+                           f"{', '.join(unguarded)}: task_done() is not in a finally - a raise hangs "
+                           f"the orchestrator")
+        else:
+            self.r.verdict(PASS, "a raising worker still drains its queue",
+                           "task_done() is in a finally in every connector")
+
+        # The behavioural half of the ordering check: the orchestrator catches an action's exception
+        # and logs "Action <name> failed: <e>", so an UnboundLocalError there is the RDP bug caught
+        # in the act. Absence on a device that has actually run RDP is the strongest static+runtime
+        # agreement this script can offer.
+        crashes = count_matching(self.log("orchestrator.py.log"), "UnboundLocalError")
+        if crashes:
+            self.r.verdict(FAIL, "no UnboundLocalError logged at runtime",
+                           f"{crashes} in orchestrator.py.log - a connector crashed mid-run")
+        else:
+            self.r.verdict(PASS, "no UnboundLocalError logged at runtime", "none in the orchestrator log")
+
+        # What the chain has actually cracked/stolen. Info, because empty is the normal result
+        # without a crackable target — but a fresh, non-empty rdp.csv is the strongest possible proof
+        # the fix works end to end, so it graduates to a PASS.
+        cracked = (("SSH", "ssh.csv"), ("FTP", "ftp.csv"), ("SMB", "smb.csv"),
+                   ("Telnet", "telnet.csv"), ("SQL", "sql.csv"), ("RDP", "rdp.csv"))
+        for proto, fn in cracked:
+            path = os.path.join(self.cracked, fn)
+            self.r.info(f"cracked {proto}", f"{csv_rows(path)} creds, {age_str(path)}")
+        self.r.info("stolen loot files", len(glob.glob(os.path.join(self.out, "data_stolen", "*"))))
+        rdp_creds = csv_rows(os.path.join(self.cracked, "rdp.csv"))
+        if rdp_creds:
+            self.r.verdict(PASS, "RDP brute force cracked a host",
+                           f"{rdp_creds} cred(s) in rdp.csv - the fix is confirmed end to end")
+
     def all_checks(self):
         return (self.preflight, self.wifi_recon, self.benchmark, self.usb_gadget,
                 self.display_and_ui, self.action_evidence, self.delivery, self.dependencies,
-                self.defaults, self.radio_ownership, self.bettercap, self.unreleased_wave)
+                self.defaults, self.radio_ownership, self.bettercap, self.unreleased_wave,
+                self.offensive_core)
 
 
 def main(argv=None):

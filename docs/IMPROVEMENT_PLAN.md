@@ -27,9 +27,28 @@ magnitude* are not in doubt.
 
 ---
 
+## Progress
+
+**2026-08-11 — Tier 1 #1 shipped and verified on hardware.** RDP brute-force is fixed and confirmed
+live on a Pi Zero 2 W, now on `Bjorn-V3/main` (tip `5100b76`):
+
+- **#1 RDP ordering** — done (`d2fec2d`), with a `run_bruteforce` regression test on the
+  `orchestrator_should_exit=False` path CI was blind to.
+- **Down payment on #4** — RDP's `xfreerdp` connect is now bounded (`communicate(timeout=15)` +
+  kill/drain, `5100b76`). SSH / SMB / Telnet connect timeouts are still open.
+- **Verification asset added** — `bjorn_verify.py` gained a source-read **Section 9** (`d16caa8`)
+  that parses the deployed connectors and proves the fix is in the *running* code even though the Pi
+  tree is not a git checkout. On-Pi run 2026-08-11: **33 PASS / 0 FAIL**, Section 9 all green —
+  *"all six ordered correctly (the RDP fix is in the running code)"*, *"no UnboundLocalError logged
+  at runtime"*.
+
+Next: Tier 1 #2 (RDP+Telnet loot) and #3 (wpa-sec upload), then finish #4 for SSH/SMB/Telnet.
+
+---
+
 ## Tier 1 — Restore capability you already lost (tiny diffs, biggest effectiveness win)
 
-### 1. Fix RDP brute-force — it is 100% broken
+### 1. ✅ DONE — Fix RDP brute-force (was 100% broken; verified on Pi 2026-08-11)
 - **Evidence:** `actions/rdp_connector.py:143` puts `mac_address, hostname` on the queue, but they
   aren't assigned until `:155-165` — *after* the fill loop. Any real attack
   (`orchestrator_should_exit=False`) throws `UnboundLocalError` at `:143`; the orchestrator catches
@@ -41,6 +60,8 @@ magnitude* are not in doubt.
   test with `orchestrator_should_exit=False` and `rdp_connect` mocked.
 - **Payoff:** restores a whole attack protocol — port 3389, the planner's second-highest-weighted
   target (`action_planner.py:33`, `+24`).
+- **Status:** ✅ shipped (`d2fec2d`) with the regression test; RDP connect timeout added (`5100b76`);
+  verified live on the Pi 2026-08-11 via `bjorn_verify` Section 9 — the fix is in the running code.
 
 ### 2. Fix RDP + Telnet loot — one steals the Pi's own files, the other corrupts what it grabs
 - **Evidence:** `steal_files_rdp.py:49-50` redirects the *Pi's* `/mnt/shared` into the session, then
@@ -81,6 +102,9 @@ magnitude* are not in doubt.
   `subprocess.run(..., timeout=)` on nmap.
 - **Payoff:** no single host can stall the loop. This is the single highest-reliability change given
   the history.
+- **Status:** 🟡 partial — RDP's `xfreerdp` connect is now bounded (15s, `5100b76`). Still open: SSH
+  (`banner_timeout` only), SMB (pysmb `connect` + `smbclient` `communicate()`), Telnet (constructor),
+  `nmap_vuln_scanner`, and the steal transfers.
 
 ### 5. An outcome contract so "silent success on a dead path" can't recur
 - **Evidence:** the BACKLOG names this defect class three times (`WiFiScan: success=4`, `release()`

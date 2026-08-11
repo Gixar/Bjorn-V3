@@ -2,6 +2,31 @@
 
 ## [Unreleased]
 
+### Fixed
+- **`install_bjorn.sh` duplicated config lines on every re-run.** Six appends to
+  `/etc/security/limits.conf`, `/etc/systemd/{system,user}.conf`, `/etc/sysctl.conf` and
+  `/etc/pam.d/common-session{,-noninteractive}` ran unconditionally, so re-running the installer
+  (a retry after an earlier step failed, or a deliberate second pass) grew each file by one more
+  copy of the same lines every time. Guarded the same way `dtoverlay=dwc2` already was —
+  `grep -qF <exact line> || append` — so a re-run is now a no-op on all of them. Confirmed the
+  regression and the fix against scratch files: 3 re-runs went from 3 duplicate lines to 1.
+- **A failed prompt inside `handle_error` recursed instead of failing cleanly.** `read -r choice`
+  on a closed/non-interactive stdin returns immediately with an empty value rather than blocking;
+  the `*` (invalid choice) branch then called `handle_error` again, which read EOF again, forever.
+  A script whose whole point is to be safe to leave unattended crashed to a runaway stack the
+  moment it was run with no terminal attached. A failed read now skips the failed step and
+  continues, the same outcome the explicit "skip" option already offered.
+
+### Added
+- **`install_bjorn.sh --yes`** for headless/scripted installs: answers every prompt the same way
+  the interactive install's option 1 already does (full install), defaults `epd_type` to `"auto"`
+  (`--epd TYPE` to pick a specific panel), and auto-continues past the compatibility-warning
+  confirmation. Deliberately does **not** auto-reboot even on full success — every other prompt
+  gets a same-as-before default, but rebooting the machine out from under whatever invoked the
+  script is a bigger, less reversible action than answering an install-time question, and stays
+  opt-in. `--dry-run`/`--help` unchanged; combining `--epd` without `--yes` is a usage error, not
+  a silently ignored flag.
+
 ## [3.0.1-beta] — 2026-08-09
 
 A consolidation release: no new features, only hardening and performance of what

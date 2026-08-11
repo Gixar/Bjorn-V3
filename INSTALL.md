@@ -57,6 +57,17 @@ sudo ./install_bjorn.sh
 # Choose the choice 1 for automatic installation. It may take a while as a lot of packages and modules will be installed. You must reboot at the end.
 ```
 
+For a first-boot/provisioning script or any run with no interactive terminal, use `--yes`
+instead — it answers every prompt with the same choice a full interactive install would (option 1,
+`epd_type: "auto"`), skips the compatibility-warning confirmation, and deliberately does **not**
+reboot for you at the end:
+
+```bash
+sudo ./install_bjorn.sh --yes                    # full install, epd_type auto-detected
+sudo ./install_bjorn.sh --yes --epd epd2in13_V4  # full install, a specific panel
+sudo ./install_bjorn.sh --dry-run                # check prerequisites, change nothing
+```
+
 ### 🧰 Manual Install
 
 #### Step 1: Activate SPI & I2C

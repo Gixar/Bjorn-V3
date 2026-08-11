@@ -27,18 +27,61 @@ TOTAL_STEPS=8
 # repo). Lets the installer install from a local copy instead of cloning from GitHub.
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
-if [[ "$1" == "--help" ]]; then
-    echo "Usage: sudo ./install_bjorn.sh [--dry-run|--help]"
-    echo "  --dry-run   Check prerequisites and list the install steps without changing anything."
-    echo "  --help      Show this message."
-    echo "Make sure you have the necessary permissions and that all dependencies are met."
-    exit 0
-fi
-
 DRY_RUN=false
-if [[ "$1" == "--dry-run" ]]; then
-    DRY_RUN=true
+# ASSUME_YES: unattended install for scripted/CI/first-boot use. Every `read -p`/`read -r` in this
+# script blocks on a terminal that a piped or headless invocation does not have — on Linux, a
+# closed stdin makes `read` return immediately with an EMPTY value rather than blocking, so an
+# unattended run does not hang so much as spin through every prompt's "invalid choice, try again"
+# path at full speed. `handle_error`'s menu is the worst case: an unrecognised choice recurses back
+# into itself, so a piped install died to runaway recursion, not a clean failure. --yes closes all
+# of that off by choosing safe, previously-existing defaults for the same prompts.
+ASSUME_YES=false
+# EPD_OVERRIDE, not a fixed default: no automated choice is right for which physical panel is
+# wired up. --yes alone defaults to "auto" (shared.py already probes every known driver in order —
+# see SharedData._auto_detect_epd), which is the closest thing to a safe unattended default. Pass
+# --epd to pick a specific one instead of relying on the probe.
+EPD_OVERRIDE=""
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --help)
+            echo "Usage: sudo ./install_bjorn.sh [--dry-run] [--yes [--epd TYPE]] [--help]"
+            echo "  --dry-run     Check prerequisites and list the install steps without changing anything."
+            echo "  --yes, -y     Unattended install: no prompts. Full install, epd_type defaults to"
+            echo "                'auto' (or pass --epd), no compatibility-warning confirmation, does"
+            echo "                NOT reboot at the end even if everything succeeded."
+            echo "  --epd TYPE    With --yes, use this epd_type instead of 'auto'. One of:"
+            echo "                epd2in13, epd2in13_V2, epd2in13_V3, epd2in13_V4, epd2in7, mock, auto."
+            echo "  --help        Show this message."
+            echo "Make sure you have the necessary permissions and that all dependencies are met."
+            exit 0
+            ;;
+        --dry-run) DRY_RUN=true; shift ;;
+        --yes|-y) ASSUME_YES=true; shift ;;
+        --epd)
+            EPD_OVERRIDE="${2:-}"
+            [ -n "$EPD_OVERRIDE" ] || { echo "--epd requires a value (try --help)"; exit 1; }
+            shift 2
+            ;;
+        *)
+            echo "Unknown argument: $1 (try --help)"
+            exit 1
+            ;;
+    esac
+done
+
+if [ -n "$EPD_OVERRIDE" ] && [ "$ASSUME_YES" != true ]; then
+    echo "--epd only has an effect together with --yes (try --help)"
+    exit 1
 fi
+case "$EPD_OVERRIDE" in
+    ""|epd2in13|epd2in13_V2|epd2in13_V3|epd2in13_V4|epd2in7|mock|auto) ;;
+    *)
+        echo "Unknown --epd value: '$EPD_OVERRIDE'. One of: epd2in13, epd2in13_V2, epd2in13_V3,"
+        echo "epd2in13_V4, epd2in7, mock, auto."
+        exit 1
+        ;;
+esac
 
 # Function to display progress
 show_progress() {
@@ -69,11 +112,28 @@ handle_error() {
     log "ERROR" "An error occurred during: $error_message (Error code: $error_code)"
     log "ERROR" "Check the log file for details: $LOG_FILE"
 
+    # --yes: no prompt. Default to "skip" — the existing, explicit "not recommended" option — rather
+    # than retry (a persistent error retries forever) or abort (one flaky apt mirror should not kill
+    # an unattended install outright). Logged loudly since it is silently changing behaviour.
+    if [ "$ASSUME_YES" = true ]; then
+        log "WARNING" "--yes: skipping the failed step ($error_message) without asking."
+        return 0
+    fi
+
     echo -e "\n${RED}Would you like to:"
     echo "1. Retry this step"
     echo "2. Skip this step (not recommended)"
     echo "3. Exit installation${NC}"
-    read -r choice
+    # `read -r` on a closed/non-interactive stdin (a piped install, a stray double-invocation)
+    # returns immediately with a FAILURE status and an empty $choice — it does not block. The `*`
+    # branch below then called handle_error again, which read again, got EOF again, and recursed
+    # again: not a hang but a runaway stack straight to "installer crashed by having no console",
+    # for a script whose whole point is to be safe to leave unattended. A failed read is treated as
+    # the same non-interactive case as --yes, rather than looping.
+    if ! read -r choice; then
+        log "WARNING" "No input available (EOF) at the error prompt; skipping the failed step."
+        return 0
+    fi
 
     case $choice in
         1) return 1 ;; # Retry
@@ -203,11 +263,15 @@ check_system_compatibility() {
     if [ "$should_ask_confirmation" = true ]; then
         echo -e "\n${YELLOW}Some system compatibility warnings were detected (see above).${NC}"
         echo -e "${YELLOW}The installation might not work as expected.${NC}"
-        echo -e "${YELLOW}Do you want to continue anyway? (y/n)${NC}"
-        read -r response
-        if [[ ! "$response" =~ ^[Yy]$ ]]; then
-            log "INFO" "Installation aborted by user after compatibility warnings"
-            clean_exit 1
+        if [ "$ASSUME_YES" = true ]; then
+            log "WARNING" "--yes: continuing despite the compatibility warnings above."
+        else
+            echo -e "${YELLOW}Do you want to continue anyway? (y/n)${NC}"
+            read -r response
+            if [[ ! "$response" =~ ^[Yy]$ ]]; then
+                log "INFO" "Installation aborted by user after compatibility warnings"
+                clean_exit 1
+            fi
         fi
     else
         log "SUCCESS" "All compatibility checks passed"
@@ -505,31 +569,40 @@ install_rustscan_from_source() {
 }
 
 # Configure system limits
+#
+# IDEMPOTENCY: every append here used to run unconditionally, so re-running the installer (a
+# second `sudo ./install_bjorn.sh`, or a fix-and-retry after an earlier step failed) duplicated
+# every one of these lines on each pass. A handful of repeats are harmless noise; the sed further
+# down that strips commented DefaultLimitNOFILE lines does NOT strip the uncommented ones it
+# appends, so this specifically grew /etc/systemd/system.conf and user.conf by one line per
+# install, forever. Fixed the same way line 704 (dtoverlay=dwc2) already did it correctly:
+# `grep -qF ... || append`, checking for the exact literal line before adding it.
 configure_system_limits() {
     log "INFO" "Configuring system limits..."
 
     # Configure /etc/security/limits.conf
-    cat >> /etc/security/limits.conf << EOF
+    grep -qF "* soft nofile 65535" /etc/security/limits.conf 2>/dev/null || cat >> /etc/security/limits.conf << EOF
 * soft nofile 65535
 * hard nofile 65535
 root soft nofile 65535
 root hard nofile 65535
 EOF
 
-    # Configure systemd limits
+    # Configure systemd limits. The commented-out default is removed once (harmless if already
+    # gone); the uncommented override is only appended if not already present.
     sed -i '/^#DefaultLimitNOFILE=/d' /etc/systemd/system.conf
-    echo "DefaultLimitNOFILE=65535" >> /etc/systemd/system.conf
+    grep -qF "DefaultLimitNOFILE=65535" /etc/systemd/system.conf || echo "DefaultLimitNOFILE=65535" >> /etc/systemd/system.conf
     sed -i '/^#DefaultLimitNOFILE=/d' /etc/systemd/user.conf
-    echo "DefaultLimitNOFILE=65535" >> /etc/systemd/user.conf
+    grep -qF "DefaultLimitNOFILE=65535" /etc/systemd/user.conf || echo "DefaultLimitNOFILE=65535" >> /etc/systemd/user.conf
 
-    # Create /etc/security/limits.d/90-nofile.conf
+    # /etc/security/limits.d/90-nofile.conf is a full overwrite, not an append — already idempotent.
     cat > /etc/security/limits.d/90-nofile.conf << EOF
 root soft nofile 65535
 root hard nofile 65535
 EOF
 
     # Configure sysctl
-    echo "fs.file-max = 2097152" >> /etc/sysctl.conf
+    grep -qF "fs.file-max = 2097152" /etc/sysctl.conf 2>/dev/null || echo "fs.file-max = 2097152" >> /etc/sysctl.conf
     sysctl -p
 
     check_success "System limits configuration completed"
@@ -667,9 +740,10 @@ ExecStartPost=/bin/bash -c 'HB=/run/bjorn_heartbeat; while :; do if [ -f "\$HB" 
 WantedBy=multi-user.target
 EOF
 
-    # Configure PAM
-    echo "session required pam_limits.so" >> /etc/pam.d/common-session
-    echo "session required pam_limits.so" >> /etc/pam.d/common-session-noninteractive
+    # Configure PAM. Guarded the same way: an unconditional append duplicated this line on every
+    # re-run of the installer.
+    grep -qF "session required pam_limits.so" /etc/pam.d/common-session || echo "session required pam_limits.so" >> /etc/pam.d/common-session
+    grep -qF "session required pam_limits.so" /etc/pam.d/common-session-noninteractive || echo "session required pam_limits.so" >> /etc/pam.d/common-session-noninteractive
 
     # Enable and start services
     systemctl daemon-reload
@@ -855,30 +929,38 @@ main() {
         exit 1
     fi
 
-    echo -e "${BLUE}BJORN Installation Options:${NC}"
-    echo "1. Full installation (recommended)"
-    echo "2. Custom installation"
-    read -p "Choose an option (1/2): " install_option
+    if [ "$ASSUME_YES" = true ]; then
+        # Full install only — option 2 (custom) is a further six y/n prompts with no sensible
+        # unattended answer, so --yes does not attempt to drive it.
+        install_option=1
+        EPD_VERSION="${EPD_OVERRIDE:-auto}"
+        log "INFO" "--yes: full installation, epd_type=$EPD_VERSION"
+    else
+        echo -e "${BLUE}BJORN Installation Options:${NC}"
+        echo "1. Full installation (recommended)"
+        echo "2. Custom installation"
+        read -p "Choose an option (1/2): " install_option
 
-    # E-Paper Display Selection
-    echo -e "\n${BLUE}Please select your E-Paper Display version:${NC}"
-    echo "1. epd2in13"
-    echo "2. epd2in13_V2"
-    echo "3. epd2in13_V3"
-    echo "4. epd2in13_V4"
-    echo "5. epd2in7"
-    
-    while true; do
-        read -p "Enter your choice (1-5): " epd_choice
-        case $epd_choice in
-            1) EPD_VERSION="epd2in13"; break;;
-            2) EPD_VERSION="epd2in13_V2"; break;;
-            3) EPD_VERSION="epd2in13_V3"; break;;
-            4) EPD_VERSION="epd2in13_V4"; break;;
-            5) EPD_VERSION="epd2in7"; break;;
-            *) echo -e "${RED}Invalid choice. Please select 1-5.${NC}";;
-        esac
-    done
+        # E-Paper Display Selection
+        echo -e "\n${BLUE}Please select your E-Paper Display version:${NC}"
+        echo "1. epd2in13"
+        echo "2. epd2in13_V2"
+        echo "3. epd2in13_V3"
+        echo "4. epd2in13_V4"
+        echo "5. epd2in7"
+
+        while true; do
+            read -p "Enter your choice (1-5): " epd_choice
+            case $epd_choice in
+                1) EPD_VERSION="epd2in13"; break;;
+                2) EPD_VERSION="epd2in13_V2"; break;;
+                3) EPD_VERSION="epd2in13_V3"; break;;
+                4) EPD_VERSION="epd2in13_V4"; break;;
+                5) EPD_VERSION="epd2in7"; break;;
+                *) echo -e "${RED}Invalid choice. Please select 1-5.${NC}";;
+            esac
+        done
+    fi
 
     log "INFO" "Selected E-Paper Display version: $EPD_VERSION"
 
@@ -946,16 +1028,25 @@ main() {
     echo "2. Web interface will be available at: http://[device-ip]:8000"
     echo "3. Make sure your e-Paper HAT (2.13-inch) is properly connected"
 
-    read -p "Would you like to reboot now? (y/n): " reboot_now
-    if [ "$reboot_now" = "y" ]; then
-        if reboot; then
-            log "INFO" "System reboot initiated."
-        else
-            log "ERROR" "Failed to initiate reboot."
-            exit 1
-        fi
-    else
+    if [ "$ASSUME_YES" = true ]; then
+        # Deliberately never auto-reboots, unlike every other prompt --yes answers. Rebooting a
+        # machine out from under whatever invoked this script (a provisioning tool, an SSH session)
+        # is a much bigger and less reversible action than answering an install-time question, and
+        # is exactly the kind of destructive action that should stay opt-in even in unattended mode.
+        log "INFO" "--yes: not rebooting automatically. Reboot manually to apply all changes."
         echo -e "${YELLOW}Reboot your system to apply all changes & run Bjorn service.${NC}"
+    else
+        read -p "Would you like to reboot now? (y/n): " reboot_now
+        if [ "$reboot_now" = "y" ]; then
+            if reboot; then
+                log "INFO" "System reboot initiated."
+            else
+                log "ERROR" "Failed to initiate reboot."
+                exit 1
+            fi
+        else
+            echo -e "${YELLOW}Reboot your system to apply all changes & run Bjorn service.${NC}"
+        fi
     fi
 }
 

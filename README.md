@@ -167,6 +167,14 @@ Check what it would do first, changing nothing:
 sudo ./install_bjorn.sh --dry-run
 ```
 
+Provisioning headlessly, or with no terminal attached? `--yes` answers every prompt the same way
+the interactive install's option 1 does, and never reboots for you:
+
+```bash
+sudo ./install_bjorn.sh --yes                    # epd_type auto-detected
+sudo ./install_bjorn.sh --yes --epd epd2in13_V4  # a specific panel
+```
+
 Then open **`http://<pi-ip>:8000/`**. Can't find the IP? The original author's
 [bjorn-detector](https://github.com/infinition/bjorn-detector) finds any Bjorn on the network.
 

@@ -225,6 +225,37 @@ def test_a_raising_connect_still_drains_the_queue(monkeypatch):
         assert done.wait(timeout=2.0), f"{module_name}: queue.join() blocked — task_done() was skipped"
 
 
+def test_rdp_run_bruteforce_completes_on_a_real_run(monkeypatch):
+    """RDP regression. run_bruteforce referenced mac_address/hostname in the queue-fill loop before
+    they were assigned (they were resolved lower down, inside the `with Progress` block), so a real
+    attack — orchestrator_should_exit=False — raised UnboundLocalError on the first candidate and
+    the orchestrator marked every RDP host failed: the brute force never tried a credential. The
+    connect tests all set orchestrator_should_exit=True and return before that line, which is why
+    CI never saw it. This drives run_bruteforce end to end with a stubbed connect and asserts it
+    returns cleanly instead of raising."""
+    mod, conn = _bare("rdp_connector", "RDPConnector")
+    conn.queue = _queue.Queue()
+    conn.lock = threading.Lock()
+    conn.results = []
+    conn.shared_data = SimpleNamespace(orchestrator_should_exit=False, bruteforce_threads=1)
+    conn.users, conn.passwords = ["root"], ["toor"]
+
+    class _DummyProgress:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def add_task(self, *a, **k): return 0
+        def update(self, *a, **k): pass
+
+    monkeypatch.setattr(mod, "Progress", lambda *a, **k: _DummyProgress())
+    monkeypatch.setattr(mod, "credential_candidates",
+                        lambda *a, **k: [("root", "toor"), ("admin", "admin")])
+    monkeypatch.setattr(conn, "rdp_connect", lambda *a, **k: False)
+
+    row = {"MAC Address": "AA:BB:CC:DD:EE:FF", "Hostnames": "target"}
+    success, results = conn.run_bruteforce("10.0.0.5", 3389, row=row)
+    assert success is False and results == []
+
+
 if __name__ == "__main__":
     import inspect
     for name, fn in sorted(globals().items()):

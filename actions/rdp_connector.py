@@ -87,11 +87,17 @@ class RDPConnector:
                    "/cert:ignore", "+auth-only"]
         try:
             process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            stdout, stderr = process.communicate()
+            # Hard timeout so a black-holed host cannot hang the worker forever.
+            stdout, stderr = process.communicate(timeout=15)
             if process.returncode == 0:
                 return True
             else:
                 return False
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.communicate()  # drain
+            logger.error(f"xfreerdp timed out for {adresse_ip}")
+            return False
         except OSError as e:
             # OSError, not just SubprocessError: FileNotFoundError is raised when xfreerdp is not
             # installed — the common case on a stock Pi — and it is an OSError, so it escaped the

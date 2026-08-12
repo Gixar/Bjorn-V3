@@ -80,7 +80,10 @@ class TelnetConnector:
         Establish a Telnet connection and try to log in with the provided credentials.
         """
         try:
-            tn = telnetlib.Telnet(adresse_ip)
+            # Ctor timeout covers the TCP connect itself; read_until timeouts below
+            # cover the protocol exchange.  Without the ctor timeout a black-holed
+            # host hangs the worker before any read_until fires.
+            tn = telnetlib.Telnet(adresse_ip, timeout=10)
             tn.read_until(b"login: ", timeout=5)
             tn.write(user.encode('ascii') + b"\n")
             if password:

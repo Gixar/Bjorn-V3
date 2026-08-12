@@ -41,7 +41,10 @@ class StealFilesSSH:
         try:
             ssh = paramiko.SSHClient()
             ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            ssh.connect(ip, username=username, password=password)
+            # Wall-clock bounds so a black-holed host can't hang the steal worker
+            # (banner_timeout alone leaves TCP connect and auth able to stall).
+            ssh.connect(ip, username=username, password=password,
+                        timeout=10, banner_timeout=10, auth_timeout=10)
             logger.info(f"Connected to {ip} via SSH with username {username}")
             return ssh
         except Exception as e:

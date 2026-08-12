@@ -84,7 +84,16 @@ class SSHConnector:
         ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         
         try:
-            ssh.connect(adresse_ip, username=user, password=password, banner_timeout=200)  # Adjust timeout as necessary
+            # Wall-clock bounds so a black-holed host cannot hang the worker forever.
+            # banner_timeout alone is not enough — TCP connect and auth can each stall.
+            ssh.connect(
+                adresse_ip,
+                username=user,
+                password=password,
+                timeout=10,
+                banner_timeout=10,
+                auth_timeout=10,
+            )
             return True
         except (paramiko.AuthenticationException, socket.error, paramiko.SSHException):
             return False

@@ -39,7 +39,7 @@ class StealFilesSMB:
         """
         try:
             conn = SMBConnection(username, password, "Bjorn", "Target", use_ntlm_v2=True, is_direct_tcp=True)
-            conn.connect(ip, 445)
+            conn.connect(ip, 445, timeout=10)  # bounded so a black-holed host can't hang the steal worker
             logger.info(f"Connected to {ip} via SMB with username {username}")
             self.smb_connected = True
             return conn

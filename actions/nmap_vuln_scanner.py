@@ -82,7 +82,10 @@ class NmapVulnScanner:
             if self.shared_data.vuln_scan_vulners:
                 nmap_args += ["--script", "vulners.nse"]
             nmap_args += ["-p", ",".join(ports), ip]
-            result = subprocess.run(nmap_args, capture_output=True, text=True)
+            # Per-host wall-clock bound.  Without this a single slow/unresponsive
+            # target blocks the whole vuln-scan pass (and the orchestrator idle branch).
+            # 5 minutes is generous for -sV + vulners on a modest port list.
+            result = subprocess.run(nmap_args, capture_output=True, text=True, timeout=300)
             combined_result += result.stdout
 
             vulnerabilities = self.parse_vulnerabilities(result.stdout)

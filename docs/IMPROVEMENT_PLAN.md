@@ -62,7 +62,12 @@ command-echo ordering. Full suite: **318 passing**. Honest caveats: still unveri
 Telnet host, and the transfer assumes `base64` exists on the target (busybox/coreutils) — if it's
 absent the read yields no data and the file is skipped with a logged warning, never a crash.
 
-Next: verify RDP + Telnet steal on real hosts, then #3 (wpa-sec upload) and finish #4 for SSH/SMB/Telnet.
+**2026-08-11 — Tier 2 #4 done (timeouts everywhere).** Every external-network call now carries a
+wall-clock bound (5 connectors + nmap + the two remaining steal transfers), with an AST guard that
+fails if any establish/exec site loses its timeout. This is the freeze-class killer — no single dead
+host can wedge the single-threaded orchestrator anymore. 319 passing.
+
+Next: verify RDP + Telnet steal on real hosts, then #7 (atomic config), then #3 (wpa-sec upload).
 
 ---
 
@@ -119,7 +124,7 @@ Next: verify RDP + Telnet steal on real hosts, then #3 (wpa-sec upload) and fini
 
 ## Tier 2 — Stop the freezes and the silent lies (reliability)
 
-### 4. Put a wall-clock timeout on every network op
+### 4. ✅ DONE — Put a wall-clock timeout on every network op
 - **Evidence — the recurring hang class:** no timeout on the Telnet constructor
   (`telnet_connector.py:83`), pysmb `conn.connect` (`smb_connector.py:86`), `smbclient`/`xfreerdp`
   `communicate()` (`smb:111`, `rdp:90`), SSH socket/auth (`ssh_connector.py:87` only sets
@@ -132,9 +137,16 @@ Next: verify RDP + Telnet steal on real hosts, then #3 (wpa-sec upload) and fini
   `subprocess.run(..., timeout=)` on nmap.
 - **Payoff:** no single host can stall the loop. This is the single highest-reliability change given
   the history.
-- **Status:** 🟡 partial — RDP's `xfreerdp` connect is now bounded (15s, `5100b76`). Still open: SSH
-  (`banner_timeout` only), SMB (pysmb `connect` + `smbclient` `communicate()`), Telnet (constructor),
-  `nmap_vuln_scanner`, and the steal transfers.
+- **Status:** ✅ done. Every external call is now bounded: SSH (`timeout`+`banner_timeout`+`auth_timeout`),
+  SMB (pysmb `connect(timeout=)` + `smbclient` `communicate(timeout=)` with kill/drain), Telnet
+  (`Telnet(timeout=)` + `read_until` timeouts), SQL (`pymysql connect_timeout`/`read_timeout`/`write_timeout`),
+  nmap (`subprocess.run(timeout=300)`, inside the existing broad `except`), and RDP's `xfreerdp` (15s/30s,
+  earlier). FTP was already bounded. Steal transfers: SSH-steal and SMB-steal connects now carry timeouts;
+  FTP-steal/SQL-steal/RDP-steal/Telnet-steal were already bounded. A new AST guard
+  (`test_connectors.py::test_every_connect_path_carries_a_timeout`) asserts each of the 11 establish/exec
+  sites keeps its bound, so this class can't silently regress (the #14 assertion). Full suite: **319 passing**.
+  Honest caveat: timeouts are module-level constants (~10–15s), not yet the config-driven knob #4 envisioned
+  — a `shared_data` setting can thread through later without changing the call sites.
 
 ### 5. An outcome contract so "silent success on a dead path" can't recur
 - **Evidence:** the BACKLOG names this defect class three times (`WiFiScan: success=4`, `release()`

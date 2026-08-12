@@ -80,7 +80,10 @@ class SQLConnector:
                 host=adresse_ip,
                 user=user,
                 password=password,
-                port=3306
+                port=3306,
+                connect_timeout=10,
+                read_timeout=15,
+                write_timeout=15,
             )
             
             # Si la connexion réussit, récupérer la liste des bases de données

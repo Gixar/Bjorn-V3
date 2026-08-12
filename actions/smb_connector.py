@@ -83,7 +83,10 @@ class SMBConnector:
         """
         conn = SMBConnection(user, password, "Bjorn", "Target", use_ntlm_v2=True)
         try:
-            conn.connect(adresse_ip, 445)
+            # timeout= bounds the TCP + protocol handshake so a black-holed host
+            # cannot hang the worker.  pysmb accepts timeout as the 3rd positional
+            # or as a keyword depending on version; keyword is portable.
+            conn.connect(adresse_ip, 445, timeout=10)
             shares = conn.listShares()
             accessible_shares = []
             for share in shares:
@@ -109,7 +112,13 @@ class SMBConnector:
         command = ["smbclient", "-L", adresse_ip, "-U", f"{user}%{password}"]
         try:
             process = Popen(command, stdout=PIPE, stderr=PIPE)
-            stdout, stderr = process.communicate()
+            try:
+                stdout, stderr = process.communicate(timeout=15)
+            except Exception:
+                process.kill()
+                process.communicate()
+                logger.error(f"smbclient -L timed out for {adresse_ip}")
+                return []
             if b"Sharename" in stdout:
                 logger.info(f"Successful authentication for {adresse_ip} with user '{user}' & password '{password}' using smbclient -L") 
                 logger.info(stdout.decode())

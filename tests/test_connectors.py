@@ -225,6 +225,50 @@ def test_a_raising_connect_still_drains_the_queue(monkeypatch):
         assert done.wait(timeout=2.0), f"{module_name}: queue.join() blocked — task_done() was skipped"
 
 
+# --- #4: every external-network call must carry a wall-clock bound ------------
+
+import ast  # noqa: E402
+
+# (file, callee, {acceptable timeout kwargs}). Matched by the attribute/name being called,
+# so a multiline call is fine (AST, not a line regex). Every establish/exec site below is a
+# hang class the audit named: without a bound, one black-holed host wedges the single-threaded
+# orchestrator — the "start scan freezes the Pi" symptom. This test fails if any of them loses
+# its timeout in a refactor, which is exactly how the RDP path silently died once.
+_TIMEOUT_SITES = [
+    ("ssh_connector.py",       "connect",       {"timeout"}),
+    ("smb_connector.py",       "connect",       {"timeout"}),
+    ("telnet_connector.py",    "Telnet",        {"timeout"}),
+    ("ftp_connector.py",       "connect",       {"timeout"}),
+    ("sql_connector.py",       "connect",       {"connect_timeout"}),
+    ("nmap_vuln_scanner.py",   "run",           {"timeout"}),
+    ("steal_files_ssh.py",     "connect",       {"timeout"}),
+    ("steal_files_smb.py",     "connect",       {"timeout"}),
+    ("steal_files_ftp.py",     "connect",       {"timeout"}),
+    ("steal_files_telnet.py",  "Telnet",        {"timeout"}),
+    ("steal_data_sql.py",      "create_engine", {"connect_args"}),
+]
+
+
+def _callee(call):
+    f = call.func
+    if isinstance(f, ast.Attribute):
+        return f.attr
+    if isinstance(f, ast.Name):
+        return f.id
+    return None
+
+
+def test_every_connect_path_carries_a_timeout():
+    root = Path(__file__).resolve().parent.parent / "actions"
+    for fname, callee, kwargs in _TIMEOUT_SITES:
+        tree = ast.parse((root / fname).read_text(encoding="utf-8"))
+        calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call) and _callee(n) == callee]
+        assert calls, f"{fname}: no {callee}(...) call found — did the code move?"
+        for c in calls:
+            assert any(k.arg in kwargs for k in c.keywords), \
+                f"{fname}: a {callee}(...) call is missing a {kwargs} bound"
+
+
 def test_rdp_run_bruteforce_completes_on_a_real_run(monkeypatch):
     """RDP regression. run_bruteforce referenced mac_address/hostname in the queue-fill loop before
     they were assigned (they were resolved lower down, inside the `with Progress` block), so a real

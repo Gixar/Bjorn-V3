@@ -72,8 +72,13 @@ host can wedge the single-threaded orchestrator anymore. 319 passing.
 saves, the web config path routes through it, and nmap's 2 workers no longer race on the vuln
 summary. No more boot-brick on a yanked plug, no more lost hosts from concurrent writes. 320 passing.
 
-Next: verify RDP + Telnet steal on real hosts, then #6 (steal caps) or #5 (outcome contract), then
-#3 (wpa-sec upload).
+**2026-08-12 — #6 done + #5 partially landed.** Every steal now caps recursion depth, file/run bytes,
+and free space (no more symlink-loop hang or full-SD OOM); the bettercap poller no longer fails
+silently (first-failure log + backoff + recovery line). 322 passing. #5's typed-Outcome contract +
+lint + web last-error panel remain.
+
+Next: verify the steal caps + Telnet/RDP steal on real hosts, then finish #5 (typed contract + lint)
+or start Tier 3 (#8 parallel execution), then #3 (wpa-sec upload).
 
 ---
 
@@ -154,25 +159,43 @@ Next: verify RDP + Telnet steal on real hosts, then #6 (steal caps) or #5 (outco
   Honest caveat: timeouts are module-level constants (~10–15s), not yet the config-driven knob #4 envisioned
   — a `shared_data` setting can thread through later without changing the call sites.
 
-### 5. An outcome contract so "silent success on a dead path" can't recur
+### 5. 🟡 PARTIAL — An outcome contract so "silent success on a dead path" can't recur
 - **Evidence:** the BACKLOG names this defect class three times (`WiFiScan: success=4`, `release()`
-  logging success on a radio it never restored, "the status line that cannot fail"). It's still
-  live: `bettercap_client.py:206-208` swallows daemon-down/401 with no log — a wrong password =
+  logging success on a radio it never restored, "the status line that cannot fail"). It was still
+  live: `bettercap_client.py` poll_once swallowed daemon-down/401 with no log — a wrong password =
   **8,640 silent failed polls/day**, nothing on screen.
 - **How:** actions return a typed `Outcome{success|failed|skipped}` and must *verify* their side
   effect before claiming success (a capture wrote rows; a radio is actually `managed`). A one-line
   test helper asserts the contract, and a lint rejects an unconditional `return 'success'`. Surface
   a first-failure log + last-error on the web panel with backoff.
 - **Payoff:** diagnostics stop reassuring you about dead features.
+- **Status:** 🟡 partial. The concrete silent-failure is fixed: `BettercapPoller.poll_once` now logs
+  the first failure immediately, then backs off (30s→…→30m cap), records `_last_error`, and logs a
+  recovery line when the daemon answers again — no more silent polls, no log flood
+  (`test_poller_backs_off_repeated_failure_logs`). **Still open:** the typed `Outcome` type, per-action
+  side-effect verification, the lint rejecting an unconditional `return 'success'`
+  (`ble_scan.py:86`, `http_fingerprint.py:59`, `snmp_enum.py:63`, `nmap_vuln_scanner.py:125` still do),
+  and surfacing `_last_error` on the web panel.
 
-### 6. Cap recursion, bytes, and free space on every steal
+### 6. ✅ DONE — Cap recursion, bytes, and free space on every steal
 - **Evidence:** unbounded remote-tree recursion with no visited-set (`steal_files_ftp.py:58`,
-  `steal_files_smb.py:56`) → a symlink loop recurses forever; `steal_data_sql.py:80` does
+  `steal_files_smb.py:56`) → a symlink loop recursed forever; `steal_data_sql.py:80` did
   `SELECT *` + `pd.read_sql` (whole table into RAM); **no size cap on any transfer** and no
   free-space check → OOM / full SD on a 512 MB Pi Zero.
-- **How:** depth cap + visited-inode set, per-file and per-run byte budget, a free-space precheck,
-  and atomic temp-file + rename for every write.
+- **How:** depth cap + visited-set, per-file and per-run byte budget, a free-space precheck.
 - **Payoff:** a large or hostile host can't OOM the Pi or fill the card.
+- **Status:** ✅ done. FTP + SMB `find_files` gained a `MAX_DEPTH` cap + visited-set + a
+  `MAX_FILES_PER_RUN` cap (the depth cap is the real symlink-loop backstop, since a loop grows the
+  path each level — `test_smb_find_files_bounds_an_infinite_tree`). Every steal enforces a free-space
+  precheck (`shutil.disk_usage` ≥ `MIN_FREE_BYTES`), a per-file cap (`MAX_FILE_BYTES`, streamed so a
+  huge file aborts mid-download) and a per-run budget (`MAX_RUN_BYTES`), and unlinks partial files on
+  error. SQL now validates the identifier, backtick-quotes it, and reads `SELECT * … LIMIT MAX_ROWS`,
+  deleting the dump if it exceeds the cap. The ftp/smb/bettercap fixes came from the user's
+  `Downloads/Fixes/#6#5` set (verified); the missing part I completed was `steal_data_sql.py`'s
+  `import shutil` + the four cap constants it referenced but never defined (a guaranteed `NameError`).
+  Deferred (minor): atomic temp+rename *per stolen file* — a crash leaves an incomplete loot file, not
+  corrupt Bjorn state, and the error path already unlinks partials; visited-set is path-keyed, not
+  inode-keyed. 322 passing.
 
 ### 7. ✅ DONE — Make config writes atomic and serialize shared state
 - **Evidence:** `shared.py:593 save_config` was a plain `open('w')`+`json.dump` — **not atomic**,

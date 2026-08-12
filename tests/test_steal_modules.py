@@ -133,6 +133,30 @@ def test_telnet_download_is_binary_safe_and_echo_proof(tmp_path, monkeypatch):
     assert written == content, "telnet download did not round-trip the file bytes"
 
 
+class _LoopingSMB:
+    """A share where every directory contains exactly one subdirectory — an infinite tree.
+    Without the depth cap, find_files recurses forever and wedges the worker (#6)."""
+    def __init__(self):
+        self.calls = 0
+
+    def listPath(self, share, path):
+        self.calls += 1
+        return [SimpleNamespace(isDirectory=True, filename="loop")]
+
+
+def test_smb_find_files_bounds_an_infinite_tree(monkeypatch):
+    """#6: cyclic/deep directory trees must not recurse forever. The depth cap is the backstop
+    (a symlink loop grows the path each level, so the visited-set alone won't catch it)."""
+    mod, obj = _steal("steal_files_smb", "StealFilesSMB", monkeypatch)
+    obj.shared_data = SimpleNamespace(orchestrator_should_exit=False,
+                                      steal_file_extensions=[], steal_file_names=[])
+    conn = _LoopingSMB()
+    files = obj.find_files(conn, "share", "/")  # must RETURN, not hang
+    assert files == []
+    # depth 0..MAX_DEPTH each list once, then depth MAX_DEPTH+1 returns before listing
+    assert conn.calls == mod.MAX_DEPTH + 1, f"recursion not bounded: {conn.calls} listPath calls"
+
+
 if __name__ == "__main__":
     import inspect
     for name, fn in sorted(globals().items()):

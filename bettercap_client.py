@@ -193,6 +193,12 @@ class BettercapPoller:
         self._schema_reported = False
         self.polls = 0
         self.errors = 0
+        # Rate-limit failure logs so a wrong password is not 8,640 silent failures/day
+        # and also not 8,640 identical ERROR lines.  First failure logs immediately;
+        # subsequent ones back off (30s, 2m, 10m, 30m cap).
+        self._last_error = None
+        self._next_error_log = 0.0
+        self._error_backoff = 30
 
     def drain(self):
         """Take everything buffered since the last call. Called by the orchestrator."""
@@ -201,11 +207,30 @@ class BettercapPoller:
         return hosts
 
     def poll_once(self):
-        """One poll. Returns the number of hosts buffered, or -1 when the daemon did not answer."""
+        """One poll. Returns the number of hosts buffered, or -1 when the daemon did not answer.
+
+        Failures are no longer silent: the first error is logged immediately, then with
+        exponential backoff so a persistent 401/daemon-down does not flood the log.
+        """
         ok, events = self.client.events(clear=True)
         if not ok:
             self.errors += 1
+            self._last_error = events  # events is the detail string when ok is False
+            now = time.time()
+            if now >= self._next_error_log:
+                logger.warning(
+                    f"Bettercap poll failed ({self.errors} total): {self._last_error}"
+                )
+                self._next_error_log = now + self._error_backoff
+                self._error_backoff = min(self._error_backoff * 2, 1800)  # cap 30 min
             return -1
+        # Success resets the backoff so the next outage is reported promptly again.
+        if self._error_backoff != 30 or self._last_error is not None:
+            if self.errors:
+                logger.info(f"Bettercap poll recovered after {self.errors} error(s)")
+            self._error_backoff = 30
+            self._last_error = None
+            self._next_error_log = 0.0
         self.polls += 1
         hosts = parse_hosts(events)
         self._report_schema(events, hosts)

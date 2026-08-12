@@ -198,6 +198,7 @@ def test_poller_buffers_and_drain_empties():
     poller.shared_data = None
     poller._buffer, poller._lock = {}, __import__("threading").Lock()
     poller._schema_reported, poller.polls, poller.errors = True, 0, 0
+    poller._last_error, poller._next_error_log, poller._error_backoff = None, 0.0, 30
     poller.client = _FakeClient([(True, SAMPLE_EVENTS), (True, [])])
 
     assert poller.poll_once() == 2
@@ -212,8 +213,29 @@ def test_poller_reports_a_daemon_that_does_not_answer():
     poller.shared_data = None
     poller._buffer, poller._lock = {}, __import__("threading").Lock()
     poller._schema_reported, poller.polls, poller.errors = True, 0, 0
+    poller._last_error, poller._next_error_log, poller._error_backoff = None, 0.0, 30
     poller.client = _FakeClient([(False, "connection refused")])
     assert poller.poll_once() == -1 and poller.errors == 1
+
+
+def test_poller_backs_off_repeated_failure_logs(monkeypatch):
+    """#5: a persistent daemon-down/401 must be logged (not silent) but must not flood — the first
+    failure logs, later ones back off — and the last error is recorded for the web panel. Guards the
+    'wrong password = 8,640 silent failed polls/day' defect."""
+    poller = bc.BettercapPoller.__new__(bc.BettercapPoller)
+    poller.shared_data = None
+    poller._buffer, poller._lock = {}, __import__("threading").Lock()
+    poller._schema_reported, poller.polls, poller.errors = True, 0, 0
+    poller._last_error, poller._next_error_log, poller._error_backoff = None, 0.0, 30
+    poller.client = _FakeClient([(False, "unauthorized")] * 3)
+
+    warnings = []
+    monkeypatch.setattr(bc.logger, "warning", lambda msg, *a, **k: warnings.append(msg))
+    monkeypatch.setattr(bc.time, "time", lambda: 100.0)  # freeze: only the first failure is due
+
+    assert [poller.poll_once() for _ in range(3)] == [-1, -1, -1]
+    assert len(warnings) == 1, "repeated failures must back off, not log every poll"
+    assert poller._last_error == "unauthorized" and poller.errors == 3
 
 
 def test_start_poller_is_a_noop_when_disabled():

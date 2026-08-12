@@ -160,6 +160,7 @@ class SharedData:
             "planner_max_host_actions": 4,   # host actions the planner runs per cycle (fairness window, not a cap on throughput)
             "planner_standalone_every": 3,   # force a standalone action every N cycles so recon isn't starved by host work
             "bruteforce_threads": 0,  # brute-force worker threads per connector; 0 = auto (core-aware, capped at 8)
+            "host_parallel": 0,  # distinct hosts to attack at once per cycle; 0 = auto (budget÷bruteforce_threads), 1 = serial (old behaviour)
             "credential_reuse": True,  # replay a cracked user:password across other hosts/protocols (tried first); shared pool in crackedpwd/known_creds.csv
             "wpasec_api_key": "",      # wpa-sec.stanev.org API key (secret, user-supplied); empty = wpa-sec import disabled
             "wpasec_interval": 3600,   # min seconds between wpa-sec fetches (throttle; 0 = every idle cycle)

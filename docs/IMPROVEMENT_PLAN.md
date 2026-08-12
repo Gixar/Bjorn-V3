@@ -77,8 +77,14 @@ and free space (no more symlink-loop hang or full-SD OOM); the bettercap poller 
 silently (first-failure log + backoff + recovery line). 322 passing. #5's typed-Outcome contract +
 lint + web last-error panel remain.
 
-Next: verify the steal caps + Telnet/RDP steal on real hosts, then finish #5 (typed contract + lint)
-or start Tier 3 (#8 parallel execution), then #3 (wpa-sec upload).
+**2026-08-12 — Tier 3 #8 landed (parallel host execution).** `process_alive_ips` now groups
+candidates by host and runs distinct hosts concurrently under a budget-capped `ThreadPoolExecutor`
+(`host_parallel` config knob, core-aware `outer×inner` cap, per-action-class locks, standalones kept
+serial). The flagship throughput change — same-host parent→child order preserved. 323 passing;
+on-Pi multi-host benchmark still needed to quantify the win.
+
+Next: benchmark #8 on hardware, then #10 (display cost) or #9 (vuln scan off critical path), then
+finish #5 (typed contract + lint) and #3 (wpa-sec upload).
 
 ---
 
@@ -226,16 +232,26 @@ or start Tier 3 (#8 parallel execution), then #3 (wpa-sec upload).
 
 ## Tier 3 — Go faster on the same hardware (this is the literal 30%)
 
-### 8. Parallelize per-cycle work across hosts
-- **Evidence:** `orchestrator.process_alive_ips` runs candidates in a `for` loop with
-  `with self.semaphore:` **one at a time, in one thread** — the `Semaphore(10)` is a vestige of a
-  removed design; effective cross-host concurrency is **1**. The only real concurrency in the repo
-  is `nmap ThreadPoolExecutor(max_workers=2)`. On an N-host LAN, Bjorn attacks serially.
-- **How:** the planner already picks ≤4 distinct action-classes on distinct host rows per cycle —
-  run them through a bounded `ThreadPoolExecutor`; each mutates its own row dict, and the single
-  `write_data` at cycle end persists all. *Caveat (honest):* connectors spawn `bruteforce_threads`
-  internally, so cap `outer_pool × inner_threads` to a total budget (~cores×4) so a Pi Zero doesn't
-  thrash — a small knob, not a rewrite.
+### 8. ✅ DONE — Parallelize per-cycle work across hosts
+- **Evidence:** `orchestrator.process_alive_ips` ran candidates in a `for` loop with
+  `with self.semaphore:` **one at a time, in one thread** — the `Semaphore(10)` was a vestige of a
+  removed design; effective cross-host concurrency was **1**. On an N-host LAN, Bjorn attacked serially.
+- **How (shipped):** candidates are grouped by host row (MAC) and each group's actions run in planner
+  order (so a same-host parent→child stays sequential and the child sees the parent's row update),
+  while **distinct host groups run concurrently** under a `ThreadPoolExecutor`. Standalones stay
+  sequential (they share the radio / bettercap). The worker count comes from `_host_parallel_workers`:
+  a core-aware budget (`cores×4`) divided by `bruteforce_threads`, then capped by the group count and
+  the planner's `max_host_actions` — so `outer_pool × inner_threads` can't thrash a Pi Zero. New config
+  key `host_parallel` (0 = auto, 1 = serial/old behaviour, N = hard cap), range-validated in
+  `config_validation`. A per-action-class lock serializes two hosts that need the same connector
+  singleton (shared queue/results). Cycle-end `write_data` is single-threaded and #7-locked.
+- **Status:** ✅ done. Files came from the user's `Downloads/Fixes/#8` set (`orchestrator.py` +
+  `shared.py`, verified — the `shared.py` only adds the `host_parallel` default and preserves all #7
+  locking). Improvements I added: `host_parallel` range-validation in `config_validation`, its key in
+  the test fixture, and `test_host_parallel_worker_count_stays_within_budget` proving the budget cap
+  (serial when =1, never exceeds groups / planner cap, shrinks as inner threads grow). 323 passing.
+  Honest caveat: the gain is unmeasured on hardware — needs an on-Pi multi-host benchmark to confirm
+  the `1/k` wall-clock. Default `host_parallel=0` (auto) turns it on; set `1` to revert to serial.
 - **Payoff:** an I/O-bound multi-host sweep finishes in roughly `1/k` the time.
 
 ### 9. Move the vuln scan off the critical path and bound it

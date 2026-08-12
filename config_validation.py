@@ -28,7 +28,7 @@ _STR_KEYS = ("bettercap_api_url", "bettercap_user", "bettercap_password",
 _NONNEG_INT_KEYS = (
     "startup_delay", "scan_interval", "scan_vuln_interval",
     "failed_retry_delay", "success_retry_delay", "ref_width", "ref_height",
-    "battery_shutdown_percent", "bruteforce_threads", "rustscan_batch_size",
+    "battery_shutdown_percent", "bruteforce_threads", "host_parallel", "rustscan_batch_size",
     "wpasec_interval", "telegram_min_interval",
     "ble_scan_duration", "ble_scan_interval", "ble_scan_interval_offline", "smtp_port",
     "wifi_scan_duration", "wifi_scan_interval", "wifi_scan_channel",

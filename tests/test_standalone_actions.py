@@ -253,6 +253,28 @@ def test_no_op_paths_in_the_action_modules_return_skipped():
             f"{name}.py still reports a throttled no-op as success"
 
 
+def _workers(host_parallel, bruteforce_threads, max_host_actions):
+    """Bind _host_parallel_workers onto a fake self so we can drive it with no Orchestrator."""
+    fake = types.SimpleNamespace(
+        shared_data=types.SimpleNamespace(
+            host_parallel=host_parallel, bruteforce_threads=bruteforce_threads),
+        planner=types.SimpleNamespace(max_host_actions=max_host_actions),
+    )
+    return lambda n_groups: Orchestrator._host_parallel_workers(fake, n_groups)
+
+
+def test_host_parallel_worker_count_stays_within_budget():
+    """#8: the outer host-worker count must never let outer x bruteforce_threads thrash a Pi Zero,
+    and host_parallel=1 must preserve the old serial behaviour. Assertions are core-count
+    independent so this holds on any CI box."""
+    assert _workers(1, 0, 4)(8) == 1, "host_parallel=1 must stay serial"
+    assert _workers(0, 1, 4)(1) == 1, "never more workers than host groups"
+    assert _workers(0, 1, 4)(100) == 4, "never exceed the planner's per-cycle host cap"
+    assert _workers(16, 1, 4)(2) == 2, "explicit N is still capped by groups and the planner cap"
+    # More inner brute-force threads must shrink (never grow) the outer pool — the budget division.
+    assert _workers(0, 8, 4)(100) <= _workers(0, 1, 4)(100)
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

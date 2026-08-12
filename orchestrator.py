@@ -24,6 +24,7 @@ import os
 import time
 import logging
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from actions.nmap_vuln_scanner import NmapVulnScanner
 from init_shared import shared_data
@@ -50,7 +51,14 @@ class Orchestrator:
         self.load_actions()  # Load all actions from the actions file
         actions_loaded = [action.__class__.__name__ for action in self.actions + self.standalone_actions]  # Get the names of the loaded actions
         logger.info(f"Actions loaded: {actions_loaded}")
-        self.semaphore = threading.Semaphore(10)  # Limit the number of active threads to 10
+        # Legacy vestige kept as a soft upper bound on concurrent action bodies.
+        # Real cross-host parallelism is the ThreadPoolExecutor in process_alive_ips;
+        # the semaphore alone never provided it (the old loop held it serially).
+        self.semaphore = threading.Semaphore(10)
+        # One lock per action class so two hosts that both need SSHBruteforce cannot
+        # interleave on the shared connector singleton (shared queue/results).
+        self._action_locks = {}
+        self._action_locks_guard = threading.Lock()
         self.planner = Planner()  # knobs re-read from config each cycle via sync_config()
         self.offline_since = None  # set on the cycle the uplink disappears, cleared when it returns
         self.last_autojoin_detail = None  # dedupes the once-a-minute auto-join outcome in the log
@@ -139,17 +147,72 @@ class Orchestrator:
         with open(os.path.join(report_dir, f"{self.run_id}.json"), "w") as f:
             json.dump(report, f, indent=2)
 
+    def _action_lock(self, action_name):
+        """Return the per-action-class lock, creating it on first use."""
+        with self._action_locks_guard:
+            lock = self._action_locks.get(action_name)
+            if lock is None:
+                lock = threading.Lock()
+                self._action_locks[action_name] = lock
+            return lock
+
+    def _host_parallel_workers(self, n_groups):
+        """How many host groups to run at once.
+
+        Connectors spawn bruteforce_threads internally, so outer_workers × inner
+        must stay under a total budget or a Pi Zero thrashes.  Budget defaults to
+        cores×4 (same formula as bruteforce_threads auto).  Config key
+        host_parallel: 0 = auto, 1 = serial (old behaviour), N = hard cap.
+        """
+        configured = int(getattr(self.shared_data, "host_parallel", 0) or 0)
+        if configured == 1:
+            return 1
+        cores = os.cpu_count() or 1
+        inner = max(1, int(getattr(self.shared_data, "bruteforce_threads", 0) or 1))
+        budget = max(cores * 4, 1)
+        auto = max(1, budget // inner)
+        # Never more workers than groups, never more than the planner's host cap.
+        cap = min(n_groups, max(1, int(getattr(self.planner, "max_host_actions", 4) or 4)))
+        if configured > 1:
+            return max(1, min(configured, cap, auto))
+        return max(1, min(cap, auto))
+
+    def _run_candidate(self, cand, current_data):
+        """Execute one planner candidate. Returns True on success.
+
+        Holds the per-action-class lock so two hosts that need the same connector
+        singleton cannot interleave on its shared queue/results.
+        """
+        with self.semaphore:
+            with self._action_lock(cand.action_name):
+                self.shared_data.bjornorch_status = cand.action_name
+                self.shared_data.bjornstatustext2 = cand.reason[:40]
+                logger.info(f"Planner chose: {cand.reason} (score={cand.score})")
+                if cand.kind == "standalone":
+                    return bool(self.execute_standalone_action(cand.action, current_data))
+                if cand.row is not None:
+                    ports = str(cand.row.get("Ports", "") or "").split(';')
+                    return bool(self.execute_action(
+                        cand.action, cand.ip, ports, cand.row,
+                        cand.action_name, current_data,
+                    ))
+                return False
+
     def process_alive_ips(self, current_data, idle_boost=0):
         """Score every eligible unit of work and run this cycle's top picks.
 
-        Replaces a walk over `self.actions` in load order that `break`ed on the first success per
-        host, which meant: the earliest-loaded action always went first regardless of how promising
-        the target was, and a child action only ran if it happened to follow its parent in the same
-        pass. Ranking lives in action_planner.py; this method only executes.
+        Ranking lives in action_planner.py; this method only executes.
 
-        Note the one behaviour traded away: a parent unlocked *during* this cycle no longer has its
-        child run immediately after it. The child becomes eligible next cycle, where "parent ok"
-        (+55) puts it at the top — one cycle of latency, and cycles with work don't sleep."""
+        Cross-host parallelism (#8): candidates are grouped by host row so a
+        parent+child on the same box still run sequentially (child sees the
+        parent's row update), while distinct hosts run concurrently under a
+        ThreadPoolExecutor.  The worker count is capped by a core-aware budget
+        so outer_pool × bruteforce_threads cannot thrash a Pi Zero.
+
+        Note: a parent unlocked *during* this cycle still does not unlock its
+        child on a *different* host mid-cycle — children become eligible next
+        cycle.  Same-host parent+child pairs are preserved by the row grouping.
+        """
         self.planner.sync_config(self.shared_data)
         candidates = self.planner.collect(
             self.actions, self.standalone_actions, current_data,
@@ -162,20 +225,62 @@ class Orchestrator:
         if not work:
             return False
 
-        any_action_executed = False
+        # Partition: host actions grouped by row identity, standalones separate.
+        # Grouping by MAC keeps parent→child order inside one host sequential.
+        host_groups = {}  # key -> list[cand] in planner order
+        standalones = []
         for cand in work:
-            with self.semaphore:
-                self.shared_data.bjornorch_status = cand.action_name
-                self.shared_data.bjornstatustext2 = cand.reason[:40]
-                logger.info(f"Planner chose: {cand.reason} (score={cand.score})")
-                if cand.kind == "standalone":
-                    if self.execute_standalone_action(cand.action, current_data):
+            if cand.kind == "standalone":
+                standalones.append(cand)
+                continue
+            key = None
+            if cand.row is not None:
+                key = cand.row.get("MAC Address") or cand.row.get("IPs") or id(cand.row)
+            else:
+                key = cand.ip or id(cand)
+            host_groups.setdefault(key, []).append(cand)
+
+        any_action_executed = False
+        workers = self._host_parallel_workers(len(host_groups)) if host_groups else 1
+        logger.info(
+            f"Cycle work: {sum(len(v) for v in host_groups.values())} host action(s) "
+            f"across {len(host_groups)} host(s), {len(standalones)} standalone; "
+            f"parallel workers={workers}"
+        )
+
+        def _run_group(group):
+            """Run every candidate for one host, in planner order. Returns True if any succeeded."""
+            ok = False
+            for cand in group:
+                if self.shared_data.orchestrator_should_exit:
+                    break
+                if self._run_candidate(cand, current_data):
+                    ok = True
+            return ok
+
+        if host_groups:
+            if workers <= 1 or len(host_groups) == 1:
+                for group in host_groups.values():
+                    if self.shared_data.orchestrator_should_exit:
+                        break
+                    if _run_group(group):
                         any_action_executed = True
-                elif cand.row is not None:
-                    ports = str(cand.row.get("Ports", "") or "").split(';')
-                    if self.execute_action(cand.action, cand.ip, ports, cand.row,
-                                           cand.action_name, current_data):
-                        any_action_executed = True
+            else:
+                with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="bjorn-host") as pool:
+                    futures = [pool.submit(_run_group, g) for g in host_groups.values()]
+                    for fut in as_completed(futures):
+                        try:
+                            if fut.result():
+                                any_action_executed = True
+                        except Exception as e:
+                            logger.error(f"Host-group worker failed: {e}")
+
+        # Standalones stay sequential — they often share global resources (radio, bettercap).
+        for cand in standalones:
+            if self.shared_data.orchestrator_should_exit:
+                break
+            if self._run_candidate(cand, current_data):
+                any_action_executed = True
 
         return any_action_executed
 

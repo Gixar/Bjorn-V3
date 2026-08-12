@@ -21,7 +21,7 @@ def _good_config():
         "epd_type": "epd2in13_V4", "portlist": [22, 80, 443],
         "battery_monitor_enabled": False, "battery_shutdown_percent": 10,
         "vuln_scan_sv": True, "vuln_scan_vulners": True, "vuln_offline_cve": True,
-        "bruteforce_threads": 0, "credential_reuse": True, "wpasec_interval": 3600,
+        "bruteforce_threads": 0, "host_parallel": 0, "credential_reuse": True, "wpasec_interval": 3600,
         "telegram_enabled": False, "telegram_include_creds": True, "telegram_min_interval": 300,
         "ble_scan_enabled": False, "ble_scan_duration": 10, "ble_scan_interval": 300,
         "ble_scan_interval_offline": 60,

@@ -45,7 +45,7 @@ def _captured_argv(module_name, call):
     class FakeProc:
         returncode = 1
 
-        def communicate(self):
+        def communicate(self, timeout=None):
             return (b"", b"")
 
     def fake_popen(cmd, *a, **kw):

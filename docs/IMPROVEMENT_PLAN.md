@@ -46,13 +46,23 @@ live on a Pi Zero 2 W, now on `Bjorn-V3/main` (tip `5100b76`):
 safe: a 30s `xfreerdp` connect timeout, and a `_looks_like_local_root` guard that refuses to run when
 `/mnt/shared` looks like the Pi's own filesystem (the original "steals its own disk" bug). True
 remote→local RDP steal still needs a different transport (SMB / a staged remote command) — honestly
-deferred in the module docstring, since `/drive` + `+auth-only` cannot pull remote files. The Telnet
-steal's reliability half is fixed too (latch reset, run_token, daemon timer, connect timeout, bounded
-find), but its new base64 download has an end-marker/echo bug and is **held** until it can be verified
-against a live Telnet host — see the Status note under #2.
+deferred in the module docstring, since `/drive` + `+auth-only` cannot pull remote files.
 
-Next: verify RDP steal on a Pi with a 3389 host, rework + land the Telnet download, then #3 (wpa-sec
-upload) and finish #4 for SSH/SMB/Telnet.
+**2026-08-11 — Telnet steal reworked and landed (unit-verified).** The held base64 download is
+rebuilt and the end-marker/echo bug is gone. The transfer now base64-encodes the remote file between
+markers chosen so both prior failure modes are structurally impossible: the markers carry underscores
+(outside the base64 alphabet, so they can never collide with payload bytes), and the remote command
+splits the literals with `''` (so the shell's command-echo carries `__BJORN''_B64_...`, not the
+contiguous marker `read_until` scans for). Reliability is now at parity with SSH/RDP: connect + read
+timeouts, latch reset per run, a `run_token`-guarded daemon timer, `telnet_connected` actually set on
+connect, and a bounded, prompt-independent `find`. Telnet is no longer excluded from
+`test_steal_modules.py` (it's in `MODULES`), and a new `test_telnet_download_is_binary_safe_and_echo_proof`
+round-trips all 256 byte values + a `$`-laden payload through a fake login shell that reproduces the
+command-echo ordering. Full suite: **318 passing**. Honest caveats: still unverified against a *live*
+Telnet host, and the transfer assumes `base64` exists on the target (busybox/coreutils) — if it's
+absent the read yields no data and the file is skipped with a logged warning, never a crash.
+
+Next: verify RDP + Telnet steal on real hosts, then #3 (wpa-sec upload) and finish #4 for SSH/SMB/Telnet.
 
 ---
 
@@ -73,7 +83,7 @@ upload) and finish #4 for SSH/SMB/Telnet.
 - **Status:** ✅ shipped (`d2fec2d`) with the regression test; RDP connect timeout added (`5100b76`);
   verified live on the Pi 2026-08-11 via `bjorn_verify` Section 9 — the fix is in the running code.
 
-### 2. 🟡 PARTIAL — Fix RDP + Telnet loot (RDP steal hardened; Telnet download reworking)
+### 2. 🟡 PARTIAL — Fix RDP + Telnet loot (Telnet landed; RDP steal hardened, needs remote transport)
 - **Evidence:** `steal_files_rdp.py:49-50` redirects the *Pi's* `/mnt/shared` into the session, then
   `find_files:74` does `os.walk("/mnt/shared")` **locally** — it copies Bjorn's own disk, never the
   target. `steal_files_telnet.py:102-105` never resets the `stop_execution`/`telnet_connected`
@@ -84,13 +94,16 @@ upload) and finish #4 for SSH/SMB/Telnet.
   against the target). Telnet — reset the latch per run, guard the timer with a `run_token` daemon
   thread, and transfer via a length-prefixed/base64 read instead of `cat`+prompt-scan.
 - **Payoff:** restores 2 of 6 loot modules.
-- **Status:** 🟡 partial. **RDP steal** hardened + made safe — 30s connect timeout and a
-  `_looks_like_local_root` guard that stops it copying the Pi's own files (committed). True remote RDP
-  steal is deferred to a transport redesign (documented in the module: `/drive` + `+auth-only` can't
-  pull remote files). **Telnet steal** reliability is fixed (latch reset, run_token, daemon timer,
-  connect timeout, bounded find), but its base64 download has an end-marker/echo bug — it emits
-  `__BJORN_END__` without the newline `read_until(_END_MARKER)` waits for, and the marker also appears
-  in the telnet command echo — so it's **held** until reworked and tested on a live Telnet host.
+- **Status:** 🟡 partial. **Telnet steal** — ✅ landed (unit-verified). The base64 download is
+  rebuilt: markers carry underscores (outside the base64 alphabet → no payload collision) and the
+  remote command splits the literals with `''` (so the command-echo doesn't contain the contiguous
+  marker `read_until` waits on). Reliability now matches SSH/RDP — connect + read timeouts, latch
+  reset, `run_token` daemon timer, `telnet_connected` set on connect, bounded prompt-independent
+  `find`. Now in `test_steal_modules.py::MODULES` plus a binary-safe/`$`-safe round-trip regression
+  test; 318 passing. Not yet live-verified; assumes `base64` on the target (else logged skip, no
+  crash). **RDP steal** hardened + made safe — 30s connect timeout and a `_looks_like_local_root`
+  guard that stops it copying the Pi's own files. True remote RDP steal is still deferred to a
+  transport redesign (documented in the module: `/drive` + `+auth-only` can't pull remote files).
 
 ### 3. Close the handshake → crack loop — captures are collected but never cracked
 - **Evidence:** `bettercap_pwn.py` captures per-AP PCAPs, indexes them, and awards coins

@@ -136,7 +136,7 @@ def test_rdp_connect_maps_exit_code_to_result(monkeypatch):
     def popen_returning(code):
         class P:
             returncode = code
-            def communicate(self): return (b"", b"")
+            def communicate(self, timeout=None): return (b"", b"")
         return lambda *a, **k: P()
 
     monkeypatch.setattr(mod.subprocess, "Popen", popen_returning(0))

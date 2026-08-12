@@ -23,6 +23,7 @@ MODULES = [
     ("steal_files_smb", "StealFilesSMB", "SMBBruteforce", "connect_smb"),
     ("steal_files_ftp", "StealFilesFTP", "FTPBruteforce", "connect_ftp"),
     ("steal_files_rdp", "StealFilesRDP", "RDPBruteforce", "connect_rdp"),
+    ("steal_files_telnet", "StealFilesTelnet", "TelnetBruteforce", "connect_telnet"),
     ("steal_data_sql", "StealDataSQL", "SQLBruteforce", "connect_sql"),
 ]
 
@@ -68,7 +69,7 @@ def test_execute_resets_the_latch(monkeypatch, tmp_path):
             bjornorch_status="", orchestrator_should_exit=False,
             sshfile=str(tmp_path / "none.csv"), smbfile=str(tmp_path / "none.csv"),
             ftpfile=str(tmp_path / "none.csv"), rdpfile=str(tmp_path / "none.csv"),
-            sqlfile=str(tmp_path / "none.csv"))
+            telnetfile=str(tmp_path / "none.csv"), sqlfile=str(tmp_path / "none.csv"))
         row = {parent: "success_20260101_000000", "IPs": "10.0.0.5", "MAC Address": "AA:BB"}
         obj.execute("10.0.0.5", 22, row, "status")
         assert obj.stop_execution is False, f"{module_name} did not reset stop_execution"
@@ -82,6 +83,54 @@ def test_the_reset_is_present_in_source_for_every_module():
         src = (root / f"{module_name}.py").read_text(encoding="utf-8")
         exec_body = src.split("def execute(")[1]
         assert "self.stop_execution = False" in exec_body, f"{module_name}: no reset in execute()"
+
+
+class _FakeTelnet:
+    """Minimal login-shell simulator for the telnet transfer path.
+
+    A real shell echoes the command line back verbatim *before* running it — that echo
+    contains the split `__BJORN''_B64_...` markers, which is exactly what broke the naive
+    read_until (it matched the echo, not the output). This fake reproduces that ordering
+    so the echo-proofing is actually under test, and encodes real bytes with base64 so the
+    binary-safe / `$`-in-content fix is exercised too.
+    """
+    def __init__(self, files):
+        self.files = files          # {remote_path: bytes}
+        self.buf = b""
+
+    def write(self, data):
+        import re, base64 as _b64
+        line = data.decode('ascii')
+        self.buf += data.replace(b"\n", b"\r\n")   # the shell echoes the command line
+        payload = b""
+        m = re.search(r"base64 '([^']*)'", line)
+        if m:
+            payload = _b64.b64encode(self.files.get(m.group(1), b"")) + b"\n"
+        # output of: echo BEGIN; base64 ...; echo END   (contiguous markers, then a prompt)
+        self.buf += b"__BJORN_B64_BEGIN__\r\n" + payload + b"__BJORN_B64_END__\r\n$ "
+
+    def read_until(self, marker, timeout=None):
+        idx = self.buf.find(marker)
+        if idx == -1:
+            out, self.buf = self.buf, b""
+            return out
+        end = idx + len(marker)
+        out, self.buf = self.buf[:end], self.buf[end:]
+        return out
+
+
+def test_telnet_download_is_binary_safe_and_echo_proof(tmp_path, monkeypatch):
+    """The held bug: `cat file` + read_until(b"$") truncated at the first `$` and corrupted
+    binaries. The base64+marker transfer must round-trip every byte, survive `$` in the
+    payload, and not latch onto the marker echoed in the command line."""
+    _mod, obj = _steal("steal_files_telnet", "StealFilesTelnet", monkeypatch)
+    obj.shared_data = SimpleNamespace(orchestrator_should_exit=False)
+    content = bytes(range(256)) + b"\ncontains a $ and $HOME and a trailing prompt $ "
+    remote = "/etc/shadow.bin"
+    tn = _FakeTelnet({remote: content})
+    obj.steal_file(tn, remote, str(tmp_path))
+    written = (tmp_path / "etc" / "shadow.bin").read_bytes()
+    assert written == content, "telnet download did not round-trip the file bytes"
 
 
 if __name__ == "__main__":

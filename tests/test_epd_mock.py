@@ -20,6 +20,7 @@ def test_mock_lifecycle_no_exceptions():
     epd.init_partial_update()
     epd.clear()
     epd.display_partial(_SaveLessImage())  # getbuffer -> displayPartial -> display (no-op)
+    epd.display_full(_SaveLessImage())     # getbuffer -> display (the anti-ghosting refresh path)
     assert epd.epd.width == 122
     assert epd.epd.height == 250
 

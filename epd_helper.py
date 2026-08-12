@@ -85,6 +85,17 @@ class EPDHelper:
             logger.error(traceback.format_exc())
             raise
 
+    def display_full(self, image):
+        # Full-panel write, paired with init_full_update() for the periodic anti-ghosting
+        # refresh. Uses .display() (not displayPartial) so the panel does the full erase-write
+        # cycle that clears ghost pixels partial updates leave behind. Per-frame — failures only.
+        try:
+            self.epd.display(self.epd.getbuffer(image))
+        except Exception as e:
+            logger.error(f"Error during full display update on '{self.epd_type}': {e}")
+            logger.error(traceback.format_exc())
+            raise
+
     def clear(self):
         try:
             self.epd.Clear()

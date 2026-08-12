@@ -30,6 +30,10 @@ import subprocess
 
 logger = Logger(name="display.py", level=logging.DEBUG)
 
+# ponytail: frames between anti-ghosting full refreshes. At ~1s screen_delay this is ~once/min.
+# The right cadence is panel-dependent (ghosting rate) — tune on the real Waveshare HAT.
+FULL_REFRESH_EVERY_FRAMES = 60
+
 class Display:
     def __init__(self, shared_data):
         """Initialize the display and start the main image and shared data update threads."""
@@ -47,6 +51,10 @@ class Display:
         self._last_vuln_gen = -1
         # Last screen.png we actually wrote, so an unchanged frame costs no SD write.
         self._last_screen_png = None
+        # Last frame we actually pushed to the EPD panel, so an unchanged frame costs no SPI
+        # write; frame counter drives the periodic anti-ghosting full refresh.
+        self._last_epd_frame = None
+        self._frame_count = 0
         # Assigned by the update_main_image thread; the render loop reads it before
         # that thread's first pass, which raised AttributeError into the retry loop.
         self.main_image = None
@@ -323,7 +331,6 @@ class Display:
         self.manual_mode_txt = ""
         while not self.shared_data.display_should_exit:
             try:
-                self.epd_helper.init_partial_update()
                 self.display_comment(self.shared_data.bjornorch_status)
                 image = Image.new('1', (self.shared_data.width, self.shared_data.height))
                 draw = ImageDraw.Draw(image)
@@ -386,8 +393,7 @@ class Display:
                 if self.screen_reversed:
                     image = image.transpose(Image.ROTATE_180)
 
-                self.epd_helper.display_partial(image)
-                self.epd_helper.display_partial(image)
+                self._display_frame(image)
 
                 if self.web_screen_reversed:
                     image = image.transpose(Image.ROTATE_180)
@@ -400,6 +406,28 @@ class Display:
                 # re-entered instantly. A persistent fault (missing font, dead SPI) turned this
                 # thread into a 100%-CPU spinner that also flooded the log.
                 time.sleep(max(1, self.shared_data.screen_delay))
+
+    def _display_frame(self, image):
+        """Push a composed frame to the EPD panel, but only when it changed — and do a full
+        refresh every N frames to clear ghosting.
+
+        Replaces the old draw-loop tail that (a) called display_partial() twice per tick and
+        (b) re-ran init_partial_update() every frame regardless of change. Mirrors
+        _write_screen_png's byte-compare gate; image.tobytes() is the raw 1-bit buffer, cheaper
+        than PNG-encoding. Frame 0 (0 % N == 0) is a full refresh, so the panel starts clean.
+        Every partial-write branch re-inits partial mode before displaying, so nothing needs to
+        restore partial mode after a full refresh."""
+        epd_bytes = image.tobytes()
+        if self._frame_count % FULL_REFRESH_EVERY_FRAMES == 0:
+            self.epd_helper.init_full_update()
+            self.epd_helper.display_full(image)
+            self._last_epd_frame = epd_bytes
+        elif epd_bytes != self._last_epd_frame:
+            self.epd_helper.init_partial_update()
+            self.epd_helper.display_partial(image)
+            self._last_epd_frame = epd_bytes
+        # else: identical frame — skip the panel write entirely
+        self._frame_count += 1
 
     def _write_screen_png(self, image):
         """Write web/screen.png, but only when the frame actually changed.

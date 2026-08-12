@@ -89,8 +89,16 @@ Vuln scan: the serial idle-branch loop is now a bounded 2-worker `_run_vuln_scan
 the #4 per-host timeout; `skipped` no longer mis-stamped `failed`). Expected ~327 passing (run pytest).
 On-Pi still needed: #10 refresh-cadence tuning, #8 multi-host benchmark.
 
-Next: on-hardware verification of #8/#9/#10, then #11 (live web UI + dep trim) or finish #5
-(typed contract + lint), then #3 (wpa-sec upload).
+**2026-08-12 — #13 file-access holes closed.** Path traversal (`download_file`/`download_backup`)
+and zip-slip (`restore`) are fixed via a new dependency-free, unit-tested `path_safety.py`; the
+unauthenticated-bind/auth decision is deferred (UX call). Expect ~332 passing (run pytest).
+
+**2026-08-12 — #11 live-UI half landed (browser check pending).** Screen/log are now event-driven off
+`screen_version`/`log_version` tokens in the stats stream; the blind 2s image + 1.5s log pollers are
+gone. Dep re-pin (Pi-only) + pandas removal deferred.
+
+Next: browser-verify #11; then the #13 auth/bind decision or finish #5 (typed contract + lint), then
+the #11 pandas trim and #3 (wpa-sec upload).
 
 ---
 
@@ -293,15 +301,23 @@ Next: on-hardware verification of #8/#9/#10, then #11 (live web UI + dep trim) o
   ghosting without visible flashing; `FULL_REFRESH_EVERY_FRAMES` is the knob (marked `ponytail:`).
 - **Payoff:** multi-fold less SPI/CPU on the Zero, less ghosting, longer panel life.
 
-### 11. Make the web UI genuinely live and shed weight
-- **Evidence:** the dashboard cache-buster-polls `screen.png` every 2s and logs every 1.5s
-  (`dashboard.js:124,149`) even though a WebSocket (`/ws/stats`) already exists; `requirements.txt`
-  still carries the **stale 2024 pins** (numpy 2.1.3, Pillow 9.4.0, pandas 2.2.3) that CI never
-  installs, and pandas (50-80 MB) is still pulled by 3 modules.
+### 11. 🟡 PARTIAL — Make the web UI genuinely live and shed weight
+- **Evidence:** the dashboard cache-buster-polled `screen.png` every 2s and logs every 1.5s even
+  though a WebSocket (`/ws/stats`) already existed; `requirements.txt` still carries the **stale 2024
+  pins** (numpy 2.1.3, Pillow 9.4.0, pandas 2.2.3), and pandas (50-80 MB) is still pulled by 3 modules.
 - **How:** push screen/log deltas over the existing WebSocket (or SSE); refresh + re-pin deps via
   `pip freeze` on the Pi (the PRD's own deferred step); finish the pandas removal in the last 3
   modules so it's never imported on-device.
-- **Payoff:** fewer Pi requests, a truly live UI, faster boot and lower memory.
+- **Status:** 🟡 the live-UI half is done (needs a browser check). `get_stats_snapshot` now carries two
+  cheap **change tokens** — `screen_version` / `log_version` (file mtime, via `_asset_mtime`) — on both
+  the WS push and `/api/stats`. `dashboard.js` re-fetches `screen.png` / `/get_logs` **only when its
+  token moves** (in `applySnapshot`), and the blind `setInterval` pollers (2s image, 1.5s logs) are
+  removed — so the UI is event-driven in both live and fallback modes, with far fewer Pi requests when
+  nothing changes. Verified by design/trace only (no JS test harness; the server helper sits behind the
+  starlette import wall) — **browser-tested, not unit-tested.** **Deferred:** the **dep re-pin** is
+  Pi-only (`pip freeze` on the target Python, not this dev box); the **pandas removal** in
+  `nmap_vuln_scanner` / `scanning` / `steal_data_sql` (all lazy-imported already) is a separate refactor.
+- **Payoff:** fewer Pi requests, a truly live UI; boot/memory wins wait on the dep+pandas work.
 
 ---
 
@@ -318,19 +334,29 @@ Next: on-hardware verification of #8/#9/#10, then #11 (live web UI + dep trim) o
 - **Payoff:** deletes **~1,500 lines**, and the whole hang/latch/divergence bug class becomes
   *structurally impossible* — fix once, every protocol inherits it.
 
-### 13. Harden the web surface for the roaming reality it now has
+### 13. 🟡 PARTIAL — Harden the web surface for the roaming reality it now has
 - **Evidence:** the web UI is fully unauthenticated on `0.0.0.0:8000`, serving secrets
   (`/load_config` returns tokens/passwords), destructive endpoints (`/reboot`, `/shutdown`,
-  `/execute_manual_attack`), plus **path traversal** (`utils.py:1059 download_file`,
-  `:642 download_backup` — `?path=../../etc/passwd` escapes) and **zip-slip**
-  (`:635 restore extractall`). The "no auth — the operator controls the network" decision was made
-  for a *stationary* device — and **V3's headline feature is carrying it onto networks it does not
-  control.** The premise no longer holds.
+  `/execute_manual_attack`), plus **path traversal** (`download_file`, `download_backup` —
+  `?path=../../etc/passwd` escapes) and **zip-slip** (`restore extractall`). The "no auth — the
+  operator controls the network" decision was made for a *stationary* device — and **V3's headline
+  feature is carrying it onto networks it does not control.** The premise no longer holds.
 - **How:** bind to `127.0.0.1` by default with an opt-in token for LAN access (or a shared-secret
   gate on destructive/secret endpoints); fix traversal with a `realpath`-under-base check and
   validate zip members in `restore` — those two are one-liners and worth doing regardless of the
   auth decision.
-- **Payoff:** the device is safe the moment it roams — which is exactly when today's model fails.
+- **Status:** 🟡 the file-access holes are closed; the auth/bind decision is intentionally deferred
+  (it changes how the operator reaches the dashboard remotely — a UX call, not a bug). New
+  dependency-free `path_safety.py` (`safe_under`, `zip_escapes`, both testable without the web
+  stack — same standalone pattern as `retry_policy`/`config_validation`): `download_file` and
+  `download_backup` now `realpath`-confine the requested path under their base dir and 404 on
+  escape; `restore` validates every zip member is inside the extract dir before extracting a byte,
+  and `basename()`s the upload's own filename (a second traversal — a `../evil.zip` name wrote the
+  archive outside `upload_dir`). Tests: `test_path_safety.py` (traversal + absolute-path bypass +
+  zip-slip). **Still open:** unauthenticated `0.0.0.0` bind, secret-serving `/load_config`, and the
+  destructive endpoints — the auth/token/bind design.
+- **Payoff:** the two remotely-exploitable file holes are shut the moment it roams; the auth surface
+  remains a deliberate follow-up.
 
 ### 14. Real CI + the tests that would have caught all of the above
 - **Evidence:** `ci.yml` runs a single Python 3.11 on `ubuntu-latest`, **skips

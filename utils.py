@@ -29,6 +29,7 @@ from datetime import datetime, timezone
 from logger import Logger
 import monitor_mode
 import offline_mode
+from path_safety import safe_under, zip_escapes
 from starlette.responses import JSONResponse, HTMLResponse, PlainTextResponse, Response, FileResponse
 from actions.nmap_vuln_scanner import NmapVulnScanner
 import telegram_client
@@ -132,8 +133,21 @@ class WebUtils:
             "orchestrator_status": getattr(sd, "bjornorch_status", "UNKNOWN"),
             "manual_mode": getattr(sd, "manual_mode", False),
             "wifi_connected": getattr(sd, "wifi_connected", False),
+            # #11: cheap change tokens so the dashboard re-fetches screen.png / logs only when they
+            # actually change, instead of blind-polling every 2s / 1.5s. Carried on both the WS push
+            # and /api/stats, so the fallback path is event-driven too.
+            "screen_version": self._asset_mtime(os.path.join(sd.webdir, "screen.png")),
+            "log_version": self._asset_mtime(sd.webconsolelog),
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
+
+    @staticmethod
+    def _asset_mtime(path):
+        """File mtime in ns as a change token, or 0 if absent. Cheap enough to call every push."""
+        try:
+            return os.stat(path).st_mtime_ns
+        except OSError:
+            return 0
 
     # ------------------------------------------------------------------
     # BLE recon results — GET /ble_data
@@ -627,21 +641,33 @@ class WebUtils:
             if not file or not file.filename:
                 return JSONResponse({"status": "error", "message": "No selected file"}, status_code=400)
 
-            backup_path = os.path.join(self.shared_data.upload_dir, file.filename)
+            # basename() strips any path in the upload's own filename — otherwise a name like
+            # "../../evil.zip" would write the uploaded archive outside upload_dir before we ever
+            # open it.
+            safe_name = os.path.basename(file.filename)
+            backup_path = os.path.join(self.shared_data.upload_dir, safe_name)
             contents = await file.read()
             with open(backup_path, 'wb') as output_file:
                 output_file.write(contents)
 
+            dest = self.shared_data.currentdir
             with zipfile.ZipFile(backup_path, 'r') as backup_zip:
-                backup_zip.extractall(self.shared_data.currentdir)
+                # Zip-slip guard: a crafted member like "../../home/bjorn/.ssh/authorized_keys"
+                # (or an absolute path) would otherwise let extractall() write anywhere on disk.
+                # Validate every member is confined to dest before extracting a single byte.
+                escaping = zip_escapes(backup_zip.namelist(), dest)
+                if escaping is not None:
+                    return _err(f"refusing unsafe archive: member escapes target ({escaping!r})",
+                                status_code=400)
+                backup_zip.extractall(dest)
 
             return _ok(message="Restore completed successfully")
         except Exception as e:
             return _err(e)
 
     def download_backup(self, filename):
-        backup_path = os.path.join(self.shared_data.backupdir, filename)
-        if os.path.isfile(backup_path):
+        backup_path = safe_under(self.shared_data.backupdir, filename)
+        if backup_path and os.path.isfile(backup_path):
             return FileResponse(
                 backup_path,
                 media_type="application/zip",
@@ -1067,8 +1093,8 @@ method=auto
 
     def download_file(self, path):
         try:
-            file_path = os.path.join(self.shared_data.datastolendir, path)
-            if os.path.isfile(file_path):
+            file_path = safe_under(self.shared_data.datastolendir, path)
+            if file_path and os.path.isfile(file_path):
                 return FileResponse(file_path, filename=os.path.basename(file_path))
             return Response(status_code=404)
         except Exception as e:

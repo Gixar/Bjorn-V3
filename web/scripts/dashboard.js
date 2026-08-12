@@ -13,6 +13,10 @@ let epdInterval = null;
 let ws = null;
 let wsRetryCount = 0;
 let pollTimer = null;
+// #11: last screen/log change tokens seen. screen.png and logs are re-fetched only when the
+// server's token moves (carried in every stats snapshot), replacing the old blind pollers.
+let lastScreenVersion = null;
+let lastLogVersion = null;
 let manualOpen = false;
 let netkbCache = null;
 const maxLines = 1500;
@@ -50,6 +54,17 @@ function applySnapshot(data) {
     if (mode) {
         mode.textContent = data.manual_mode ? "Mode: manual" : "Mode: auto";
         mode.className = "status-badge badge-idle";
+    }
+
+    // #11: screen + logs are event-driven off the stats stream now — re-fetch only when the
+    // server's change token moves, instead of the old blind 2s image poll / 1.5s log poll.
+    if (data.screen_version !== undefined && data.screen_version !== lastScreenVersion) {
+        lastScreenVersion = data.screen_version;
+        updateEpdImage();
+    }
+    if (isConsoleOn && data.log_version !== undefined && data.log_version !== lastLogVersion) {
+        lastLogVersion = data.log_version;
+        fetchLogs();
     }
 }
 
@@ -124,10 +139,11 @@ function updateEpdImage() {
     next.src = "screen.png?t=" + Date.now();
 }
 
-function startEpdLiveview(delayMs) {
+function startEpdLiveview() {
+    // #11: no blind interval — the preview refreshes when screen_version moves (applySnapshot).
+    // One immediate fetch for the initial paint; reset the token so the next snapshot re-syncs.
+    lastScreenVersion = null;
     updateEpdImage();
-    if (epdInterval) clearInterval(epdInterval);
-    epdInterval = setInterval(updateEpdImage, delayMs || 2000);
 }
 
 // ---------------------------------------------------------------------------
@@ -144,9 +160,10 @@ function fetchLogs() {
 }
 
 function startConsole() {
-    if (logInterval) return;
+    // #11: no blind 1.5s poll — logs refresh when log_version moves (applySnapshot, only while the
+    // console is on). One immediate fetch for instant fill; reset the token so the next snapshot syncs.
+    lastLogVersion = null;
     fetchLogs();
-    logInterval = setInterval(fetchLogs, 1500);
 }
 
 function stopConsole() {
@@ -284,11 +301,9 @@ document.addEventListener("DOMContentLoaded", () => {
     pollOnce();
     connectWebSocket();
 
-    // e-Paper refresh interval from server config when available
-    fetch("/get_web_delay")
-        .then((r) => r.json())
-        .then((d) => startEpdLiveview(d.web_delay || 2000))
-        .catch(() => startEpdLiveview(2000));
+    // e-Paper preview: initial paint; subsequent refreshes are driven by screen_version (#11),
+    // so no server-configured poll interval is needed here anymore.
+    startEpdLiveview();
 
     // Console starts off (user enables it) — less load on Pi Zero by default
     const logConsole = document.getElementById("log-console");

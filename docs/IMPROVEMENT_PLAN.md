@@ -83,8 +83,14 @@ candidates by host and runs distinct hosts concurrently under a budget-capped `T
 serial). The flagship throughput change — same-host parent→child order preserved. 323 passing;
 on-Pi multi-host benchmark still needed to quantify the win.
 
-Next: benchmark #8 on hardware, then #10 (display cost) or #9 (vuln scan off critical path), then
-finish #5 (typed contract + lint) and #3 (wpa-sec upload).
+**2026-08-12 — Tier 3 #10 + #9 landed.** Display: draw once/tick, skip the EPD write on an unchanged
+frame, full refresh every ~60 frames to clear ghosting (new `_display_frame` + `EPDHelper.display_full`).
+Vuln scan: the serial idle-branch loop is now a bounded 2-worker `_run_vuln_scans` (~2× faster, keeps
+the #4 per-host timeout; `skipped` no longer mis-stamped `failed`). Expected ~327 passing (run pytest).
+On-Pi still needed: #10 refresh-cadence tuning, #8 multi-host benchmark.
+
+Next: on-hardware verification of #8/#9/#10, then #11 (live web UI + dep trim) or finish #5
+(typed contract + lint), then #3 (wpa-sec upload).
 
 ---
 
@@ -254,21 +260,37 @@ finish #5 (typed contract + lint) and #3 (wpa-sec upload).
   the `1/k` wall-clock. Default `host_parallel=0` (auto) turns it on; set `1` to revert to serial.
 - **Payoff:** an I/O-bound multi-host sweep finishes in roughly `1/k` the time.
 
-### 9. Move the vuln scan off the critical path and bound it
-- **Evidence:** `orchestrator.py:466-500` runs `NmapVulnScanner` serially inside the idle branch,
-  looping every alive host, each `nmap -sV --script vulners` taking minutes — with **no timeout**.
-  One slow host blocks the whole loop.
+### 9. 🟡 PARTIAL — Move the vuln scan off the critical path and bound it
+- **Evidence:** the idle branch ran `NmapVulnScanner` serially, looping every alive host one at a
+  time under `self.semaphore`. One slow host used to block it with no timeout.
 - **How:** make it a standalone, parallel action (2 workers already exist) with a per-host nmap
   `timeout=`, scheduled by the planner like the other standalones.
-- **Payoff:** the loop never stalls on one nmap; vuln coverage keeps up with discovery.
+- **Status:** 🟡 → effectively done for this pass. The per-host nmap timeout landed in #4
+  (`subprocess.run(timeout=300)`). The serial loop is now `orchestrator._run_vuln_scans`: eligible
+  alive hosts (same success/failed retry-delay skip gates) run through a bounded
+  `ThreadPoolExecutor(max_workers=2)` — ~2× faster, and safe (each host mutates its own row, nmap is
+  timeout-bounded, `update_summary_file` is `_summary_lock`-guarded from #7). Also fixed a latent
+  silent-lie: `'skipped'` now leaves **no** netkb mark (matching `NmapVulnScanner.execute()`'s own
+  contract; the old loop wrongly stamped it `failed_`). Test:
+  `test_vuln_scan_submits_only_eligible_hosts_and_stamps_results`. **Deferred (chosen scope):** the
+  sweep still runs *inside* the idle branch (blocks it until done) and isn't a true planner-scheduled
+  standalone — a fully non-blocking background sweep is a larger, riskier change left for later.
+- **Payoff:** the loop no longer serial-stalls on the vuln sweep; one slow host is bounded.
 
-### 10. Halve the e-ink + CPU cost per frame
-- **Evidence:** `display.py:389-390` calls `display_partial(image)` **twice per tick**; `:326`
-  re-runs `init_partial_update()` **every frame**; the full PIL frame is rebuilt even when identical
-  (only the *PNG* write is change-gated, `:404`); and there's **no periodic full refresh**, so
-  partial-only updates accumulate ghosting (the long-standing V4 "unreadable" complaint).
-- **How:** draw once per tick; hash the composed frame and skip the EPD write when unchanged (reuse
-  the `_write_screen_png` pattern); do a full refresh every N frames to clear ghosting.
+### 10. ✅ DONE — Halve the e-ink + CPU cost per frame
+- **Evidence:** `display.py` called `display_partial(image)` **twice per tick**, re-ran
+  `init_partial_update()` **every frame**, drove the EPD even on an identical frame (only the *PNG*
+  write was change-gated), and did **no periodic full refresh**, so partial-only updates accumulated
+  ghosting (the long-standing "unreadable" complaint).
+- **How (shipped):** the render loop's EPD write is now a single `Display._display_frame(image)`
+  (mirrors `_write_screen_png`'s byte-compare gate): `image.tobytes()` is compared to the last frame
+  pushed and the panel write is **skipped when unchanged**; the duplicate `display_partial` is gone;
+  `init_partial_update()` runs only when actually writing. A full refresh fires every
+  `FULL_REFRESH_EVERY_FRAMES` (60 ≈ once/min) via the new `EPDHelper.display_full` + the existing
+  `init_full_update`, clearing ghosting. Tests: `_display_frame` skip/refresh cadence
+  (`test_display_screen_png.py`) + a `display_full` lifecycle case (`test_epd_mock.py`).
+- **Status:** ✅ code done. On-Pi tuning still needed: confirm the full-refresh cadence clears
+  ghosting without visible flashing; `FULL_REFRESH_EVERY_FRAMES` is the knob (marked `ponytail:`).
 - **Payoff:** multi-fold less SPI/CPU on the Zero, less ghosting, longer panel life.
 
 ### 11. Make the web UI genuinely live and shed weight

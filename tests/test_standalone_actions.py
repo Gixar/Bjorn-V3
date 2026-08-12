@@ -275,6 +275,39 @@ def test_host_parallel_worker_count_stays_within_budget():
     assert _workers(0, 8, 4)(100) <= _workers(0, 1, 4)(100)
 
 
+def test_vuln_scan_submits_only_eligible_hosts_and_stamps_results():
+    """#9: the vuln sweep runs eligible alive hosts through a bounded pool. Dead hosts and hosts
+    that succeeded recently (retry-on-success off) are skipped; 'skipped' leaves no netkb mark
+    (the contract execute() documents — the old serial loop wrongly stamped it 'failed')."""
+    scanned = []
+    results = {"10.0.0.1": "success", "10.0.0.2": "skipped", "10.0.0.3": "failed"}
+
+    class FakeScanner:
+        def execute(self, ip, row, status):
+            scanned.append(ip)
+            return results[ip]
+
+    fake = types.SimpleNamespace(
+        nmap_vuln_scanner=FakeScanner(),
+        shared_data=types.SimpleNamespace(
+            retry_success_actions=False, success_retry_delay=900, failed_retry_delay=600),
+    )
+    data = [
+        {"Alive": "1", "IPs": "10.0.0.1", "NmapVulnScanner": ""},
+        {"Alive": "0", "IPs": "10.0.0.9", "NmapVulnScanner": ""},                       # dead -> not scanned
+        {"Alive": "1", "IPs": "10.0.0.2", "NmapVulnScanner": ""},
+        {"Alive": "1", "IPs": "10.0.0.3", "NmapVulnScanner": ""},
+        {"Alive": "1", "IPs": "10.0.0.4", "NmapVulnScanner": "success_20990101_000000"},  # recent success, retry off -> skip
+    ]
+    Orchestrator._run_vuln_scans(fake, data)
+
+    assert set(scanned) == {"10.0.0.1", "10.0.0.2", "10.0.0.3"}, "dead / already-succeeded hosts must not be scanned"
+    assert data[0]["NmapVulnScanner"].startswith("success_")
+    assert data[2]["NmapVulnScanner"] == "", "'skipped' must leave no netkb mark"
+    assert data[3]["NmapVulnScanner"].startswith("failed_")
+    assert data[4]["NmapVulnScanner"] == "success_20990101_000000", "an already-succeeded host is untouched"
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

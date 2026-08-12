@@ -232,6 +232,22 @@ def _assert_raises(cfg, expected_substr):
         raise AssertionError(f"expected ValueError mentioning {expected_substr!r}")
 
 
+def test_atomic_write_honors_indent_and_leaves_no_tmp():
+    """#7: save_config now routes through stats_engine._atomic_write(indent=4). Guard the two
+    properties that matter — the file stays human-editable (pretty-printed) and the temp file is
+    always renamed away on success, never left as .tmp litter — and that it creates missing dirs."""
+    import os
+    import stats_engine
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "sub", "cfg.json")  # nested dir must be created
+        stats_engine._atomic_write(path, {"a": 1, "b": [1, 2]}, indent=4)
+        text = Path(path).read_text(encoding="utf-8")
+        assert json.loads(text) == {"a": 1, "b": [1, 2]}
+        assert "\n    " in text, "indent=4 must pretty-print for the web config form"
+        assert not any(f.endswith(".tmp") for f in os.listdir(os.path.dirname(path))), \
+            "temp file left behind — os.replace should have consumed it"
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

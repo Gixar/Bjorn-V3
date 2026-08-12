@@ -52,13 +52,17 @@ def load(path):
         return {}
 
 
-def _atomic_write(path, data):
-    """temp -> fsync -> os.replace, so a power loss mid-write can't corrupt stats.json (PG-2)."""
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), suffix=".tmp")
+def _atomic_write(path, data, indent=None):
+    """temp -> fsync -> os.replace, so a power loss mid-write can't corrupt the target (PG-2).
+
+    indent= is forwarded to json.dump so callers that want a human-editable file
+    (shared_config.json) can keep pretty-printing; stats.json stays compact.
+    """
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".", suffix=".tmp")
     try:
         with os.fdopen(fd, "w") as f:
-            json.dump(data, f)
+            json.dump(data, f, indent=indent)
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp, path)

@@ -67,7 +67,13 @@ wall-clock bound (5 connectors + nmap + the two remaining steal transfers), with
 fails if any establish/exec site loses its timeout. This is the freeze-class killer — no single dead
 host can wedge the single-threaded orchestrator anymore. 319 passing.
 
-Next: verify RDP + Telnet steal on real hosts, then #7 (atomic config), then #3 (wpa-sec upload).
+**2026-08-11 — Tier 2 #7 done (atomic config + serialized writers).** `save_config` is atomic
+(temp+fsync+replace, indented), a class-level `_data_lock` serializes netkb `write_data` + config
+saves, the web config path routes through it, and nmap's 2 workers no longer race on the vuln
+summary. No more boot-brick on a yanked plug, no more lost hosts from concurrent writes. 320 passing.
+
+Next: verify RDP + Telnet steal on real hosts, then #6 (steal caps) or #5 (outcome contract), then
+#3 (wpa-sec upload).
 
 ---
 
@@ -168,15 +174,29 @@ Next: verify RDP + Telnet steal on real hosts, then #7 (atomic config), then #3 
   and atomic temp-file + rename for every write.
 - **Payoff:** a large or hostile host can't OOM the Pi or fill the card.
 
-### 7. Make config writes atomic and serialize shared state
-- **Evidence:** `shared.py:593 save_config` is a plain `open('w')`+`json.dump` — **not atomic**,
+### 7. ✅ DONE — Make config writes atomic and serialize shared state
+- **Evidence:** `shared.py:593 save_config` was a plain `open('w')`+`json.dump` — **not atomic**,
   unlike netkb/stats. A power loss mid-write corrupts `shared_config.json`, then `validate_config`
-  raises and **bricks boot**. And the "single writer" claim on netkb is false: the web
-  `clear_files`, the planner, and two nmap workers (`nmap_vuln_scanner.py:51`) all do unlocked
-  read-modify-write → lost updates / CSV corruption.
-- **How:** reuse the existing `stats_engine._atomic_write` (temp+fsync+replace) for `save_config`;
-  put one file lock (`fcntl`/`portalocker`) around every netkb / config / summary
-  read-modify-write. `os.replace` prevents corruption but not lost updates — the lock does.
+  raises and **bricks boot**. And the "single writer" claim on netkb was false: the web
+  `save_configuration` and two nmap workers (`nmap_vuln_scanner.py`) did unlocked read-modify-write
+  → lost updates / CSV corruption.
+- **How (shipped):** `stats_engine._atomic_write` gained an `indent=` param and `save_config` now
+  routes through it (temp+fsync+`os.replace`, pretty-printed so the web form stays editable). A
+  **class-level** `SharedData._data_lock` serializes `save_config` and the netkb `write_data`
+  read-merge-rewrite (used by the orchestrator cycle + web) — class-level so it also protects
+  instances built via `__new__` and reflects that netkb/config are process-global files. The web
+  `save_configuration` no longer does its own `open('w')`; it merges into the in-memory config
+  (no TOCTOU re-read) and calls `save_config`. nmap's two-worker `update_summary_file` is guarded
+  by a class-level `_summary_lock` so the concurrent `read_csv → concat → to_csv` can't lose rows.
+- **Status:** ✅ done. `save_config`/`write_data`/`_atomic_write`/`utils.save_configuration` fixes came
+  from the user's `Downloads/Fixes/#7` set (verified correct); the missing parts I added were the
+  nmap `_summary_lock` and promoting `_data_lock` to class-level (the provided instance-lock silently
+  swallowed an `AttributeError` and skipped the save on any `__new__`/partial-init path). New guard
+  `test_config_validation.py::test_atomic_write_honors_indent_and_leaves_no_tmp`; the existing
+  default-merge test now transitively covers the class-level lock. Full suite: **320 passing**.
+  Deferred (honest): `clear_files` is a deliberate `sudo rm -rf` wipe, not a lost-update RMW, so it's
+  left unlocked; a cross-**process** lock (`fcntl`/`portalocker`) isn't needed while all writers are
+  threads in one process — revisit if a separate process ever writes netkb.
 - **Payoff:** no boot-brick, no silently dropped hosts/results.
 
 ---

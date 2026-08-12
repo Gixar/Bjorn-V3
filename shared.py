@@ -27,17 +27,25 @@ from logger import Logger
 from epd_helper import EPDHelper
 from config_validation import validate_config
 import stats_engine
+import threading
 
 
 logger = Logger(name="shared.py", level=logging.DEBUG) # Create a logger object 
 
 class SharedData:
     """Shared data between the different modules."""
+    # Serializes netkb read-modify-write (write_data) and config saves across the
+    # orchestrator, web, and nmap worker threads. Without it concurrent RMW loses hosts /
+    # corrupts the CSV — the old "single writer" claim was false. Class-level so it exists
+    # even on instances built via __new__ (tests, partial init); the netkb/config files are
+    # process-global, so one lock is the right scope anyway.
+    _data_lock = threading.Lock()
+
     def __init__(self):
         self.initialize_paths() # Initialize the paths used by the application
-        self.status_list = [] 
+        self.status_list = []
         self.last_comment_time = time.time() # Last time a comment was displayed
-        self.default_config = self.get_default_config() # Default configuration of the application  
+        self.default_config = self.get_default_config() # Default configuration of the application
         self.config = self.default_config.copy() # Configuration of the application
         # Load existing configuration first
         self.load_config()
@@ -591,22 +599,23 @@ class SharedData:
             self.save_config()
 
     def save_config(self):
-        """Save the configuration to the shared configuration JSON file."""
+        """Save the configuration to the shared configuration JSON file.
+
+        Uses the same temp+fsync+os.replace path as stats.json / netkb.csv (PG-2),
+        so a power loss mid-write leaves the previous good file intact instead of a
+        truncated shared_config.json that validate_config then refuses to boot from.
+        """
         logger.info("Saving configuration...")
         try:
             if not os.path.exists(self.configdir):
                 os.makedirs(self.configdir)
                 logger.info(f"Created configuration directory at {self.configdir}")
-            try:
-                with open(self.shared_config_json, 'w') as f:
-                    json.dump(self.config, f, indent=4)
-                logger.info(f"Configuration saved to {self.shared_config_json}")
-            except IOError as e:
-                logger.error(f"Error writing to configuration file: {e}")
-            except Exception as e:
-                logger.error(f"Unexpected error while writing to configuration file: {e}")
+            with self._data_lock:
+                # indent=4 keeps the file human-editable for the web form and manual edits.
+                stats_engine._atomic_write(self.shared_config_json, self.config, indent=4)
+            logger.info(f"Configuration saved to {self.shared_config_json}")
         except OSError as e:
-            logger.error(f"OS error while creating configuration directory: {e}")
+            logger.error(f"OS error while saving configuration: {e}")
         except Exception as e:
             logger.error(f"Unexpected error in save_config: {e}")
 
@@ -783,7 +792,17 @@ class SharedData:
         return data
 
     def write_data(self, data):
-        """Write data to the CSV file."""
+        """Write data to the CSV file.
+
+        Holds _data_lock for the whole read-merge-rewrite so concurrent callers
+        (orchestrator cycle, web clear, nmap workers) cannot lose hosts or interleave
+        two half-written CSVs.  The file itself is still written via temp+os.replace.
+        """
+        with self._data_lock:
+            self._write_data_locked(data)
+
+    def _write_data_locked(self, data):
+        """Internal: assume _data_lock is already held."""
         with open(self.actions_file, 'r') as file:
             actions = json.load(file)
         action_names = [action["b_class"] for action in actions if "b_class" in action]

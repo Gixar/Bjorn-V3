@@ -1009,12 +1009,19 @@ method=auto
                 for k, v in params.items()}
 
     def save_configuration(self, params):
+        """Merge web-form params into shared_data.config and persist atomically.
+
+        Previously this path did its own open('w')+json.dump, which could leave a
+        truncated shared_config.json on power loss and brick the next boot
+        (validate_config refuses a half-written file).  All config writes now go
+        through SharedData.save_config → stats_engine._atomic_write.
+        """
         try:
-            fichier = self.shared_data.shared_config_json
             self.logger.info(f"Received params: {self._redact_params(params)}")
 
-            with open(fichier, 'r') as f:
-                current_config = json.load(f)
+            # Start from the in-memory config (already merged with defaults) rather
+            # than re-reading the file — avoids a TOCTOU race with another saver.
+            current_config = dict(self.shared_data.config)
 
             for key, value in params.items():
                 if isinstance(value, bool):
@@ -1024,10 +1031,8 @@ method=auto
                 elif isinstance(value, (int, float)):
                     current_config[key] = value
                 elif isinstance(value, list):
-                    # Lets boot any values in a list that are just empty strings
-                    for val in value[:]:
-                        if val == "":
-                            value.remove(val)
+                    # Drop empty-string entries the form sometimes posts.
+                    value = [v for v in value if v != ""]
                     current_config[key] = value
                 elif isinstance(value, str):
                     if value.replace('.', '', 1).isdigit():
@@ -1037,10 +1042,14 @@ method=auto
                 else:
                     current_config[key] = value
 
-            with open(fichier, 'w') as f:
-                json.dump(current_config, f, indent=4)
-            self.logger.info("Configuration saved to file")
+            # Push into shared_data and persist via the atomic path.
+            self.shared_data.config = current_config
+            for key, value in current_config.items():
+                setattr(self.shared_data, key, value)
+            self.shared_data.save_config()
+            self.logger.info("Configuration saved to file (atomic)")
 
+            # Reload so any derived state / validation runs.
             self.shared_data.load_config()
             self.logger.info("Configuration reloaded (web)")
 

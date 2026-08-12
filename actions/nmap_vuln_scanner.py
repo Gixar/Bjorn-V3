@@ -7,6 +7,7 @@ import re
 import json
 import subprocess
 import logging
+import threading
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from rich.console import Console
@@ -26,6 +27,12 @@ class NmapVulnScanner:
     """
     This class handles the Nmap vulnerability scanning process.
     """
+    # The vuln scan runs 2 workers (ThreadPoolExecutor(max_workers=2)) that each call
+    # update_summary_file — a read_csv -> concat -> drop_duplicates -> to_csv on the SAME
+    # file. Class-level so it serializes across workers (and instances): without it the two
+    # writes interleave and lose rows / corrupt the summary CSV (#7).
+    _summary_lock = threading.Lock()
+
     def __init__(self, shared_data):
         self.shared_data = shared_data
         self.scan_results = []
@@ -50,20 +57,21 @@ class NmapVulnScanner:
         """
         try:
             import pandas as pd  # lazy: keep pandas out of module import (P2)
-            # Read existing data
-            df = pd.read_csv(self.summary_file)
-            
-            # Create new data entry
-            new_data = pd.DataFrame([{"IP": ip, "Hostname": hostname, "MAC Address": mac, "Port": port, "Vulnerabilities": vulnerabilities}])
-            
-            # Append new data
-            df = pd.concat([df, new_data], ignore_index=True)
-            
-            # Remove duplicates based on IP and MAC Address, keeping the last occurrence
-            df.drop_duplicates(subset=["IP", "MAC Address"], keep='last', inplace=True)
-            
-            # Save the updated data back to the summary file
-            df.to_csv(self.summary_file, index=False)
+            with self._summary_lock:  # serialize the two vuln-scan workers' read-modify-write
+                # Read existing data
+                df = pd.read_csv(self.summary_file)
+
+                # Create new data entry
+                new_data = pd.DataFrame([{"IP": ip, "Hostname": hostname, "MAC Address": mac, "Port": port, "Vulnerabilities": vulnerabilities}])
+
+                # Append new data
+                df = pd.concat([df, new_data], ignore_index=True)
+
+                # Remove duplicates based on IP and MAC Address, keeping the last occurrence
+                df.drop_duplicates(subset=["IP", "MAC Address"], keep='last', inplace=True)
+
+                # Save the updated data back to the summary file
+                df.to_csv(self.summary_file, index=False)
         except Exception as e:
             logger.error(f"Error updating summary file: {e}")
 

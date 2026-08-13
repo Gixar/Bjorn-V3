@@ -4,6 +4,10 @@
 > Goal: Bjorn uses *all* of its tools automatically, does the most promising work first, and can
 > say **why** it picked something — with no cloud LLM on a Pi Zero.
 
+> **V2 update:** the static score is now a cold-start prior. With
+> `smart_planner_enabled: true`, Bjorn blends it with local success and duration history. See
+> [`SMART_PLANNER_V2.md`](SMART_PLANNER_V2.md) for persistence, backoff, rollback and evaluation.
+
 ## What was wrong
 
 The orchestrator walked `self.actions` in **load order** and `break`ed on the first success per
@@ -103,20 +107,22 @@ cycle of latency — and a cycle with work does not sleep.
 
 ## Config
 
-Both optional; defaults are fine.
+All are optional; defaults are fine.
 
 ```json
+"smart_planner_enabled": true,
 "planner_max_host_actions": 4,
 "planner_standalone_every": 3
 ```
 
 Validated as **>= 1**: `planner_standalone_every` is a modulus, and 0 host actions would mean never
 attacking anything. `Planner.sync_config()` re-reads them every cycle, so a change takes effect
-without a restart, like every other setting.
+without a restart, like every other setting. Setting `smart_planner_enabled` to `false` restores
+the original static score and retry behavior without deleting the history learned by the Pi.
 
 ## Not built (next levers)
 
 - **CPE-based weights** — the offline CVE enrichment already parses `nmap -sV` CPEs; a specific
   product+version could weigh more precisely than a `Server` header substring.
-- **An LLM proposing the next-action list** (PRD P-AI), falling back to this planner. It belongs
+- **An LLM proposing value adjustments or annotations** (PRD P-AI), falling back to this planner. It belongs
   *between* cycles, never in the attack loop: scanning and attacking stay deterministic and local.

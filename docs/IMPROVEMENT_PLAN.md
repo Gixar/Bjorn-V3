@@ -97,8 +97,19 @@ unauthenticated-bind/auth decision is deferred (UX call). Expect ~332 passing (r
 `screen_version`/`log_version` tokens in the stats stream; the blind 2s image + 1.5s log pollers are
 gone. Dep re-pin (Pi-only) + pandas removal deferred.
 
-Next: browser-verify #11; then the #13 auth/bind decision or finish #5 (typed contract + lint), then
-the #11 pandas trim and #3 (wpa-sec upload).
+**2026-08-12 — Smart Planner V2 batch integrated (author-supplied, evaluated + verified).** A
+deterministic local-adaptation layer (no LLM/deps): the planner blends its static heuristic with a
+Beta-smoothed success rate + EWMA duration per action, learned into `data/action_telemetry.json`
+(atomic, bounded to 512 records, no secrets/loot). Retries become `(action,target)`-scoped with
+cause-aware backoff. New typed `ActionOutcome`/`normalize_outcome` (advances #5). Off-switch
+`smart_planner_enabled` (default true) restores legacy scoring. Preserves #7/#8/#9 verbatim; a
+`+536%` useful-work/hour result on the synthetic `mixed_lab_v1` fixture (ordering regression, not a
+field promise). Suite: **356 passing** (+24). Evaluation verdict: high quality, backward-compatible,
+correct paths; integrated as-is with one add — `.gitignore` now excludes the runtime telemetry file.
+On-Pi window still needed to tune values/durations against a real target.
+
+Next: browser-verify #11; run the on-Pi Smart-Planner observation window (`planner_report.py`,
+`planner_benchmark.py`); then the #13 auth/bind decision, #11 pandas trim, and #3 (wpa-sec upload).
 
 ---
 
@@ -189,13 +200,19 @@ the #11 pandas trim and #3 (wpa-sec upload).
   test helper asserts the contract, and a lint rejects an unconditional `return 'success'`. Surface
   a first-failure log + last-error on the web panel with backoff.
 - **Payoff:** diagnostics stop reassuring you about dead features.
-- **Status:** 🟡 partial. The concrete silent-failure is fixed: `BettercapPoller.poll_once` now logs
-  the first failure immediately, then backs off (30s→…→30m cap), records `_last_error`, and logs a
-  recovery line when the daemon answers again — no more silent polls, no log flood
-  (`test_poller_backs_off_repeated_failure_logs`). **Still open:** the typed `Outcome` type, per-action
-  side-effect verification, the lint rejecting an unconditional `return 'success'`
-  (`ble_scan.py:86`, `http_fingerprint.py:59`, `snmp_enum.py:63`, `nmap_vuln_scanner.py:125` still do),
-  and surfacing `_last_error` on the web panel.
+- **Status:** 🟡 mostly landed. Two independent pieces now exist:
+  (a) `BettercapPoller.poll_once` logs the first failure, then backs off (30s→…→30m cap), records
+  `_last_error`, and logs a recovery line — no silent polls, no flood
+  (`test_poller_backs_off_repeated_failure_logs`).
+  (b) **The typed contract shipped with the Smart Planner V2 batch:** `action_outcome.py` defines
+  `ActionOutcome`/`OutcomeCode` and `normalize_outcome()`, and the orchestrator now wraps every
+  `execute()` — legacy strings, mappings, `ActionOutcome`, or a raised exception all normalise to one
+  typed outcome, with `should_stamp_failure`/`skipped` deciding the netkb mark (a timeout/`FileNotFoundError`
+  becomes `TIMEOUT`/`UNAVAILABLE`, not a silent success). `test_smart_orchestrator.py` covers the boundary.
+  **Still open:** per-action *side-effect verification* (a capture actually wrote rows; a radio is actually
+  `managed`) — modules still self-report; a lint rejecting an unconditional `return 'success'`; and
+  surfacing `_last_error` on the web panel. Migration is opt-in per module (return an `ActionOutcome`),
+  so the remaining work is incremental, not a rewrite.
 
 ### 6. ✅ DONE — Cap recursion, bytes, and free space on every steal
 - **Evidence:** unbounded remote-tree recursion with no visited-set (`steal_files_ftp.py:58`,

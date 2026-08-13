@@ -145,6 +145,7 @@ data/logs/*
 data/netkb.csv
 data/netkb.csv.tmp
 data/livestatus.csv
+data/action_telemetry.json
 data/output/run_reports/
 data/output/improvement_notes/
 data/output/mock_display.png

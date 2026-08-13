@@ -32,7 +32,7 @@ def _good_config():
         "offline_cycle_interval": 60, "wifi_autojoin": True, "wifi_autojoin_open": False,
         "comment_info_ratio": 3,
         "planner_max_host_actions": 4, "planner_standalone_every": 3,
-        "adaptive_scan_interval": True,
+        "adaptive_scan_interval": True, "smart_planner_enabled": True,
         "use_rustscan": False, "rustscan_batch_size": 0, "rustscan_full_port": False,
         "bettercap_enabled": False, "bettercap_arp_spoof": False, "bettercap_sniff": False,
         "bettercap_api_url": "http://127.0.0.1:8081", "bettercap_user": "bjorn",

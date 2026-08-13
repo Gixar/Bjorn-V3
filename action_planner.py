@@ -15,6 +15,7 @@ import csv
 from dataclasses import dataclass, field
 from typing import Any, List, Optional, Sequence, Set
 
+from action_telemetry import ActionTelemetry
 from retry_policy import retry_wait_remaining
 
 # Ports whose services historically yield the most on a home/lab LAN. Additive when the port is
@@ -56,6 +57,61 @@ ACTION_BASE = {
 }
 
 DEFAULT_BASE = 10  # anything not listed above (new actions rank mid-pack rather than last)
+
+# Expected useful value and cold-start duration are priors, not permanent truth. Once telemetry
+# exists the planner blends these with the Pi's measured success rate and EWMA duration. Values are
+# relative: credentials/loot unlock more work than a fingerprint, while a long deep scan pays only
+# when its expected findings justify the time.
+ACTION_VALUE = {
+    "StealFilesSSH": 70,
+    "StealFilesSMB": 70,
+    "StealFilesFTP": 60,
+    "StealFilesRDP": 50,
+    "StealFilesTelnet": 50,
+    "StealDataSQL": 65,
+    "SSHBruteforce": 45,
+    "SMBBruteforce": 45,
+    "FTPBruteforce": 35,
+    "RDPBruteforce": 35,
+    "SQLBruteforce": 40,
+    "TelnetBruteforce": 30,
+    "WebTemplateScan": 30,
+    "HTTPFingerprint": 18,
+    "NmapVulnScanner": 40,
+    "BLEScan": 12,
+    "WiFiScan": 16,
+    "SNMPEnum": 24,
+    "WpaSecImport": 22,
+    "TelegramReport": 8,
+}
+
+DEFAULT_DURATION_SECONDS = {
+    "StealFilesSSH": 25,
+    "StealFilesSMB": 30,
+    "StealFilesFTP": 25,
+    "StealFilesRDP": 45,
+    "StealFilesTelnet": 35,
+    "StealDataSQL": 35,
+    "SSHBruteforce": 90,
+    "SMBBruteforce": 100,
+    "FTPBruteforce": 75,
+    "RDPBruteforce": 120,
+    "SQLBruteforce": 100,
+    "TelnetBruteforce": 90,
+    "WebTemplateScan": 20,
+    "HTTPFingerprint": 8,
+    "NmapVulnScanner": 150,
+    "BLEScan": 12,
+    "WiFiScan": 35,
+    "SNMPEnum": 25,
+    "WpaSecImport": 10,
+    "TelegramReport": 8,
+}
+
+DEFAULT_ACTION_VALUE = 20
+DEFAULT_ACTION_DURATION = 45
+UTILITY_SCALE = 240.0
+MAX_UTILITY_SCORE = 250.0
 
 # Device families worth reaching first, matched against what HTTPFingerprint already recorded
 # (Server / X-Powered-By / Title). These are the appliance classes that ship with default or weak
@@ -259,8 +315,38 @@ def is_standalone_eligible(action, row: Optional[dict], *, failed_retry_delay: i
     return not _in_failed_backoff(status, failed_retry_delay)
 
 
+def _blend_measured_utility(action_name: str, legacy_score: int,
+                            telemetry: Optional[ActionTelemetry]):
+    """Blend the static heuristic with measured useful yield per second.
+
+    Confidence grows gradually, so a new installation behaves like the proven
+    planner and one lucky first result cannot reorder the entire queue.
+    """
+    if telemetry is None:
+        return legacy_score, ""
+    default_duration = DEFAULT_DURATION_SECONDS.get(action_name, DEFAULT_ACTION_DURATION)
+    estimate = telemetry.estimate(action_name, default_duration)
+    attempts = int(estimate["attempts"])
+    value = ACTION_VALUE.get(action_name, DEFAULT_ACTION_VALUE)
+    utility = min(
+        MAX_UTILITY_SCORE,
+        value * estimate["probability"] * UTILITY_SCALE / max(1.0, estimate["duration_s"]),
+    )
+    # A small prior blend makes the first boot useful on a one-target lab: known-fast discovery
+    # may run before a long brute force. The proven legacy score remains 85% of the decision until
+    # this Pi has measurements, and the legacy toggle bypasses this function entirely.
+    confidence = 0.15 if attempts == 0 else min(0.80, float(estimate["confidence"]))
+    blended = int(round((legacy_score * (1.0 - confidence)) + (utility * confidence)))
+    detail = "smart:prior" if attempts == 0 else (
+        f"smart:p={estimate['probability']:.2f},"
+        f"t={estimate['duration_s']:.0f}s,n={attempts}")
+    return max(1, blended), detail
+
+
 def score_host_action(action, row: dict, vuln_ips: Optional[Set[str]] = None,
-                      service_hints: Optional[dict] = None):
+                      service_hints: Optional[dict] = None, *,
+                      telemetry: Optional[ActionTelemetry] = None,
+                      smart_enabled: bool = False):
     """Rank one (action, host) pair. Higher runs sooner. Returns (score, short reason)."""
     name = _action_name(action)
     score = ACTION_BASE.get(name, DEFAULT_BASE)
@@ -307,13 +393,19 @@ def score_host_action(action, row: dict, vuln_ips: Optional[Set[str]] = None,
         if nports >= 5:
             reasons.append(f"{nports} ports")
 
+    score, smart_detail = _blend_measured_utility(
+        name, score, telemetry if smart_enabled else None)
     reason = f"{name}@{ip or '?'}"
     if reasons:
         reason += " - " + " - ".join(reasons[:3])
+    if smart_detail:
+        reason += f" - {smart_detail}"
     return score, reason
 
 
-def score_standalone(action, row: Optional[dict], *, idle_boost: int = 0):
+def score_standalone(action, row: Optional[dict], *, idle_boost: int = 0,
+                     telemetry: Optional[ActionTelemetry] = None,
+                     smart_enabled: bool = False):
     """Standalone recon/reporting (BLE, Wi-Fi, SNMP, wpa-sec, Telegram): a mild base, plus a boost
     when host work has dried up. They are cheap and self-throttling, so they never need to outrank
     real attack work — they just must not be starved by it."""
@@ -322,11 +414,17 @@ def score_standalone(action, row: Optional[dict], *, idle_boost: int = 0):
     status = str(row.get(name, "") or "") if row is not None else ""
     if not status:
         score += 25
-        return score, f"{name} - never ran"
-    if "failed" in status:
+        reason = f"{name} - never ran"
+    elif "failed" in status:
         score += 12
-        return score, f"{name} - retry"
-    return score, f"{name} - periodic"
+        reason = f"{name} - retry"
+    else:
+        reason = f"{name} - periodic"
+    score, smart_detail = _blend_measured_utility(
+        name, score, telemetry if smart_enabled else None)
+    if smart_detail:
+        reason += f" - {smart_detail}"
+    return score, reason
 
 
 @dataclass
@@ -343,6 +441,8 @@ class Planner:
     retry_success_actions: bool = False
     max_host_actions: int = 4
     standalone_every: int = 3
+    telemetry: Optional[ActionTelemetry] = field(default=None, repr=False)
+    smart_enabled: bool = False
     _cycle: int = field(default=0, repr=False)
     _recent_names: List[str] = field(default_factory=list, repr=False)
     # Seconds until the soonest retry-blocked action becomes runnable, or 0 when nothing is merely
@@ -358,6 +458,7 @@ class Planner:
         self.retry_success_actions = getattr(shared_data, "retry_success_actions", False)
         self.max_host_actions = max(1, int(getattr(shared_data, "planner_max_host_actions", 4) or 4))
         self.standalone_every = max(1, int(getattr(shared_data, "planner_standalone_every", 3) or 3))
+        self.smart_enabled = bool(getattr(shared_data, "smart_planner_enabled", True))
 
     def collect(
         self,
@@ -378,17 +479,31 @@ class Planner:
             for row in current_data:
                 if row.get("MAC Address") == "STANDALONE":
                     continue
+                target = row.get("IPs", "")
+                failed_delay = self.failed_retry_delay
+                if self.smart_enabled and self.telemetry is not None:
+                    # A typed RESOURCE_BUSY result may leave netkb untouched, so consult telemetry
+                    # before the legacy status gate. Other failures get streak-aware backoff.
+                    telemetry_wait = self.telemetry.remaining_backoff(
+                        name, target, self.failed_retry_delay)
+                    if telemetry_wait > 0:
+                        waits.append(telemetry_wait)
+                        continue
+                    failed_delay = self.telemetry.retry_delay(
+                        name, target, self.failed_retry_delay)
                 eligible, wait = host_gate(
                     action, row,
                     success_retry_delay=self.success_retry_delay,
-                    failed_retry_delay=self.failed_retry_delay,
+                    failed_retry_delay=failed_delay,
                     retry_success_actions=self.retry_success_actions,
                 )
                 if not eligible:
                     if wait:
                         waits.append(wait)
                     continue
-                score, reason = score_host_action(action, row, vuln_ips, service_hints)
+                score, reason = score_host_action(
+                    action, row, vuln_ips, service_hints,
+                    telemetry=self.telemetry, smart_enabled=self.smart_enabled)
                 if name in recent:
                     score -= 8  # mild anti-monopoly; a strong candidate still wins
                 candidates.append(Candidate(
@@ -400,13 +515,25 @@ class Planner:
         standalone_row = next(
             (r for r in current_data if r.get("MAC Address") == "STANDALONE"), None)
         for action in standalone_actions:
+            name = _action_name(action)
+            failed_delay = self.failed_retry_delay
+            if self.smart_enabled and self.telemetry is not None:
+                telemetry_wait = self.telemetry.remaining_backoff(
+                    name, "STANDALONE", self.failed_retry_delay)
+                if telemetry_wait > 0:
+                    waits.append(telemetry_wait)
+                    continue
+                failed_delay = self.telemetry.retry_delay(
+                    name, "STANDALONE", self.failed_retry_delay)
             eligible, wait = standalone_gate(action, standalone_row,
-                                             failed_retry_delay=self.failed_retry_delay)
+                                             failed_retry_delay=failed_delay)
             if not eligible:
                 if wait:
                     waits.append(wait)
                 continue
-            score, reason = score_standalone(action, standalone_row, idle_boost=idle_boost)
+            score, reason = score_standalone(
+                action, standalone_row, idle_boost=idle_boost,
+                telemetry=self.telemetry, smart_enabled=self.smart_enabled)
             candidates.append(Candidate(
                 kind="standalone", action=action, action_name=_action_name(action),
                 score=score, reason=reason, row=standalone_row,

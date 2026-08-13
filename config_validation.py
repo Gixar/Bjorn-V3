@@ -15,7 +15,8 @@ _BOOL_KEYS = ("manual_mode", "websrv", "debug_mode", "scan_vuln_running",
               "vuln_offline_cve", "use_rustscan", "rustscan_full_port",
               "credential_reuse", "telegram_enabled", "telegram_include_creds",
               "ble_scan_enabled", "smtp_enabled", "wifi_scan_enabled",
-              "adaptive_scan_interval", "offline_mode_enabled", "wifi_autojoin",
+              "adaptive_scan_interval", "smart_planner_enabled",
+              "offline_mode_enabled", "wifi_autojoin",
               "wifi_autojoin_open", "bettercap_enabled", "bettercap_arp_spoof",
               "bettercap_sniff", "bettercap_pwn_enabled")
 # Keys that must be present and a string. Deliberately only the new Bettercap credentials for now:

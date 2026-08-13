@@ -21,6 +21,8 @@ from action_planner import (  # noqa: E402
     score_host_action,
     score_standalone,
 )
+from action_outcome import ActionOutcome, OutcomeCode  # noqa: E402
+from action_telemetry import ActionTelemetry  # noqa: E402
 
 
 class FakeAction:
@@ -288,6 +290,79 @@ def test_standalone_score_rises_when_idle():
     row = _standalone_row(BLEScan=SUCCESS)
     assert (score_standalone(ble, row, idle_boost=40)[0]
             > score_standalone(ble, row, idle_boost=0)[0])
+
+
+# --- deterministic local learning ---------------------------------------------------------
+def test_smart_score_prefers_measured_fast_reliable_work():
+    """Enough local evidence can overturn a static prior without any model or cloud service."""
+    telemetry = ActionTelemetry()
+    fast = FakeAction("HTTPFingerprint", port=80)
+    slow = FakeAction("SSHBruteforce", port=22)
+    for index in range(8):
+        telemetry.record(
+            fast.action_name, f"fast-{index}",
+            ActionOutcome(OutcomeCode.SUCCESS, duration_s=4))
+        telemetry.record(
+            slow.action_name, f"slow-{index}",
+            ActionOutcome(OutcomeCode.SUCCESS if index == 0 else OutcomeCode.FAILED,
+                          duration_s=100))
+
+    fast_score, fast_reason = score_host_action(
+        fast, _row(ports="80"), telemetry=telemetry, smart_enabled=True)
+    slow_score, _ = score_host_action(
+        slow, _row(ports="22"), telemetry=telemetry, smart_enabled=True)
+    assert fast_score > slow_score
+    assert "smart:p=" in fast_reason and "t=4s" in fast_reason
+
+
+def test_cold_start_uses_a_small_deterministic_utility_prior():
+    action = FakeAction("SSHBruteforce", port=22)
+    row = _row(ports="22")
+    legacy = score_host_action(action, row)[0]
+    smart, reason = score_host_action(
+        action, row, telemetry=ActionTelemetry(), smart_enabled=True)
+    assert smart != legacy and "smart:prior" in reason
+
+
+def test_cold_start_still_collects_unlocked_loot_first():
+    steal = FakeAction("StealFilesSSH", port=22, parent="SSHBruteforce")
+    fingerprint = FakeAction("HTTPFingerprint", port=80)
+    telemetry = ActionTelemetry()
+    steal_score, _ = score_host_action(
+        steal, _row(ports="22", SSHBruteforce=SUCCESS),
+        telemetry=telemetry, smart_enabled=True)
+    fingerprint_score, _ = score_host_action(
+        fingerprint, _row(ports="80"), telemetry=telemetry, smart_enabled=True)
+    assert steal_score > fingerprint_score, "ready loot must survive the prior blend"
+
+
+def test_smart_backoff_blocks_only_the_failed_target():
+    telemetry = ActionTelemetry()
+    ssh = FakeAction("SSHBruteforce", port=22)
+    telemetry.record(
+        ssh.action_name, "10.0.0.1",
+        ActionOutcome(OutcomeCode.TIMEOUT, duration_s=30))
+    planner = Planner(
+        telemetry=telemetry, smart_enabled=True,
+        standalone_every=99, failed_retry_delay=600)
+    data = [
+        _row(ip="10.0.0.1", ports="22"),
+        _row(ip="10.0.0.2", ports="22"),
+    ]
+    candidates = planner.collect([ssh], [], data)
+    assert [candidate.ip for candidate in candidates] == ["10.0.0.2"]
+    assert 0 < planner.next_retry_wait <= 600
+
+
+def test_config_toggle_restores_legacy_scoring():
+    import types
+    planner = Planner(telemetry=ActionTelemetry(), smart_enabled=True)
+    planner.sync_config(types.SimpleNamespace(
+        smart_planner_enabled=False,
+        planner_standalone_every=3,
+        planner_max_host_actions=4,
+    ))
+    assert planner.smart_enabled is False
 
 
 if __name__ == "__main__":

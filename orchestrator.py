@@ -34,6 +34,8 @@ from action_planner import Planner, load_service_hints, load_vuln_ips, plan_idle
 import offline_mode
 import bettercap_client
 import bettercap_pwn
+from action_outcome import OutcomeCode, normalize_outcome
+from action_telemetry import ActionTelemetry
 
 logger = Logger(name="orchestrator.py", level=logging.DEBUG)
 
@@ -59,7 +61,11 @@ class Orchestrator:
         # interleave on the shared connector singleton (shared queue/results).
         self._action_locks = {}
         self._action_locks_guard = threading.Lock()
-        self.planner = Planner()  # knobs re-read from config each cycle via sync_config()
+        # Aggregate history is small, local and flushed once per completed cycle to limit SD wear.
+        self.action_telemetry = ActionTelemetry(
+            os.path.join(self.shared_data.datadir, "action_telemetry.json"))
+        self.planner = Planner(telemetry=self.action_telemetry)
+        # Planner knobs are re-read from live config each cycle via sync_config().
         self.offline_since = None  # set on the cycle the uplink disappears, cleared when it returns
         self.last_autojoin_detail = None  # dedupes the once-a-minute auto-join outcome in the log
         self.last_hunt_detail = None      # same, for the hunter's refusal reason
@@ -130,6 +136,27 @@ class Orchestrator:
         if error and len(stats["errors"]) < 5:
             stats["errors"].append(str(error)[:200])
 
+    def _record_execution(self, action_name, target, outcome, *, planner_score=None,
+                          planner_reason=""):
+        """Update the legacy run report and the richer persistent planner history."""
+        error = outcome.reason if outcome.code is OutcomeCode.ERROR else None
+        self._record_result(action_name, outcome.succeeded, error=error)
+        self.action_telemetry.record(
+            action_name,
+            target,
+            outcome,
+            planner_score=planner_score,
+            planner_reason=planner_reason,
+        )
+
+    def _flush_action_telemetry(self):
+        """Persist planner history without making optional learning a boot/runtime dependency."""
+        try:
+            self.action_telemetry.flush()
+        except Exception as exc:
+            # A read-only/full SD card may disable learning, but must not stop scanning.
+            logger.error(f"Could not persist planner telemetry; continuing without write: {exc}")
+
     def write_run_report(self):
         """Write a redacted run-summary snapshot for the offline improvement process (docs/PRD.md §4a)."""
         try:
@@ -143,6 +170,10 @@ class Orchestrator:
             "written_at": datetime.now().isoformat(),
             "version": version,
             "actions": self.action_stats,
+            "planner": {
+                "mode": "smart" if getattr(self.planner, "smart_enabled", False) else "legacy",
+                "telemetry": "data/action_telemetry.json",
+            },
         }
         with open(os.path.join(report_dir, f"{self.run_id}.json"), "w") as f:
             json.dump(report, f, indent=2)
@@ -189,12 +220,15 @@ class Orchestrator:
                 self.shared_data.bjornstatustext2 = cand.reason[:40]
                 logger.info(f"Planner chose: {cand.reason} (score={cand.score})")
                 if cand.kind == "standalone":
-                    return bool(self.execute_standalone_action(cand.action, current_data))
+                    return bool(self.execute_standalone_action(
+                        cand.action, current_data,
+                        planner_score=cand.score, planner_reason=cand.reason))
                 if cand.row is not None:
                     ports = str(cand.row.get("Ports", "") or "").split(';')
                     return bool(self.execute_action(
                         cand.action, cand.ip, ports, cand.row,
                         cand.action_name, current_data,
+                        planner_score=cand.score, planner_reason=cand.reason,
                     ))
                 return False
 
@@ -282,10 +316,13 @@ class Orchestrator:
             if self._run_candidate(cand, current_data):
                 any_action_executed = True
 
+        # Worker threads update memory only; one atomic write per cycle protects the SD card.
+        self._flush_action_telemetry()
         return any_action_executed
 
 
-    def execute_action(self, action, ip, ports, row, action_key, current_data):
+    def execute_action(self, action, ip, ports, row, action_key, current_data,
+                       planner_score=None, planner_reason=""):
         """Execute an action on a target.
 
         The planner pre-checks all of these gates, but they stay here: this is also the manual-attack
@@ -318,26 +355,45 @@ class Orchestrator:
                 logger.warning(f"Skipping action {action.action_name} for {ip}:{action.port} due to failed retry delay, retry possible in: {timedelta(seconds=remaining)}")
                 return False
 
+        logger.info(f"Executing action {action.action_name} for {ip}:{action.port}")
+        # The planner has already put its reason on the display; only fall back to the bare IP
+        # when nothing set one (e.g. a manual attack from the web UI).
+        if not getattr(self.shared_data, "bjornstatustext2", ""):
+            self.shared_data.bjornstatustext2 = ip
+        started = time.monotonic()
+        error = None
+        result = None
         try:
-            logger.info(f"Executing action {action.action_name} for {ip}:{action.port}")
-            # The planner has already put its reason on the display; only fall back to the bare IP
-            # when nothing set one (e.g. a manual attack from the web UI).
-            if not getattr(self.shared_data, "bjornstatustext2", ""):
-                self.shared_data.bjornstatustext2 = ip
             result = action.execute(ip, str(action.port), row, action_key)
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            if result == 'success':
-                row[action_key] = f'success_{timestamp}'
-            else:
-                row[action_key] = f'failed_{timestamp}'
-            self._record_result(action.action_name, result == 'success')
-            return result == 'success'
-        except Exception as e:
-            logger.error(f"Action {action.action_name} failed: {e}")
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            row[action_key] = f'failed_{timestamp}'
-            self._record_result(action.action_name, False, error=e)
+        except Exception as exc:  # normalised below so telemetry receives the precise cause
+            error = exc
+            logger.error(f"Action {action.action_name} failed: {exc}")
+        outcome = normalize_outcome(
+            result, duration_s=time.monotonic() - started, error=error)
+
+        # RESOURCE_BUSY and SKIPPED are deferrals, not failed work. Telemetry retains
+        # RESOURCE_BUSY for a short retry delay while an ordinary skip leaves no trace.
+        if outcome.skipped:
+            if outcome.code is OutcomeCode.RESOURCE_BUSY:
+                self._record_execution(
+                    action.action_name, ip, outcome,
+                    planner_score=planner_score, planner_reason=planner_reason)
+            logger.debug(
+                f"Action {action.action_name} deferred: {outcome.code.value} ({outcome.reason})")
             return False
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        if outcome.succeeded:
+            row[action_key] = f'success_{timestamp}'
+        elif outcome.should_stamp_failure:
+            row[action_key] = f'failed_{timestamp}'
+        self._record_execution(
+            action.action_name, ip, outcome,
+            planner_score=planner_score, planner_reason=planner_reason)
+        logger.info(
+            f"Action outcome: {action.action_name}@{ip}={outcome.code.value}, "
+            f"duration={outcome.duration_s:.2f}s, reason={outcome.reason or '-'}")
+        return outcome.succeeded
 
     def merge_bettercap_hosts(self, current_data):
         """Fold anything the Bettercap poller has seen into this cycle's netkb rows.
@@ -373,6 +429,14 @@ class Orchestrator:
             with self.semaphore:
                 self.execute_standalone_action(action, current_data)
                 ran.append(action.action_name)
+        telemetry = getattr(self, "action_telemetry", None)
+        if telemetry is not None:
+            flush = getattr(self, "_flush_action_telemetry", None)
+            if callable(flush):
+                flush()
+            else:
+                # Lightweight integration fakes may provide telemetry without the helper.
+                telemetry.flush()
         return ran
 
     def run_offline_cycle(self):
@@ -534,7 +598,8 @@ class Orchestrator:
                 elif result is not None and result != 'skipped':
                     row["NmapVulnScanner"] = f'failed_{timestamp}'
 
-    def execute_standalone_action(self, action, current_data):
+    def execute_standalone_action(self, action, current_data, planner_score=None,
+                                  planner_reason=""):
         """Execute a standalone action"""
         row = next((r for r in current_data if r["MAC Address"] == "STANDALONE"), None)
         if not row:
@@ -565,31 +630,50 @@ class Orchestrator:
                 logger.warning(f"Skipping standalone action {action.action_name} due to failed retry delay, retry possible in: {timedelta(seconds=remaining)}")
                 return False
 
+        logger.info(f"Executing standalone action {action.action_name}")
+        started = time.monotonic()
+        error = None
+        result = None
         try:
-            logger.info(f"Executing standalone action {action.action_name}")
             result = action.execute()
-            # 'skipped' = the action was disabled, throttled, or its tool isn't installed, so it did
-            # no work. It must leave no trace: writing 'success' to netkb and counting it in the run
-            # report made a switched-off action indistinguishable from a working one — a diagnostic
-            # pull read "WiFiScan: success=4" for an action that had never completed a capture.
-            if result == 'skipped':
-                logger.debug(f"Standalone action {action.action_name} skipped (nothing to do)")
-                return False
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            if result == 'success':
-                row[action_key] = f'success_{timestamp}'
-                logger.info(f"Standalone action {action.action_name} executed successfully")
-            else:
-                row[action_key] = f'failed_{timestamp}'
-                logger.error(f"Standalone action {action.action_name} failed")
-            self._record_result(action.action_name, result == 'success')
-            return result == 'success'
-        except Exception as e:
-            logger.error(f"Standalone action {action.action_name} failed: {e}")
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            row[action_key] = f'failed_{timestamp}'
-            self._record_result(action.action_name, False, error=e)
+        except Exception as exc:  # preserve the cycle while recording an actionable cause
+            error = exc
+            logger.error(f"Standalone action {action.action_name} failed: {exc}")
+        outcome = normalize_outcome(
+            result, duration_s=time.monotonic() - started, error=error)
+
+        # Ordinary skipped work remains invisible. RESOURCE_BUSY is retained only in telemetry
+        # so it can retry soon without poisoning the action's success statistics.
+        if outcome.skipped:
+            if outcome.code is OutcomeCode.RESOURCE_BUSY:
+                recorder = getattr(self, "_record_execution", None)
+                if callable(recorder):
+                    recorder(
+                        action.action_name, "STANDALONE", outcome,
+                        planner_score=planner_score, planner_reason=planner_reason)
+            logger.debug(
+                f"Standalone action {action.action_name} deferred: {outcome.code.value}")
             return False
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        if outcome.succeeded:
+            row[action_key] = f'success_{timestamp}'
+            logger.info(f"Standalone action {action.action_name} executed successfully")
+        elif outcome.should_stamp_failure:
+            row[action_key] = f'failed_{timestamp}'
+            logger.error(
+                f"Standalone action {action.action_name} failed ({outcome.code.value})")
+        recorder = getattr(self, "_record_execution", None)
+        if callable(recorder):
+            recorder(
+                action.action_name, "STANDALONE", outcome,
+                planner_score=planner_score, planner_reason=planner_reason)
+        else:
+            # Lightweight test fakes and old integrations expose only the legacy recorder.
+            self._record_result(
+                action.action_name, outcome.succeeded,
+                error=outcome.reason if outcome.code is OutcomeCode.ERROR else None)
+        return outcome.succeeded
 
     def run(self):
         """Run the orchestrator cycle to execute actions"""

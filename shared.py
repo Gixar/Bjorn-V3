@@ -157,6 +157,7 @@ class SharedData:
             "failed_retry_delay": 600,
             "success_retry_delay": 900,
             "adaptive_scan_interval": True,  # idle longer as scans stay fruitless, shorter when a retry window expires first
+            "smart_planner_enabled": True,   # learn local success/duration and rank expected useful yield; false restores legacy scoring
             "planner_max_host_actions": 4,   # host actions the planner runs per cycle (fairness window, not a cap on throughput)
             "planner_standalone_every": 3,   # force a standalone action every N cycles so recon isn't starved by host work
             "bruteforce_threads": 0,  # brute-force worker threads per connector; 0 = auto (core-aware, capped at 8)

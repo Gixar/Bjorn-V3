@@ -50,11 +50,18 @@ def test_every_action_that_paused_still_pauses():
     """The point was to make the wait right, not to delete it. If a future edit drops the call
     from one of these files, the status it sets becomes unreadable on the panel."""
     import re
+    repo = Path(__file__).resolve().parent.parent
+    # #12: a connector that delegates to BaseBruteforce settles in the base's execute(), not its
+    # own file. Verify the base carries the call once, then skip the per-file check for delegators.
+    base = (repo / "base_connector.py").read_text(encoding="utf-8")
+    assert "settle_for_display(self.shared_data)" in base, "base_connector no longer settles"
     expected = ["ftp_connector", "steal_data_sql", "steal_files_ftp", "steal_files_rdp",
                 "steal_files_smb", "steal_files_ssh", "steal_files_telnet"]
-    root = Path(__file__).resolve().parent.parent / "actions"
+    root = repo / "actions"
     for name in expected:
         src = (root / f"{name}.py").read_text(encoding="utf-8")
+        if "from base_connector import" in src:
+            continue  # delegates — settle verified on the base above
         assert "settle_for_display(self.shared_data)" in src, f"{name} no longer settles"
         assert re.search(r"from shared import [^\n]*settle_for_display", src), f"{name} missing import"
         assert "time.sleep(5)" not in src, f"{name} still has the hardcoded sleep"

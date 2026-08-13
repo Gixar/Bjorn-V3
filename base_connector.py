@@ -25,6 +25,7 @@ from shared import (
     dedupe_csv,
     credential_candidates,
     record_cracked_cred,
+    settle_for_display,
 )
 import logging
 from logger import Logger
@@ -178,7 +179,8 @@ class BaseBruteforce:
         logger.info(f"{self.connector_class.__name__} initialized.")
 
     def execute(self, ip, port, row, status_key):
-        logger.info(f"Executing {self.display_name} on {ip}:{port}...")
         self.shared_data.bjornorch_status = self.display_name
+        settle_for_display(self.shared_data)  # let the panel show this action's name
+        logger.info(f"Executing {self.display_name} on {ip}:{port}...")
         success, _results = self.connector.run_bruteforce(ip, port, row)
         return "success" if success else "failed"

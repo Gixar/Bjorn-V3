@@ -39,7 +39,7 @@ def test_ftp_connect_true_on_login_and_false_on_any_failure(monkeypatch):
         def quit(self): pass
 
     monkeypatch.setattr(mod, "FTP", OkFTP)
-    assert conn.ftp_connect("10.0.0.5", "root", "toor") is True
+    assert conn.attempt("10.0.0.5", "root", "toor") is True
 
     for boom in (socket.error("refused"), OSError("no route"), Exception("530 denied")):
         class BadFTP:
@@ -48,7 +48,7 @@ def test_ftp_connect_true_on_login_and_false_on_any_failure(monkeypatch):
             def login(self, *a, **k): pass
             def quit(self): pass
         monkeypatch.setattr(mod, "FTP", BadFTP)
-        assert conn.ftp_connect("10.0.0.5", "root", "wrong") is False, boom
+        assert conn.attempt("10.0.0.5", "root", "wrong") is False, boom
 
 
 # --- Telnet ----------------------------------------------------------------
@@ -190,7 +190,7 @@ WORKERS = [
     # SSH now delegates worker/attempt to base_connector.BaseConnector (#12); the method the
     # worker calls is `attempt`. The other five still carry their own `<proto>_connect`.
     ("ssh_connector", "SSHConnector", "attempt", 6),
-    ("ftp_connector", "FTPConnector", "ftp_connect", 6),
+    ("ftp_connector", "FTPConnector", "attempt", 6),
     ("smb_connector", "SMBConnector", "smb_connect", 6),
     ("telnet_connector", "TelnetConnector", "telnet_connect", 6),
     ("sql_connector", "SQLConnector", "sql_connect", 4),

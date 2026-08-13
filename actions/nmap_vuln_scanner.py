@@ -3,6 +3,7 @@
 # It scans for vulnerabilities on various ports and saves the results and progress.
 
 import os
+import csv
 import re
 import json
 import subprocess
@@ -46,32 +47,51 @@ class NmapVulnScanner:
         Creates a summary file for vulnerabilities if it does not exist.
         """
         if not os.path.exists(self.summary_file):
-            import pandas as pd  # lazy: keep pandas out of module import (P2)
             os.makedirs(self.shared_data.vulnerabilities_dir, exist_ok=True)
-            df = pd.DataFrame(columns=["IP", "Hostname", "MAC Address", "Port", "Vulnerabilities"])
-            df.to_csv(self.summary_file, index=False)
+            with open(self.summary_file, "w", newline="", encoding="utf-8") as f:
+                csv.DictWriter(
+                    f,
+                    fieldnames=["IP", "Hostname", "MAC Address", "Port", "Vulnerabilities"],
+                ).writeheader()
 
     def update_summary_file(self, ip, hostname, mac, port, vulnerabilities):
         """
         Updates the summary file with the scan results.
+
+        stdlib csv only — same semantics as the old pandas path: append the new
+        row, then drop duplicates on (IP, MAC Address) keeping the *last*
+        occurrence so a re-scan replaces the previous entry.
         """
+        fields = ["IP", "Hostname", "MAC Address", "Port", "Vulnerabilities"]
         try:
-            import pandas as pd  # lazy: keep pandas out of module import (P2)
-            with self._summary_lock:  # serialize the two vuln-scan workers' read-modify-write
-                # Read existing data
-                df = pd.read_csv(self.summary_file)
+            with self._summary_lock:  # serialize the vuln-scan workers' read-modify-write
+                rows = []
+                if os.path.exists(self.summary_file):
+                    with open(self.summary_file, newline="", encoding="utf-8", errors="replace") as f:
+                        rows = list(csv.DictReader(f))
+                rows.append({
+                    "IP": ip,
+                    "Hostname": hostname,
+                    "MAC Address": mac,
+                    "Port": port,
+                    "Vulnerabilities": vulnerabilities,
+                })
+                # Keep last occurrence per (IP, MAC).
+                seen = {}
+                for i, row in enumerate(rows):
+                    key = (row.get("IP", ""), row.get("MAC Address", ""))
+                    seen[key] = i
+                keep = set(seen.values())
+                rows = [r for i, r in enumerate(rows) if i in keep]
 
-                # Create new data entry
-                new_data = pd.DataFrame([{"IP": ip, "Hostname": hostname, "MAC Address": mac, "Port": port, "Vulnerabilities": vulnerabilities}])
-
-                # Append new data
-                df = pd.concat([df, new_data], ignore_index=True)
-
-                # Remove duplicates based on IP and MAC Address, keeping the last occurrence
-                df.drop_duplicates(subset=["IP", "MAC Address"], keep='last', inplace=True)
-
-                # Save the updated data back to the summary file
-                df.to_csv(self.summary_file, index=False)
+                tmp = self.summary_file + ".tmp"
+                with open(tmp, "w", newline="", encoding="utf-8") as f:
+                    writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
+                    writer.writeheader()
+                    writer.writerows(rows)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp, self.summary_file)
         except Exception as e:
             logger.error(f"Error updating summary file: {e}")
 
@@ -248,13 +268,46 @@ class NmapVulnScanner:
     def save_summary(self):
         """
         Saves a summary of all scanned vulnerabilities to a final summary file.
+
+        Groups by (IP, Hostname, MAC Address) and unions the Vulnerabilities
+        field (semicolon-separated, de-duplicated) — same result as the old
+        pandas groupby/apply, without loading pandas.
         """
         try:
-            import pandas as pd  # lazy: keep pandas out of module import (P2)
-            final_summary_file = os.path.join(self.shared_data.vulnerabilities_dir, "final_vulnerability_summary.csv")
-            df = pd.read_csv(self.summary_file)
-            summary_data = df.groupby(["IP", "Hostname", "MAC Address"])["Vulnerabilities"].apply(lambda x: "; ".join(set("; ".join(x).split("; ")))).reset_index()
-            summary_data.to_csv(final_summary_file, index=False)
+            final_summary_file = os.path.join(
+                self.shared_data.vulnerabilities_dir, "final_vulnerability_summary.csv"
+            )
+            groups = {}  # (ip, hostname, mac) -> set of vuln tokens
+            if os.path.exists(self.summary_file):
+                with open(self.summary_file, newline="", encoding="utf-8", errors="replace") as f:
+                    for row in csv.DictReader(f):
+                        key = (
+                            row.get("IP", ""),
+                            row.get("Hostname", ""),
+                            row.get("MAC Address", ""),
+                        )
+                        bucket = groups.setdefault(key, set())
+                        for token in (row.get("Vulnerabilities") or "").split(";"):
+                            token = token.strip()
+                            if token:
+                                bucket.add(token)
+
+            fields = ["IP", "Hostname", "MAC Address", "Vulnerabilities"]
+            tmp = final_summary_file + ".tmp"
+            os.makedirs(self.shared_data.vulnerabilities_dir, exist_ok=True)
+            with open(tmp, "w", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(f, fieldnames=fields)
+                writer.writeheader()
+                for (ip, hostname, mac), vulns in groups.items():
+                    writer.writerow({
+                        "IP": ip,
+                        "Hostname": hostname,
+                        "MAC Address": mac,
+                        "Vulnerabilities": "; ".join(sorted(vulns)),
+                    })
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, final_summary_file)
             logger.info(f"Summary saved to {final_summary_file}")
         except Exception as e:
             logger.error(f"Error saving summary: {e}")

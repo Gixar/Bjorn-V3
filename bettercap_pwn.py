@@ -201,7 +201,7 @@ def build_index(base_dir, previous=None, now=None):
     for path, mtime in find_captures(base_dir):
         bssid, essid = parse_capture_name(path)
         prior = previous.get(path, {})
-        entries[path] = {
+        entry = {
             "path": path,
             "bssid": bssid,
             "essid": essid or prior.get("essid", ""),
@@ -209,6 +209,11 @@ def build_index(base_dir, previous=None, now=None):
             "first_seen": prior.get("first_seen") or stamp,
             "last_seen": datetime.fromtimestamp(mtime).isoformat(timespec="seconds"),
         }
+        # Preserve upload/completeness state across re-indexes (wpa-sec upload loop).
+        for field in ("uploaded", "complete", "hc22000"):
+            if prior.get(field):
+                entry[field] = prior[field]
+        entries[path] = entry
     return entries
 
 

@@ -2,8 +2,11 @@
 malformed/empty/control-char lines), connection-name sanitization, and the NM keyfile. Pure static
 methods — no network, no nmcli. Heavy imports (shared/logger) stubbed via tests/_stubs.py.
 """
+import json
+import os
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -58,8 +61,58 @@ def test_nmconnection_contents():
     assert "autoconnect-priority=-10" in conf  # never outranks Bjorn's own connection
 
 
+# --- #3 upload half: completeness gate + one-upload-per-BSSID + idempotency -------------------
+
+def _uploader(tmp_path, uploads):
+    """A WpaSecImport with __init__ bypassed, wired to a fake tool and a recording uploader.
+    `_is_complete` keys off the filename so the dedupe/gate logic is what's under test, not the
+    hcxpcapngtool subprocess (a thin wrapper)."""
+    obj = WpaSecImport.__new__(WpaSecImport)
+    obj.shared_data = SimpleNamespace(handshakes_dir=str(tmp_path))
+    obj._is_complete = lambda path: "incomplete" not in os.path.basename(path)
+    obj._upload_file = lambda key, path: (uploads.append(os.path.basename(path)) or True)
+    return obj
+
+
+def _write_index(tmp_path, entries):
+    for path in entries:
+        Path(path).write_bytes(b"x")  # _upload_pending skips entries whose file is gone
+    (tmp_path / "index.json").write_text(json.dumps({"captures": entries}))
+
+
+def test_upload_is_one_per_bssid_and_skips_incomplete(tmp_path):
+    a1 = str(tmp_path / "apA-1.pcap")
+    a2 = str(tmp_path / "apA-2.pcap")          # same BSSID as a1 -> must not upload twice
+    b1 = str(tmp_path / "apB.pcap")
+    bad = str(tmp_path / "apC-incomplete.pcap")  # no real handshake -> never upload
+    entries = {
+        a1: {"path": a1, "bssid": "AA:AA:AA:AA:AA:AA"},
+        a2: {"path": a2, "bssid": "AA:AA:AA:AA:AA:AA"},
+        b1: {"path": b1, "bssid": "BB:BB:BB:BB:BB:BB"},
+        bad: {"path": bad, "bssid": "CC:CC:CC:CC:CC:CC"},
+    }
+    _write_index(tmp_path, entries)
+
+    uploads = []
+    n = _uploader(tmp_path, uploads)._upload_pending("KEY")
+
+    assert n == 2, "one upload per unique complete BSSID (AA once, BB once)"
+    assert sorted(uploads) == ["apA-1.pcap", "apB.pcap"]
+    assert "apC-incomplete.pcap" not in uploads
+
+    # The whole point of persisting `uploaded`: a second pass sends nothing.
+    uploads2 = []
+    n2 = _uploader(tmp_path, uploads2)._upload_pending("KEY")
+    assert n2 == 0 and uploads2 == [], "already-uploaded captures must not re-upload"
+
+    saved = json.loads((tmp_path / "index.json").read_text())["captures"]
+    assert saved[a1]["uploaded"] and saved[a2]["uploaded"], "both AA captures marked uploaded"
+    assert "uploaded" not in saved[bad], "an incomplete capture is never stamped uploaded"
+
+
 if __name__ == "__main__":
+    import inspect
     for name, fn in sorted(globals().items()):
-        if name.startswith("test_") and callable(fn):
+        if name.startswith("test_") and callable(fn) and not inspect.signature(fn).parameters:
             fn()
-    print("ok")
+    print("ok (fixture-free subset; run pytest for all)")

@@ -834,12 +834,20 @@ class Verifier:
                       ("telnet_connector.py", "Telnet"), ("sql_connector.py", "SQL")]
         sources = {proto: _read(os.path.join(self.repo, "actions", fn)) for fn, proto in connectors}
 
+        # #12: a connector that delegates to base_connector.BaseConnector no longer carries its own
+        # run_bruteforce/worker — the shared scaffolding (and its fixes) live in base_connector.py.
+        # Parse the base for such a connector so a converted adapter still proves the guarantee.
+        base_src = _read(os.path.join(self.repo, "base_connector.py"))
+
+        def _effective(src):
+            return base_src if (base_src and "from base_connector import" in src) else src
+
         # THE LATEST FIX. run_bruteforce must assign mac_address/hostname BEFORE the queue.put() that
         # uses them. RDP had them the other way round, so every real attack (orchestrator_should_exit
         # False) raised UnboundLocalError and the host was marked failed with no credential tried.
         # Checked for all six: the ~85% copy-paste that caused the RDP divergence could hide the same
         # ordering bug in any of them.
-        order = {p: used_before_assigned(src, "run_bruteforce", "mac_address")
+        order = {p: used_before_assigned(_effective(src), "run_bruteforce", "mac_address")
                  for p, src in sources.items()}
         bad = [p for p, r in order.items() if r is True]
         unknown = [p for p, r in order.items() if r is None]
@@ -856,7 +864,7 @@ class Verifier:
 
         # The connector-hang fix (3.0.1-beta): task_done() in a finally, so a raising connect can't
         # skip it and hang queue.join() — and with it the single-threaded orchestrator — forever.
-        guarded = {p: call_in_finally(src, "worker", "task_done") for p, src in sources.items()}
+        guarded = {p: call_in_finally(_effective(src), "worker", "task_done") for p, src in sources.items()}
         unguarded = [p for p, ok in guarded.items() if ok is False]
         if unguarded:
             self.r.verdict(FAIL, "a raising worker still drains its queue",

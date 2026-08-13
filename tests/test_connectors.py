@@ -187,7 +187,9 @@ import queue as _queue  # noqa: E402
 import threading  # noqa: E402
 
 WORKERS = [
-    ("ssh_connector", "SSHConnector", "ssh_connect", 6),
+    # SSH now delegates worker/attempt to base_connector.BaseConnector (#12); the method the
+    # worker calls is `attempt`. The other five still carry their own `<proto>_connect`.
+    ("ssh_connector", "SSHConnector", "attempt", 6),
     ("ftp_connector", "FTPConnector", "ftp_connect", 6),
     ("smb_connector", "SMBConnector", "smb_connect", 6),
     ("telnet_connector", "TelnetConnector", "telnet_connect", 6),

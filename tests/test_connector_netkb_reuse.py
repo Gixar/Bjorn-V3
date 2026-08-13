@@ -67,15 +67,23 @@ def test_every_connector_accepts_the_row_argument():
     runtime on that protocol only — the kind of gap that shows up on hardware, not in review."""
     import importlib
     import inspect
+    repo = Path(__file__).resolve().parent.parent
+
+    # #12: the delegating connectors' wrapper is BaseBruteforce.execute in base_connector.py,
+    # which passes row straight into the shared run_bruteforce. Checked once here.
+    base = (repo / "base_connector.py").read_text(encoding="utf-8")
+    assert "self.connector.run_bruteforce(ip, port, row)" in base, "BaseBruteforce.execute drops row"
+
     for module_name, class_name in CONNECTORS:
         mod = importlib.import_module(f"actions.{module_name}")
         sig = inspect.signature(getattr(mod, class_name).run_bruteforce)
         assert "row" in sig.parameters, f"{module_name}.run_bruteforce has no row parameter"
         assert sig.parameters["row"].default is None, f"{module_name} must keep row optional"
 
+        src = (repo / "actions" / f"{module_name}.py").read_text(encoding="utf-8")
+        if "from base_connector import" in src:
+            continue  # delegates — the wrapper passing row is verified on the base above
         # ...and the two wrappers above it must pass it down, or the fast path never triggers.
-        src = (Path(__file__).resolve().parent.parent / "actions" / f"{module_name}.py").read_text(
-            encoding="utf-8")
         proto = module_name.replace("_connector", "")
         assert f"self.bruteforce_{proto}(ip, port, row)" in src, f"{module_name}: execute drops row"
         assert f"run_bruteforce(ip, port, row)" in src, f"{module_name}: wrapper drops row"

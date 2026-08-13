@@ -283,11 +283,24 @@ def test_call_in_finally_confirms_the_connector_hang_guard():
 def test_the_shipped_connectors_pass_both_source_checks():
     """Not a fixture — the real files. This is the regression that would have caught the RDP bug in
     CI: parse each deployed connector and assert no used-before-assigned + the hang guard holds. All
-    six are safe (SQL never reads mac_address; the other five assign it before the queue.put)."""
-    actions = Path(__file__).resolve().parent.parent / "actions"
+    six are safe (SQL never reads mac_address; the other five assign it before the queue.put).
+
+    #12: a connector that delegates to base_connector.BaseConnector no longer carries its own
+    run_bruteforce/worker — the guarantee lives in the base, checked once below. So for a delegating
+    file we verify the base; only a connector still carrying its own scaffolding is parsed directly."""
+    repo = Path(__file__).resolve().parent.parent
+    actions = repo / "actions"
+
+    base = (repo / "base_connector.py").read_text(encoding="utf-8")
+    assert bv.used_before_assigned(base, "run_bruteforce", "mac_address") is False, \
+        "base_connector: mac_address read before assigned (the RDP bug class)"
+    assert bv.call_in_finally(base, "worker", "task_done") is True, "base_connector: unguarded worker"
+
     for fn in ("ssh_connector.py", "ftp_connector.py", "smb_connector.py",
                "rdp_connector.py", "telnet_connector.py", "sql_connector.py"):
         src = (actions / fn).read_text(encoding="utf-8")
+        if "from base_connector import" in src:
+            continue  # delegates — guarantee verified on the base above
         assert bv.used_before_assigned(src, "run_bruteforce", "mac_address") is False, \
             f"{fn}: mac_address read before assigned (the RDP bug class)"
         assert bv.call_in_finally(src, "worker", "task_done") is True, f"{fn}: unguarded worker"

@@ -1,11 +1,11 @@
 # <img src="https://github.com/user-attachments/assets/c5eb4cc1-0c3d-497d-9422-1614651a84ab" alt="Bjorn" width="33"> Bjorn V3
 
 ![Python](https://img.shields.io/badge/Python-3776AB?logo=python&logoColor=fff)
-![Version](https://img.shields.io/badge/version-3.0.0--beta-blue.svg)
+![Version](https://img.shields.io/badge/version-3.0.1--beta-blue.svg)
 ![Status](https://img.shields.io/badge/status-beta-orange.svg)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 ![CI](https://github.com/Gixar/Bjorn-V3/actions/workflows/ci.yml/badge.svg)
-![Tests](https://img.shields.io/badge/tests-313%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-356%20passing-brightgreen)
 
 [![Reddit](https://img.shields.io/badge/Reddit-Bjorn__CyberViking-orange?style=for-the-badge&logo=reddit)](https://www.reddit.com/r/Bjorn_CyberViking)
 [![Discord](https://img.shields.io/badge/Discord-Join%20Us-7289DA?style=for-the-badge&logo=discord)](https://discord.com/invite/B3ZH9taVfT)
@@ -53,16 +53,17 @@ This fork is **modernization and reach**, not reinvention. If you are new here, 
 | **Reach** | IP hosts on the one LAN it joined | **+ every subnet on every interface**, Bluetooth/BLE devices, 802.11 access points and clients, WPA handshakes |
 | **Works offline** | Idles until a network appears | **Surveys the air, hunts handshakes, and auto-rejoins** — the pocket-carry feature |
 | **Port discovery** | nmap | **RustScan by default — 29× faster** on a Pi Zero 2 W, with automatic nmap fallback |
-| **Target selection** | Actions run in load order | **Scored planner** — ranks every (host, action) pair each cycle and shows *why* it chose |
+| **Target selection** | Actions run in load order | **Scored planner with on-device adaptation** — ranks every (host, action) pair each cycle, learns per-action success/duration locally (no LLM, no deps), and shows *why* it chose |
+| **Throughput** | One host at a time | **Independent hosts scanned and attacked in parallel** under a core-aware thread budget; the vuln sweep runs off the critical path |
 | **Recon depth** | Port scan + nmap vuln scan | **+ HTTP fingerprinting, templated web checks, SNMP enum, offline CVE matching** |
 | **Credentials** | Cracked per host | **Shared pool, replayed first on every other host and protocol** — one crack cascades |
 | **Getting data out** | Read it on the device | **Telegram + SMTP auto-reporting, per-page dumps, one-click "everything in a zip"** |
 | **Score** | Recomputed live, could drop to zero | **Monotonic high-water mark, persisted across restarts** |
-| **Web UI** | 7 pages on `http.server` | **14 pages on FastAPI** + live WebSocket stats dashboard, log viewer, and a built-in `/help` |
-| **Reliability** | — | Atomic netkb writes, systemd watchdog, fail-fast config validation, battery-aware shutdown |
-| **Tests** | — | **313 tests + CI**, none requiring hardware |
+| **Web UI** | 7 pages on `http.server` | **14 pages on FastAPI** + an *event-driven* live WebSocket dashboard, log viewer, built-in `/help`, and path-traversal/zip-slip-hardened file endpoints |
+| **Reliability** | — | Wall-clock timeout on every network op, bounded steal (recursion/size/free-space caps), typed action outcomes, atomic netkb + config writes, systemd watchdog, fail-fast config validation, battery-aware shutdown |
+| **Tests** | — | **356 tests + CI**, none requiring hardware |
 
-In numbers: **17 → 22 action modules, 10 → 22 core modules, 7 → 14 web pages, 0 → 313 tests.**
+In numbers: **17 → 22 action modules, 10 → 22 core modules, 7 → 14 web pages, 0 → 356 tests.**
 
 ---
 
@@ -212,7 +213,7 @@ turn it on.
 
 ## ✅ What's verified, and what isn't
 
-**`v3.0.0-beta`** — this project distinguishes "the code is done" from "the hardware agrees", because they are
+**`v3.0.1-beta`** — this project distinguishes "the code is done" from "the hardware agrees", because they are
 different claims.
 
 **Confirmed on a Pi Zero 2 W:** RustScan at 29×, BLE recon, monitor-mode capture *and* release with
@@ -255,7 +256,7 @@ Attack modules follow a small contract — drop a file in `actions/`, declare `b
 it. See [`DEVELOPMENT.md`](DEVELOPMENT.md).
 
 ```bash
-pytest tests/          # 313 tests, no hardware required
+pytest tests/          # 356 tests, no hardware required
 ```
 
 ---

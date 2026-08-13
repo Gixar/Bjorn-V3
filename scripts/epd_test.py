@@ -60,7 +60,7 @@ def check_spi():
               "      (or add `dtparam=spi=on` to /boot/firmware/config.txt), then reboot.")
 
 
-def test_one(epd_type):
+def probe_one(epd_type):  # not test_*: pytest would auto-collect it as a (fixture-less) test
     print(f"\n=== Testing epd_type={epd_type!r} ===")
     try:
         from PIL import Image, ImageDraw
@@ -120,11 +120,11 @@ def main():
             subprocess.run([sys.executable, os.path.abspath(__file__), v], env=child_env)
         return
     if args:
-        test_one(args[0])
+        probe_one(args[0])
     else:
         t = config_epd_type()
         print(f"[config] epd_type = {t!r}")
-        test_one(t or "epd2in13_V4")
+        probe_one(t or "epd2in13_V4")
 
 
 if __name__ == "__main__":

@@ -5,8 +5,13 @@
 > kind of effort it needs.
 >
 > **Closed and removed:** **#1** RDP brute-force (Pi-verified, `bjorn_verify` Section 9) ·
-> **#4** a wall-clock timeout on every network op (locked by an AST guard) · **#6** recursion /
-> byte / free-space caps on every steal · **#7** atomic config + serialized writers.
+> **#4** a wall-clock timeout on every network op (locked by an AST guard) · **#7** atomic config
+> + serialized writers.
+>
+> **#6 was removed and has been put back** — see § 2. It was recorded as *"every steal has a
+> free-space precheck + per-file/per-run byte budgets"*; it was true of three modules out of six.
+> Worth remembering when reading any other ✅ in this file: that claim survived an audit, a
+> removal, and a re-read, and was caught only by opening the files to do unrelated work.
 >
 > Suite at the time of writing: **363 passing**, tip `89bccc4`, in sync with `v3/main`.
 
@@ -20,7 +25,8 @@ confirmed and its entry has been deleted; the § 2 half is still open.
 |---|---|---|---|---|
 | 2 | RDP + Telnet loot | Telnet steal (H) | RDP remote transport | |
 | 3 | wpa-sec upload loop | live upload (G) | | |
-| 5 | Outcome contract | | verification + lint + panel | |
+| 5 | Outcome contract | | verification + panel | |
+| 6 | Steal caps | | rdp + telnet still uncapped | |
 | 8 | Parallel host execution | benchmark (D) | | |
 | 9 | Vuln scan off critical path | | non-blocking sweep | |
 | 10 | e-ink frame cost | refresh cadence (E) | | |
@@ -436,9 +442,24 @@ is left, with where to start. Ordered so the earlier ones unblock the later ones
 connectors are adapters on it — SSH and FTP first (`15f7811`, `84d048b`; FTP went 187 → ~35
 lines), then SMB, Telnet, RDP and SQL (`98780d4`, −528 net lines).
 
-**Missing.** The six steal modules — ~1,250 LOC, ~85% duplicated. Extract `BaseStealer` with
-abstract `connect` / `list` / `fetch`, centralizing threading, timeouts, the latch, the byte and
-depth caps and atomic writes once.
+**Landed 2026-08-14: `base_stealer.py` + the SSH adapter.** The shared flow — parent gate, latch
+reset, credential load, run-token watchdog, credential loop, outcome contract, and the #6 budget
+helpers — exists once. `steal_files_ssh.py` went **192 → 108 lines** and is the proof the shape
+fits. Three decisions recorded in the module docstring so they are not re-litigated: the connect
+hook is **`open_session`, not `connect`** (a method named `connect` collides with the #4 timeout
+AST guard's callee match and would fail it for a rule that does not apply); each adapter keeps its
+own `LOGGER` so the flow still lands in `data/logs/steal_files_<proto>.py.log` where every runbook
+looks; and the latch reset stays inside `execute()`.
+
+Both source-parsing tests were taught to follow delegation — `test_status_settle.py` and
+`test_steal_modules.py::test_the_reset_is_present_in_source_for_every_module` — exactly as
+`bjorn_verify` Section 9 was for the connectors. Verified by planting a break in the base: both
+fired. 365 passing.
+
+**Missing.** Five adapters: SMB, FTP, RDP, Telnet, SQL. SMB and SQL need one extra seam each (SMB
+iterates shares, SQL iterates tables/schemas, and both plus FTP have an anonymous-access
+fallback), so expect the base to grow one hook that defaults to current behaviour — the same way
+`base_connector` grew `result_rows`/`after_queue`.
 
 **Do this first.** It is the unblocker:
 
@@ -461,6 +482,31 @@ readable share is no win, so `[]` is correctly falsy; for SQL the login *is* the
 pre-#12 worker recorded the cracked credential with zero databases visible — so it returns
 `databases or True`. Unifying them silently drops a valid credential. Both directions are pinned
 by tests. Expect the same asymmetry class in the stealers.
+
+### #6 — reopened: three of six steals never got the caps
+
+**This was marked ✅ DONE and deleted from this file.** The claim was *"every steal enforces a
+free-space precheck, a per-file cap and a per-run budget"*. Actual state when counted on
+2026-08-14:
+
+| Module | byte caps | free-space check |
+|---|---|---|
+| `steal_files_ftp` · `steal_files_smb` · `steal_data_sql` | ✅ | ✅ |
+| `steal_files_ssh` | ✅ *(added 2026-08-14 via `base_stealer`)* | ✅ |
+| `steal_files_rdp` · `steal_files_telnet` | ❌ **none** | ❌ **none** |
+
+So the thing #6 exists to prevent — a large or hostile host filling a 512 MB Pi Zero's card — is
+still reachable through the RDP and Telnet steals. Nothing about the earlier fix was wrong; it
+simply covered the three modules whose author-supplied patch set touched them, and the completion
+was recorded as universal.
+
+**Missing.** RDP and Telnet. Both land free when those adapters convert (§ #12 above): the caps
+now live on `BaseStealer` as `check_budget` / `fits_budget` / `note_bytes`, so an adapter cannot
+forget what it does not have to remember. **Do not patch them in place** — that recreates the
+sixth copy this refactor is deleting.
+
+Still deferred from the original item, and now cheap to do once on the base rather than six times:
+an atomic temp+rename per stolen file, and an inode-keyed rather than path-keyed visited-set.
 
 ### #2 — RDP loot has no remote transport
 

@@ -19,7 +19,7 @@ import _stubs  # noqa: E402
 _stubs.install()
 
 MODULES = [
-    ("steal_files_ssh", "StealFilesSSH", "SSHBruteforce", "connect_ssh"),
+    ("steal_files_ssh", "StealFilesSSH", "SSHBruteforce", "open_session"),
     ("steal_files_smb", "StealFilesSMB", "SMBBruteforce", "connect_smb"),
     ("steal_files_ftp", "StealFilesFTP", "FTPBruteforce", "connect_ftp"),
     ("steal_files_rdp", "StealFilesRDP", "RDPBruteforce", "connect_rdp"),
@@ -78,10 +78,15 @@ def test_execute_resets_the_latch(monkeypatch, tmp_path):
 def test_the_reset_is_present_in_source_for_every_module():
     """Belt-and-braces on the behavioural test above: the reset line must sit inside execute(),
     so a refactor that drops it is caught even if the early-exit path changes."""
-    root = Path(__file__).resolve().parent.parent / "actions"
+    repo = Path(__file__).resolve().parent.parent
+    # #12: a module that delegates to BaseStealer no longer carries its own execute() — the reset
+    # lives in the base. Parse the base for those, exactly as bjorn_verify Section 9 follows
+    # delegation for the converted connectors, so an adapter still proves the guarantee.
+    base_src = (repo / "base_stealer.py").read_text(encoding="utf-8")
     for module_name, _class, _parent, _connect in MODULES:
-        src = (root / f"{module_name}.py").read_text(encoding="utf-8")
-        exec_body = src.split("def execute(")[1]
+        src = (repo / "actions" / f"{module_name}.py").read_text(encoding="utf-8")
+        effective = base_src if "from base_stealer import" in src else src
+        exec_body = effective.split("def execute(")[1]
         assert "self.stop_execution = False" in exec_body, f"{module_name}: no reset in execute()"
 
 

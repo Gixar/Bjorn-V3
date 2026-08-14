@@ -14,6 +14,30 @@
   starlette, rich. Those are environment, not code: CI installs them via `requirements-ci.txt`.)*
 
 ### Added
+- **`base_stealer.py` — the shared scaffolding for the steal modules (#12), with SSH converted.**
+  Mirrors `base_connector.py`: the parent-action gate, per-run latch reset, cracked-credential
+  load, run-token-guarded watchdog, credential loop and outcome contract now exist once, and an
+  adapter implements `open_session` / `find_files` / `steal_file`. `steal_files_ssh.py` went
+  **192 → 108 lines**. The connect hook is deliberately **not** called `connect`:
+  `test_connectors.py::_TIMEOUT_SITES` matches `.connect(...)` callees by AST and would flag
+  `self.connect(...)` for missing a `timeout` kwarg it has no business carrying. Each adapter
+  keeps its own `LOGGER` so the flow still lands in `data/logs/steal_files_<proto>.py.log` rather
+  than moving to the base's log, which is where every runbook and past post-mortem looks.
+  `test_status_settle.py` and `test_steal_modules.py` were taught to follow delegation, as
+  `bjorn_verify` Section 9 was for the connectors; both were confirmed to fail on a planted break.
+
+### Fixed
+- **The SSH steal had no size or free-space limits at all (#6).** `steal_files_ssh` was recorded
+  as covered by the steal-caps work; it never was, and neither were `steal_files_rdp` or
+  `steal_files_telnet` — three of the six. SFTP could pull a file of any size onto a 512 MB Pi
+  Zero with no free-space precheck, which is precisely the failure #6 exists to prevent. The caps
+  (`MAX_FILE_BYTES` 50 MB, `MAX_RUN_BYTES` 200 MB, `MIN_FREE_BYTES` 100 MB — the same values
+  ftp/smb/sql already used) now live on `BaseStealer`, so SSH gained them by conversion. SFTP can
+  `stat` before transferring, so the per-file cap is a refusal rather than an abort partway
+  through. **RDP and Telnet remain uncapped** until their adapters convert; #6 is reopened in
+  `docs/IMPROVEMENT_PLAN.md` rather than left recorded as done.
+
+### Added
 - **Two AST guards on what an action's `execute()` may return** (`tests/test_action_outcomes.py`,
   #5). Both discover their targets from `actions/*.py` instead of naming modules, so a new action
   is covered the day it lands, and neither imports the modules — pure `ast`, so the hardware and

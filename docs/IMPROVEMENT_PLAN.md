@@ -474,10 +474,24 @@ and make the #13 auth/bind call.
   source-parsing verifiers (`bjorn_verify.py` Section 9, `test_bjorn_verify.py`,
   `test_connector_netkb_reuse.py`) were taught to **follow delegation** — a connector importing from
   `base_connector` is checked against the base file — so the next four conversions are adapter-only.
-  357 passing. **Still copy-paste:** SMB, Telnet, RDP and SQL connectors, plus all six steal modules
-  (→ a future `BaseStealer`). Sequence deliberately: `BaseStealer` **before** #2, so RDP-steal's
-  remote transport lands as one adapter method, and #6's deferred atomic per-file write +
-  inode-keyed visited-set land once instead of six times.
+  357 passing.
+- **2026-08-14 — all six connectors converted (`98780d4`).** SMB, Telnet, RDP and SQL joined SSH and
+  FTP: **−528 net lines**, and the scaffolding exists exactly once. Telnet and RDP were plain
+  `attempt() -> bool` adapters; the other two needed the base to grow two hooks, both defaulting to
+  existing behaviour — `result_rows(outcome, …)` (SMB writes one row per readable share, 7 columns;
+  SQL one per database, 5 columns, `QUEUE_HAS_MAC=False`) and `after_queue(…)` (only SMB, for the
+  `smbclient -L` fallback). **The subtle part, and the thing not to "simplify" later:** `attempt()`
+  is now truthy-not-`True`, and the two protocols disagree about the empty list. For SMB no readable
+  share is no win, so `[]` is correctly falsy; for SQL the login *is* the win — the pre-#12 worker
+  recorded the cracked credential with zero databases visible — so it returns `databases or True`.
+  Unifying them silently drops a valid credential. Both directions are pinned by tests. Two latent
+  bugs fixed in passing, both in the SMB fallback: it updated a `Progress` that had already exited
+  its context, and it never checked `orchestrator_should_exit`. Side effect: Telnet/SMB/RDP/SQL never
+  called `settle_for_display`, so their status was unreadable on the panel — they inherit it now.
+  363 passing.
+- **Still copy-paste:** all six steal modules (→ a future `BaseStealer`). Sequence deliberately:
+  `BaseStealer` **before** #2, so RDP-steal's remote transport lands as one adapter method, and #6's
+  deferred atomic per-file write + inode-keyed visited-set land once instead of six times.
 
 ### 13. 🟡 PARTIAL — Harden the web surface for the roaming reality it now has
 - **Evidence:** the web UI is fully unauthenticated on `0.0.0.0:8000`, serving secrets

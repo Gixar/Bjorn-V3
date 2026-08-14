@@ -13,6 +13,20 @@
   unread. *(Linting locally on a dev box without the deps installed raises three `E0401`s — PIL,
   starlette, rich. Those are environment, not code: CI installs them via `requirements-ci.txt`.)*
 
+### Added
+- **Two AST guards on what an action's `execute()` may return** (`tests/test_action_outcomes.py`,
+  #5). Both discover their targets from `actions/*.py` instead of naming modules, so a new action
+  is covered the day it lands, and neither imports the modules — pure `ast`, so the hardware and
+  starlette import walls do not apply. **(a)** Every string returned must be in the vocabulary
+  `action_outcome._code_from` actually recognises (derived from `OutcomeCode` + `_ALIASES`, not
+  restated). Anything else falls through to `FAILED`, which is in `should_stamp_failure` — so a
+  typo like `'sucess'` makes a *working* action write `failed_<timestamp>` into netkb and enter
+  retry backoff, with nothing logged and nothing raised. **(b)** Any `execute()` that gates on a
+  `*_enabled` or `*_interval` setting must have a `'skipped'` return — the `WiFiScan: success=4`
+  bug generalised off the hardcoded four-module list in `test_standalone_actions.py`. Both were
+  verified to fail on a planted break, not merely to pass on clean code; that is the #14 lesson,
+  where a gate that could not fail sat green for weeks.
+
 ### Fixed
 - **The first `/get_logs` after every boot returned an error instead of the log console.**
   `serve_logs` spawned `sudo tail -f <logs>/* > temp_log.txt` and then opened that path in the

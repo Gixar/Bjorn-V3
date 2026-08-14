@@ -491,10 +491,21 @@ failed polls a day** with nothing on screen.
 
 **Missing, three pieces — start with the cheapest:**
 
-1. **A lint rejecting an unconditional `return 'success'`.** `ble_scan`, `http_fingerprint`,
-   `snmp_enum` and `nmap_vuln_scanner` still do it. Cheap once §1 A confirms the gate can
-   actually fail — an AST check in `tests/` is the same shape as the existing
-   `test_every_connect_path_carries_a_timeout` guard, the proven pattern here.
+1. ~~**A lint rejecting an unconditional `return 'success'`.**~~ ✅ **done 2026-08-14**
+   (`tests/test_action_outcomes.py`), but **not as specified — the specified rule was wrong**, and
+   the audit's list of offenders was stale. Reading the modules first: `web_template_scan` returns
+   success unconditionally *on purpose* (*"scan completed; don't hammer the host every cycle"*),
+   and for a recon action "ran, found nothing" is a success — marking it failed puts a healthy
+   host into retry backoff. Of the four named, only `http_fingerprint` lacks a `'skipped'` path,
+   and it guards its success on having rows. A literal lint would have been suppressed on day one.
+   What shipped instead are two AST guards over `actions/*.py`, both discovering their targets
+   rather than naming modules, so a new action is covered the day it lands:
+   **(a)** every string an `execute()` returns must be in the vocabulary `_code_from` actually
+   recognises — anything else silently becomes `FAILED`, stamps `failed_<timestamp>` and enters
+   backoff, so a typo makes a *working* action report failure; **(b)** any `execute()` that gates
+   on a `*_enabled`/`*_interval` setting must have a `'skipped'` return — the `WiFiScan: success=4`
+   bug generalised off its hardcoded four-module list. Both were verified to **fail** on a planted
+   break, not just pass on clean code — the #14 lesson.
 2. **`_last_error` on the web panel.** The poller records it; nothing surfaces it. One field in
    the stats snapshot and one line in the bettercap panel.
 3. **Per-action side-effect verification.** The real work. Modules still self-report: success

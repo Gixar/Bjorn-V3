@@ -301,6 +301,10 @@ install_dependencies() {
         "snmp"
         "aircrack-ng"  # airodump-ng, for the opt-in Wi-Fi AP recon (needs a monitor-mode radio)
         "iw"           # monitor-mode switching + interface capability probing
+        # hcxpcapngtool: wpasec_import's completeness gate converts each capture to hc22000 and
+        # treats a non-empty result as a real EAPOL/PMKID. Without it the upload half logs a skip
+        # and no-ops -- the handshake->crack loop stays open on a device that looks fully installed.
+        "hcxtools"
         "libopenblas-dev"
         "bluez-tools"
         "bluez"

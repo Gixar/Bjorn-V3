@@ -16,14 +16,40 @@ jobs:
           python-version: "3.11"   # matches the target Raspberry Pi OS (Bookworm) Python
 
       - name: Install test tooling
-        # Note: we do NOT `pip install -r requirements.txt` yet. The hardware pins
-        # (gpiozero/lgpio/spidev) and heavy stack aren't meaningful on a bare runner and
-        # aren't Pi-verified until PRD §9 step 2 (dependency refresh). The tests are written
-        # to avoid the hardware/heavy-import chain, so CI stays green on tooling alone.
-        run: pip install pytest pylint
+        # Tests run against tests/_stubs.py, which overrides sys.modules regardless of what is
+        # installed — so the hardware/heavy stack is neither needed nor meaningful on a bare runner.
+        # The lint job below is where the installable deps get exercised.
+        run: pip install pytest
 
       - name: Run tests
         run: pytest tests/ -v
 
-      - name: Lint (errors only, dependency-light modules)
-        run: pylint --rcfile=.pylintrc --errors-only retry_policy.py config_validation.py scripts/ tests/
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install pylint + the installable requirements
+        # A full `pip install -r requirements.txt` cannot pass here: gpiozero/lgpio/spidev are
+        # Pi-only. Install everything else so the manifest is actually exercised (a yanked/typo'd
+        # pin fails the build) and pylint gets real inference for fastapi/paramiko/sqlalchemy/etc.
+        # The three Pi pins are in .pylintrc ignored-modules so --errors-only won't flag them.
+        run: |
+          pip install pylint
+          grep -vE '^\s*(gpiozero|lgpio|spidev)\b' requirements.txt > requirements-ci.txt
+          pip install -r requirements-ci.txt
+
+      - name: Lint (errors only) — core modules + the original four
+        # The core was previously unlinted, which is exactly where an undefined name or bad call
+        # would hide (#14). --errors-only + the .pylintrc disable list is the project's chosen
+        # signal/noise balance.
+        run: >
+          pylint --rcfile=.pylintrc --errors-only
+          retry_policy.py config_validation.py
+          shared.py utils.py orchestrator.py base_connector.py telegram_client.py
+          scripts/ tests/

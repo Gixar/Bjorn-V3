@@ -535,10 +535,13 @@ class SharedData:
     def initialize_csv(self):
         """Create the network knowledge base CSV with headers if it does not exist yet.
 
-        No log line here: this runs on every orchestrator cycle, and announcing "Initializing the
-        CSV with headers" before even checking wrote two INFO lines per cycle whose first one was
-        false on all but the very first run. The two branches below each say what actually
-        happened."""
+        Silent in the steady state, by design. This runs on every orchestrator cycle, and it used
+        to announce "Initializing the CSV with headers" before even checking, then "already exists"
+        — two lines per cycle, the first one false on every run but the first. Creating the file is
+        an event and still logs; finding it already there is the normal case and logs nothing.
+        (Demoting the second line to DEBUG was not enough: this module's logger is constructed at
+        level=DEBUG, so DEBUG is not a quiet channel here — it still wrote 51 lines in a 5-minute
+        run. "Log it at DEBUG" only silences a module whose logger is above DEBUG.)"""
         try:
             if not os.path.exists(self.netkbfile):
                 try:
@@ -566,10 +569,7 @@ class SharedData:
                     logger.error(f"Error writing to netkbfile: {e}")
                 except Exception as e:
                     logger.error(f"Unexpected error while writing to netkbfile: {e}")
-            else:
-                # DEBUG: the steady state on every cycle after the first boot. At INFO it was pure
-                # noise competing with the lines that mean something.
-                logger.debug(f"Network knowledge base CSV file already exists at {self.netkbfile}")
+            # No else: the file already existing is the steady state, not news.
         except Exception as e:
             logger.error(f"Unexpected error in initialize_csv: {e}")
 

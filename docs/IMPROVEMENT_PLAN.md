@@ -108,8 +108,68 @@ field promise). Suite: **356 passing** (+24). Evaluation verdict: high quality, 
 correct paths; integrated as-is with one add — `.gitignore` now excludes the runtime telemetry file.
 On-Pi window still needed to tune values/durations against a real target.
 
-Next: browser-verify #11; run the on-Pi Smart-Planner observation window (`planner_report.py`,
-`planner_benchmark.py`); then the #13 auth/bind decision, #11 pandas trim, and #3 (wpa-sec upload).
+**2026-08-12 — #11 pandas trim done (`2579fc3`).** The last three modules that still lazy-imported
+pandas are on stdlib `csv`: `actions/scanning.py` (LiveStatusUpdater → `csv.DictReader`),
+`actions/nmap_vuln_scanner.py` (header-only create, append + `(IP,MAC)` keep-last dedupe under
+`_summary_lock`, pure-Python vuln-token union) and `actions/steal_data_sql.py` (`text()` +
+`engine.connect()` — raw strings raise on SQLAlchemy 2.0 — streaming rows through `csv.writer`).
+**pandas is now imported nowhere in the codebase.** Two traps found in the port and fixed before
+merge: `_is_alive` had to tolerate the string `"1"` under `DictReader` (else every host reads dead),
+and the credential loop variable `row` shadowed the `execute()` `row` parameter — every SQL steal
+would have returned `failed`. 356 passing. **Still open: `requirements.txt` keeps the `pandas==2.2.3`
+pin** — dead weight now, and the actual 50–80 MB win on the Pi.
+
+**2026-08-13 — Tier 1 #3 done (`e27bc0a`): the handshake → crack loop is closed.** `wpasec_import.py`
+uploads *then* downloads. A completeness gate runs `hcxpcapngtool -o out.hc22000 <pcap>` and treats a
+non-empty result as a real EAPOL/PMKID capture (missing tool → log + skip, never a crash); complete
+captures are deduped **by BSSID** so one AP uploads once; the multipart POST goes to `?api` with
+`Cookie: key=`, and the index entry is stamped `uploaded` atomically. `bettercap_pwn.build_index`
+carries `uploaded`/`complete`/`hc22000` forward across a re-index. `_urlopen`/`_which`/`_spawn` are
+injectable, so the whole path is testable offline. Two regressions the author's rewrite had dropped
+from the download half were restored on integration: `autoconnect-priority=-10` (a cracked network
+must never outrank Bjorn's own uplink — now enforced by `test_nmconnection_contents`) and the
+deterministic `wpasec-<ssid>` profile name. **Needs `hcxtools` on the Pi** (`apt-get install -y
+hcxtools`) or the upload half no-ops; not yet live-verified against wpa-sec.
+
+**2026-08-13 — #12 foundation landed (`15f7811`, `84d048b`).** New `base_connector.py` holds the
+shared scaffolding once — `__init__` / `load_scan_file` / `worker` (with `task_done` in a `finally`) /
+`run_bruteforce` (mac resolved *before* the queue fill, so #1 can't recur) / `save` / `dedupe`, plus a
+thin `BaseBruteforce.execute`. A subclass sets `PORT`/`HEADER`/`OUTFILE_ATTR` and implements
+`attempt(ip, user, pw) -> bool`. **SSH and FTP are converted** (FTP went 187 → ~35 lines, −170).
+The load-bearing part for the remaining four: the **source-parsing verifiers**
+(`bjorn_verify.py` Section 9, `test_bjorn_verify.py`, `test_connector_netkb_reuse.py`) used to parse
+each connector file for `run_bruteforce`/`worker`/row-passing, which now live in the base — they were
+taught to **follow delegation**, so a connector containing `from base_connector import` is verified
+against `base_connector.py` instead. Converting SMB/Telnet/RDP/SQL is therefore adapter-only, no
+verifier edits. 357 passing.
+
+**2026-08-13 — #14 CI shipped (`e60d436`), lint triage still pending.** `.github/workflows/ci.yml` is
+split into `test` (pytest on `tests/_stubs.py`, unchanged, guaranteed green) and `lint`. `lint` now
+installs the installable subset — `grep -vE '^\s*(gpiozero|lgpio|spidev)\b' requirements.txt >
+requirements-ci.txt`, since those three are Pi-only and can't install on x86 — and runs
+`pylint --errors-only` over the original four paths **plus the never-linted core**
+(`shared.py utils.py orchestrator.py base_connector.py telegram_client.py`); `.pylintrc` gained
+`ignored-modules=gpiozero,lgpio,spidev`. The "missing tests" #14 asked for already existed (the
+`should_exit=False` brute-force test, the connect-timeout AST guard, the traversal/zip-slip tests) and
+CI already runs them. **The first Actions run *is* the triage** — any E-finding it raises in the core
+is either a real bug to fix or needs a narrow `# pylint: disable=` with a reason. Deferred by choice:
+the arm-emulation job and the version matrix.
+
+**2026-08-13 — the idle loop was pinning a core (`6cca94e`), found in on-Pi logs.** On a network with
+no live hosts the planner picks the `SNMPEnum` standalone every cycle (p=1.00, t=0s, top score), and
+`process_alive_ips` returned True whenever *any* action ran — standalone included — so `run()` never
+reached its paced idle branch and spun at **~10 cycles/s**: a pinned Pi Zero core while idle,
+`orchestrator.py.log` + `shared.py.log` churning their 5 MB rotations, and the telemetry counter past
+878k. `process_alive_ips` now returns `host_action_executed`; standalones still run for their side
+effects but no longer keep the loop hot (the paced idle wait re-runs them anyway, self-throttled).
+Same commit: the two missing-status-image warnings in `shared.py` log **once per status** instead of
+once per render frame — SNMPEnum alone had written 10k+ identical lines.
+
+Next: run the CI lint triage (#14) and drop the dead `pandas` pin; browser-verify #11; the on-Pi
+Smart-Planner observation window (`planner_report.py`, `planner_benchmark.py`) plus the #8 multi-host
+benchmark and #10 refresh-cadence tuning; then finish #12 (SMB/Telnet/RDP/SQL adapters, then
+`BaseStealer` — #2's RDP transport lands inside it), close out #5's lint + side-effect verification,
+and make the #13 auth/bind call.
 
 ---
 
@@ -152,7 +212,7 @@ Next: browser-verify #11; run the on-Pi Smart-Planner observation window (`plann
   guard that stops it copying the Pi's own files. True remote RDP steal is still deferred to a
   transport redesign (documented in the module: `/drive` + `+auth-only` can't pull remote files).
 
-### 3. Close the handshake → crack loop — captures are collected but never cracked
+### 3. ✅ DONE — Close the handshake → crack loop (captures were collected but never cracked)
 - **Evidence:** `bettercap_pwn.py` captures per-AP PCAPs, indexes them, and awards coins
   (`:249-256`), but nothing ever uploads them. `wpasec_import.py` is **download-only**
   (`WPASEC_URL …dl=1`, `:30`). The offline pocket-carry feature — the reason V3 exists — produces
@@ -161,6 +221,16 @@ Next: browser-verify #11; run the on-Pi Smart-Planner observation window (`plann
   (`dl=0` submit), and dedupe by **BSSID + handshake completeness**, not filename (today an
   incomplete capture counts as "owned" and inflates coins).
 - **Payoff:** the capture → crack → `WpaSecImport` → auto-join chain finally completes.
+- **Status:** ✅ shipped (`e27bc0a`). Upload-then-download in `wpasec_import.py`: a completeness gate
+  (`hcxpcapngtool -o out.hc22000 <pcap>`, non-empty = real EAPOL/PMKID), **BSSID dedupe** so one AP
+  uploads once, multipart POST to `?api` with `Cookie: key=`, and an atomic `uploaded` stamp on the
+  index entry that `bettercap_pwn.build_index` now carries across a re-index. `_urlopen`/`_which`/
+  `_spawn` are injectable, so it tests offline; new
+  `test_upload_is_one_per_bssid_and_skips_incomplete`. On integration, two behaviours the rewrite had
+  dropped from the download half were restored: `autoconnect-priority=-10` (a cracked net must never
+  outrank Bjorn's uplink — locked in by `test_nmconnection_contents`) and the deterministic
+  `wpasec-<ssid>` profile name. **Open:** needs `hcxtools` on the Pi (`apt-get install -y hcxtools`)
+  or the upload half silently no-ops; not yet live-verified against wpa-sec.
 
 ---
 
@@ -331,16 +401,19 @@ Next: browser-verify #11; run the on-Pi Smart-Planner observation window (`plann
   token moves** (in `applySnapshot`), and the blind `setInterval` pollers (2s image, 1.5s logs) are
   removed — so the UI is event-driven in both live and fallback modes, with far fewer Pi requests when
   nothing changes. Verified by design/trace only (no JS test harness; the server helper sits behind the
-  starlette import wall) — **browser-tested, not unit-tested.** **Deferred:** the **dep re-pin** is
-  Pi-only (`pip freeze` on the target Python, not this dev box); the **pandas removal** in
-  `nmap_vuln_scanner` / `scanning` / `steal_data_sql` (all lazy-imported already) is a separate refactor.
+  starlette import wall) — **browser-tested, not unit-tested**, and that browser check is still owed.
+  The **pandas removal** is ✅ done (`2579fc3`): `nmap_vuln_scanner` / `scanning` / `steal_data_sql` are
+  on stdlib `csv`, and pandas is imported nowhere in the codebase. **Deferred:** dropping the now-dead
+  `pandas==2.2.3` line from `requirements.txt` (that, not the code change, is where the 50–80 MB
+  on-device win actually lands), and the **dep re-pin**, which is Pi-only (`pip freeze` on the target
+  Python, not this dev box).
 - **Payoff:** fewer Pi requests, a truly live UI; boot/memory wins wait on the dep+pandas work.
 
 ---
 
 ## Tier 4 — Bold structural + capability bets
 
-### 12. Collapse the 12 near-identical modules into a base + adapters
+### 12. 🟡 PARTIAL — Collapse the 12 near-identical modules into a base + adapters
 - **Evidence:** the 6 connectors (1,340 LOC) and 6 steal modules (1,250 LOC) are **~85%
   copy-paste** — identical `__init__`/`worker`/`run_bruteforce`/`save_results`/`execute`
   scaffolding; only `<proto>_connect`/`find`/`steal` differ. This duplication *is* the root cause of
@@ -350,6 +423,19 @@ Next: browser-verify #11; run the on-Pi Smart-Planner observation window (`plann
   protocol becomes a ~40-line adapter.
 - **Payoff:** deletes **~1,500 lines**, and the whole hang/latch/divergence bug class becomes
   *structurally impossible* — fix once, every protocol inherits it.
+- **Status:** 🟡 the connector half is underway. `base_connector.py` (repo root) now owns
+  `__init__`/`load_scan_file`/`worker` (`task_done` in a `finally`)/`run_bruteforce` (mac resolved
+  before the queue fill, so #1 cannot recur)/`save`/`dedupe` + a thin `BaseBruteforce.execute`; a
+  subclass sets `PORT`/`HEADER`/`OUTFILE_ATTR` and implements `attempt(ip, user, pw) -> bool`.
+  **SSH (`15f7811`) and FTP (`84d048b`) are converted** — FTP dropped 187 → ~35 lines. The `b_*`
+  globals are unchanged, so the orchestrator needed no edit. Key enabler for the rest: the
+  source-parsing verifiers (`bjorn_verify.py` Section 9, `test_bjorn_verify.py`,
+  `test_connector_netkb_reuse.py`) were taught to **follow delegation** — a connector importing from
+  `base_connector` is checked against the base file — so the next four conversions are adapter-only.
+  357 passing. **Still copy-paste:** SMB, Telnet, RDP and SQL connectors, plus all six steal modules
+  (→ a future `BaseStealer`). Sequence deliberately: `BaseStealer` **before** #2, so RDP-steal's
+  remote transport lands as one adapter method, and #6's deferred atomic per-file write +
+  inode-keyed visited-set land once instead of six times.
 
 ### 13. 🟡 PARTIAL — Harden the web surface for the roaming reality it now has
 - **Evidence:** the web UI is fully unauthenticated on `0.0.0.0:8000`, serving secrets
@@ -375,7 +461,7 @@ Next: browser-verify #11; run the on-Pi Smart-Planner observation window (`plann
 - **Payoff:** the two remotely-exploitable file holes are shut the moment it roams; the auth surface
   remains a deliberate follow-up.
 
-### 14. Real CI + the tests that would have caught all of the above
+### 14. 🟡 PARTIAL — Real CI + the tests that would have caught all of the above
 - **Evidence:** `ci.yml` runs a single Python 3.11 on `ubuntu-latest`, **skips
   `requirements.txt`**, and runs `pylint --errors-only` on 4 paths only (utils/shared/telegram
   unlinted). The RDP death, the Telnet drift, and the hang class are all invisible to it.
@@ -383,6 +469,35 @@ Next: browser-verify #11; run the on-Pi Smart-Planner observation window (`plann
   — a `run_bruteforce` test with `orchestrator_should_exit=False`, an assertion that every connect
   path carries a timeout, and traversal/zip-slip tests; add an arm-emulation job for the Pi target.
 - **Payoff:** these bug classes can't regress silently again — the whole point of the 313 tests.
+- **Status:** 🟡 the workflow shipped (`e60d436`); the triage it exists to produce hasn't run yet.
+  `ci.yml` is split into `test` (pytest against `tests/_stubs.py` — unchanged, guaranteed green) and
+  `lint`. `lint` installs the installable subset (`grep -vE '^\s*(gpiozero|lgpio|spidev)\b'
+  requirements.txt > requirements-ci.txt` — a full install can't pass on x86, those three are Pi-only)
+  and runs `pylint --errors-only` over the original four paths **plus the core that was never linted**:
+  `shared.py utils.py orchestrator.py base_connector.py telegram_client.py`. `.pylintrc` gained
+  `ignored-modules=gpiozero,lgpio,spidev`. The tests #14 named already exist and CI already runs them
+  (`run_bruteforce` with `orchestrator_should_exit=False`, the connect-timeout AST guard,
+  traversal/zip-slip).
+- **Triage run 2026-08-14 — the code was clean, the gate was not.** Ran locally:
+  `pylint --rcfile=.pylintrc --errors-only retry_policy.py config_validation.py shared.py utils.py
+  orchestrator.py base_connector.py telegram_client.py scripts/ tests/`. **Zero real E-findings in the
+  never-linted core** — the answer #14 wanted. But three defects in the gate itself, each of which
+  alone would have made the first Actions run worthless:
+  1. **`fail-on=E` was missing, so the job could never fail.** `fail-under=8` decides pylint's exit
+     code, and with `--errors-only` the score stays above 8 — pylint printed 35 errors and **exited
+     0**. A real undefined name in the core would have been reported and the job would still have gone
+     green. The gate was decorative; this is the same "a status line that cannot fail tells you
+     nothing" class as `WiFiScan: success=4` and `release()`.
+  2. **`.pylintrc` carried `suggestion-mode=yes`**, an option pylint 4 removed. An unknown key is
+     `E0015`, which `--errors-only` counts — a stale line of default-config boilerplate was enough to
+     fail the build on its own. Removed, and CI now pins `pylint~=4.0` so an upstream release can't
+     redden the build with no code change.
+  3. **~40 bogus `E0401 import-error`s across `tests/`**, because the test files reach `shared` /
+     `orchestrator` / `_stubs` / `bjorn_verify` through a runtime `sys.path.insert` that pylint does
+     not execute. Fixed with an `init-hook` in `.pylintrc` that puts the same three entries
+     (`.`, `tests`, `scripts`) on the path. Run pylint from the repo root, as CI does.
+  With all three fixed the command exits **0** and errors now fail the build. Deferred by choice: the
+  arm-emulation job, the Python version matrix, and the dep re-pin (Pi-only).
 
 ### 15. The bold bet — on-device, out-of-band LLM triage + audit report
 - **Evidence/context:** the PRD's entire **P-AI** section is scoped but deferred, and half of it

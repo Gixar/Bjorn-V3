@@ -36,7 +36,11 @@ extension-pkg-whitelist=
 # Return non-zero exit code if any of these messages/categories are detected,
 # even if score is above --fail-under value. Syntax same as enable. Messages
 # specified are enabled, while categories only check already-enabled messages.
-fail-on=
+# An error must fail the build. Without this, `fail-under=8` below wins: pylint printed 35
+# import-errors and still exited 0, so the #14 lint gate was decorative — it could report a real
+# undefined name in the core and the job would stay green, which is the failure mode #14 existed
+# to remove.
+fail-on=E
 
 # Specify a score threshold under which the program will exit with error.
 fail-under=8
@@ -70,7 +74,13 @@ ignored-modules=gpiozero,lgpio,spidev
 
 # Python code to execute, usually for sys.path manipulation such as
 # pygtk.require().
-#init-hook=
+# The same three entries the code puts on sys.path at runtime: every module here is top-level
+# (`import shared`, `import orchestrator`), the test files reach `_stubs` via a
+# `sys.path.insert(tests_dir)`, and the script tests import `bjorn_verify`/`planner_report` the same
+# way. pylint does not execute those inserts, so without this it raises ~40 bogus import-errors —
+# which, once `fail-on=E` below makes errors actually fail, would hold the gate red forever.
+# Relative to the working directory: run pylint from the repo root, as CI and the README do.
+init-hook='import sys; sys.path[:0] = [".", "tests", "scripts"]'
 
 # Use multiple processes to speed up Pylint. Specifying 0 will auto-detect the
 # number of processors available to use, and will cap the count on Windows to
@@ -106,9 +116,9 @@ recursive=no
 # source root.
 source-roots=
 
-# When enabled, pylint would attempt to guess common misconfiguration and emit
-# user-friendly hints instead of false-positive error messages.
-suggestion-mode=yes
+# NB: `suggestion-mode` used to sit here. pylint 4 dropped the option and reports an unknown key
+# as E0015, which --errors-only counts — so a stale default-config line was enough to fail the
+# build on its own. CI installs pylint unpinned, so anything removed upstream breaks the gate here.
 
 # Allow loading of arbitrary C extensions. Extensions are imported into the
 # active Python interpreter and may run arbitrary code.

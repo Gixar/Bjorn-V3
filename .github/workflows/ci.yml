@@ -39,8 +39,12 @@ jobs:
         # Pi-only. Install everything else so the manifest is actually exercised (a yanked/typo'd
         # pin fails the build) and pylint gets real inference for fastapi/paramiko/sqlalchemy/etc.
         # The three Pi pins are in .pylintrc ignored-modules so --errors-only won't flag them.
+        # pylint is pinned to a major: unpinned, an upstream release can turn this job red with no
+        # code change at all. That is not hypothetical — pylint 4 dropped the `suggestion-mode`
+        # option that .pylintrc still carried, and an unknown key is E0015, which --errors-only
+        # counts. Bump the major deliberately, so new checks arrive in a commit that can be read.
         run: |
-          pip install pylint
+          pip install 'pylint~=4.0'
           grep -vE '^\s*(gpiozero|lgpio|spidev)\b' requirements.txt > requirements-ci.txt
           pip install -r requirements-ci.txt
 

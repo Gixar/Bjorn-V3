@@ -577,7 +577,17 @@ class WebUtils:
         try:
             log_file_path = self.shared_data.webconsolelog
             if not os.path.exists(log_file_path):
-                subprocess.Popen(f"sudo tail -f /home/bjorn/Bjorn/data/logs/* > {log_file_path}", shell=True)
+                # Create the redirect target *before* spawning. Popen returns immediately, so the
+                # shell had not made the file yet and the read below raced it to ENOENT — the
+                # first /get_logs after every boot answered an error body (the file is deleted at
+                # startup by shared.delete_webconsolelog). Creating it here also makes the
+                # exists() check true from now on, so exactly one tail is ever spawned.
+                open(log_file_path, 'a').close()
+                # *.log, not *: temp_log.txt lives in this same directory, and now that it exists
+                # before the glob is expanded, tailing it into itself would loop its own output
+                # back in forever. Module logs are '<module>.py.log', so *.log gets all of them.
+                sources = os.path.join(self.shared_data.logsdir, '*.log')
+                subprocess.Popen(f"sudo tail -f {sources} > {log_file_path}", shell=True)
 
             with open(log_file_path, 'r') as log_file:
                 log_lines = log_file.readlines()

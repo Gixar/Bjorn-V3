@@ -14,6 +14,19 @@
   starlette, rich. Those are environment, not code: CI installs them via `requirements-ci.txt`.)*
 
 ### Fixed
+- **The first `/get_logs` after every boot returned an error instead of the log console.**
+  `serve_logs` spawned `sudo tail -f <logs>/* > temp_log.txt` and then opened that path in the
+  same call; `Popen` returns before the shell has created the redirect target, so the read lost
+  the race and answered an ENOENT error body. The second request worked, which is why it survived
+  this long — the console looked merely slow to start rather than broken. Once per boot, since
+  `delete_webconsolelog()` clears the file at startup. The target is now created before the spawn,
+  so the read finds an empty file and exactly one `tail` is ever started. Two things fell out of
+  the same edit: the source glob narrowed from `*` to `*.log`, because `temp_log.txt` sits in that
+  same directory and — now that it exists before the glob expands — `tail` would have followed its
+  own output back into itself forever; and the hardcoded `/home/bjorn/Bjorn/` prefix became
+  `shared_data.logsdir`, which had left the console permanently empty on any install at a
+  different path. Found while confirming #11's change tokens against a live device, where
+  `log_version` reads `0` until something first hits `/get_logs`.
 - **`install_bjorn.sh` duplicated config lines on every re-run.** Six appends to
   `/etc/security/limits.conf`, `/etc/systemd/{system,user}.conf`, `/etc/sysctl.conf` and
   `/etc/pam.d/common-session{,-noninteractive}` ran unconditionally, so re-running the installer

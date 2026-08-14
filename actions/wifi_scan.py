@@ -85,8 +85,13 @@ class WiFiScan:
             configured = (getattr(self.shared_data, "wifi_scan_iface", "") or "").strip()
             iface = offline_mode.scan_iface(self.shared_data)
             if iface and iface != configured:
-                logger.info(f"Using {iface} for this capture (configured: {configured or 'none'}, "
-                            f"no uplink to protect).")
+                # State what was picked, not why. The old wording asserted "no uplink to protect",
+                # which is only true offline — on 2026-08-14 it printed that while wlan0 was
+                # actively carrying the default route. pick_scan_iface has two reasons to land
+                # here (nothing configured, or offline fallback) and the caller can't tell them
+                # apart, so claiming one of them is a coin flip written as a fact.
+                logger.info(f"Using {iface} for this capture "
+                            f"(configured: {configured or 'none'}).")
             if not iface:
                 # Two different situations, and they must not log alike now that wifi_scan_enabled
                 # is on by default. Nothing configured and nothing spare = missing hardware, the

@@ -533,8 +533,12 @@ class SharedData:
 
 
     def initialize_csv(self):
-        """Initialize the network knowledge base CSV file with headers."""
-        logger.info("Initializing the network knowledge base CSV file with headers")
+        """Create the network knowledge base CSV with headers if it does not exist yet.
+
+        No log line here: this runs on every orchestrator cycle, and announcing "Initializing the
+        CSV with headers" before even checking wrote two INFO lines per cycle whose first one was
+        false on all but the very first run. The two branches below each say what actually
+        happened."""
         try:
             if not os.path.exists(self.netkbfile):
                 try:
@@ -563,7 +567,9 @@ class SharedData:
                 except Exception as e:
                     logger.error(f"Unexpected error while writing to netkbfile: {e}")
             else:
-                logger.info(f"Network knowledge base CSV file already exists at {self.netkbfile}")
+                # DEBUG: the steady state on every cycle after the first boot. At INFO it was pure
+                # noise competing with the lines that mean something.
+                logger.debug(f"Network knowledge base CSV file already exists at {self.netkbfile}")
         except Exception as e:
             logger.error(f"Unexpected error in initialize_csv: {e}")
 
@@ -684,7 +690,12 @@ class SharedData:
                             image_path = os.path.join(indiv_status_path, f'{b_class}.bmp')
                             image = self.load_image(image_path)
                             setattr(self, b_class, image)
-                            logger.info(f"Loaded image for {b_class} from {image_path}")
+                            # Only claim a load that happened. load_image() returns None (after
+                            # its own "does not exist" warning) for the seven actions that ship
+                            # without artwork, and this line used to announce success straight
+                            # after that warning — a contradictory pair in every boot log.
+                            if image is not None:
+                                logger.info(f"Loaded image for {b_class} from {image_path}")
             except Exception as e:
                 logger.error(f"Error loading images from actions file: {e}")
 

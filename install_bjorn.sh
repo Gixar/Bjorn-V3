@@ -712,6 +712,14 @@ After=local-fs.target
 
 [Service]
 ExecStartPre=/home/bjorn/Bjorn/kill_port_8000.sh
+# Clear the previous run's heartbeat before the watchdog below can read it. Without this, a crash
+# leaves a stale /run/bjorn_heartbeat behind, and on the next start the watchdog sees a file older
+# than its 180s window and restarts the service *before* the main loop has written a fresh one —
+# forever, until start-limit-hit. A crash-loop the service cannot exit on its own, observed
+# 2026-08-14 after a bad dependency upgrade: the app was already fixed and healthy, and the
+# watchdog was the only thing still killing it. /run is tmpfs, so only a reboot cleared it.
+# Absent file = no check (the watchdog's own -f guard), which is correct during startup.
+ExecStartPre=/bin/rm -f /run/bjorn_heartbeat
 ExecStart=/usr/bin/python3 /home/bjorn/Bjorn/Bjorn.py
 WorkingDirectory=/home/bjorn/Bjorn
 StandardOutput=inherit

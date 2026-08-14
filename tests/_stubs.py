@@ -1,6 +1,6 @@
 """Inject fake heavy/hardware modules into sys.modules so import-coupled modules
 (e.g. actions/ssh_connector.py) can be imported and their pure logic unit-tested on a
-box without pandas / paramiko / rich / PIL installed. Import-time only — call install()
+box without paramiko / rich / PIL installed. Import-time only — call install()
 before importing the module under test.
 """
 import socket
@@ -18,12 +18,6 @@ class _FakeLogger:
 
 def install():
     """Idempotently install stubs. Returns the fake paramiko module so tests can drive it."""
-    if "pandas" not in sys.modules:
-        pandas = types.ModuleType("pandas")
-        pandas.read_csv = lambda *a, **k: None
-        pandas.DataFrame = lambda *a, **k: None
-        sys.modules["pandas"] = pandas
-
     if "rich" not in sys.modules:
         rich = types.ModuleType("rich")
         console = types.ModuleType("rich.console")

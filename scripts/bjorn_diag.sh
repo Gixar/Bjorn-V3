@@ -593,7 +593,7 @@ import importlib
 # getmac, python-nmap -> nmap.
 DEPS = [("fastapi", "fastapi"), ("uvicorn", "uvicorn"), ("paramiko", "paramiko"),
         ("pysmb", "smb"), ("smbprotocol", "smbprotocol"), ("pymysql", "pymysql"),
-        ("Pillow", "PIL"), ("numpy", "numpy"), ("pandas", "pandas"), ("rich", "rich"),
+        ("Pillow", "PIL"), ("numpy", "numpy"), ("rich", "rich"),
         ("netifaces", "netifaces"), ("get-mac", "getmac"), ("python-nmap", "nmap"),
         ("sqlalchemy", "sqlalchemy"), ("gpiozero", "gpiozero"), ("lgpio", "lgpio")]
 for pip_name, import_name in DEPS:

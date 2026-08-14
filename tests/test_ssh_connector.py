@@ -1,7 +1,7 @@
 """Test one connector path with a mocked service (PRD §9 step 5 / P1-4): SSHConnector.attempt
 returns True on a successful paramiko connect and False on auth/socket/SSH errors.
 
-ssh_connector imports pandas/paramiko/rich/shared(->PIL) at module load, so _stubs.install()
+ssh_connector imports paramiko/rich/shared(->PIL) at module load, so _stubs.install()
 fakes those before import. Runs under pytest and as `python tests/test_ssh_connector.py`.
 """
 import socket

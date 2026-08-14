@@ -116,8 +116,11 @@ pandas are on stdlib `csv`: `actions/scanning.py` (LiveStatusUpdater → `csv.Di
 **pandas is now imported nowhere in the codebase.** Two traps found in the port and fixed before
 merge: `_is_alive` had to tolerate the string `"1"` under `DictReader` (else every host reads dead),
 and the credential loop variable `row` shadowed the `execute()` `row` parameter — every SQL steal
-would have returned `failed`. 356 passing. **Still open: `requirements.txt` keeps the `pandas==2.2.3`
-pin** — dead weight now, and the actual 50–80 MB win on the Pi.
+would have returned `failed`. 356 passing. **The `pandas==2.2.3` pin was dropped from
+`requirements.txt` on 2026-08-14** — that, not the code change, is where the 50–80 MB and the 2–5s
+import actually leave the device. `bjorn_diag.sh`'s dependency probe lost its pandas row in the same
+commit, or a fresh install would have reported the absent package as `NOT IMPORTABLE`. `numpy` stays:
+the Waveshare e-Paper driver needs it.
 
 **2026-08-13 — Tier 1 #3 done (`e27bc0a`): the handshake → crack loop is closed.** `wpasec_import.py`
 uploads *then* downloads. A completeness gate runs `hcxpcapngtool -o out.hc22000 <pcap>` and treats a
@@ -165,7 +168,7 @@ effects but no longer keep the loop hot (the paced idle wait re-runs them anyway
 Same commit: the two missing-status-image warnings in `shared.py` log **once per status** instead of
 once per render frame — SNMPEnum alone had written 10k+ identical lines.
 
-Next: run the CI lint triage (#14) and drop the dead `pandas` pin; browser-verify #11; the on-Pi
+Next: browser-verify #11; the on-Pi
 Smart-Planner observation window (`planner_report.py`, `planner_benchmark.py`) plus the #8 multi-host
 benchmark and #10 refresh-cadence tuning; then finish #12 (SMB/Telnet/RDP/SQL adapters, then
 `BaseStealer` — #2's RDP transport lands inside it), close out #5's lint + side-effect verification,
@@ -402,11 +405,12 @@ and make the #13 auth/bind call.
   removed — so the UI is event-driven in both live and fallback modes, with far fewer Pi requests when
   nothing changes. Verified by design/trace only (no JS test harness; the server helper sits behind the
   starlette import wall) — **browser-tested, not unit-tested**, and that browser check is still owed.
-  The **pandas removal** is ✅ done (`2579fc3`): `nmap_vuln_scanner` / `scanning` / `steal_data_sql` are
-  on stdlib `csv`, and pandas is imported nowhere in the codebase. **Deferred:** dropping the now-dead
-  `pandas==2.2.3` line from `requirements.txt` (that, not the code change, is where the 50–80 MB
-  on-device win actually lands), and the **dep re-pin**, which is Pi-only (`pip freeze` on the target
-  Python, not this dev box).
+  The **pandas removal** is ✅ done end to end: `2579fc3` put `nmap_vuln_scanner` / `scanning` /
+  `steal_data_sql` on stdlib `csv` so pandas is imported nowhere, and 2026-08-14 dropped the dead
+  `pandas==2.2.3` pin from `requirements.txt` (plus its row in `bjorn_diag.sh`'s dependency probe,
+  which would otherwise have called the absent package `NOT IMPORTABLE` on a fresh install). That
+  second half is where the 50–80 MB and the 2–5s import actually leave the device. **Deferred:** the
+  **dep re-pin**, which is Pi-only (`pip freeze` on the target Python, not this dev box).
 - **Payoff:** fewer Pi requests, a truly live UI; boot/memory wins wait on the dep+pandas work.
 
 ---

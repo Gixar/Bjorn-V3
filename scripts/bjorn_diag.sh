@@ -587,10 +587,20 @@ section "11. Python packages (key deps)"
 # ===========================================================================
 python3 - <<'PY' 2>/dev/null || warn "pip" "could not query packages"
 import importlib
+import importlib.metadata as md
 # Keyed on IMPORT name, not pip name — they differ often enough that guessing produces false
 # alarms. This list previously tried `import pysmb` (it is `smb`) and reported a working install as
 # NOT IMPORTABLE, which cost more time than the check saved. Same for Pillow -> PIL, get-mac ->
 # getmac, python-nmap -> nmap.
+#
+# Two separate questions, answered from two separate sources — do NOT collapse them:
+#   1. does it import?      -> importlib.import_module (what actually matters at runtime)
+#   2. which version?       -> importlib.metadata (the installed dist metadata, i.e. pip's answer)
+# Reading the version off the module as `__version__ or VERSION or "ok"` guessed wrong twice:
+# it reported PyMySQL as 1.4.6 when pip said 1.1.1 (an internal attribute that is not the release
+# version), and printed a bare "ok" for six packages that do have one. A version check that
+# invents a number is worse than no version check — this is the same wrong-answer class the
+# comment above is about.
 DEPS = [("fastapi", "fastapi"), ("uvicorn", "uvicorn"), ("paramiko", "paramiko"),
         ("pysmb", "smb"), ("smbprotocol", "smbprotocol"), ("pymysql", "pymysql"),
         ("Pillow", "PIL"), ("numpy", "numpy"), ("rich", "rich"),
@@ -599,10 +609,15 @@ DEPS = [("fastapi", "fastapi"), ("uvicorn", "uvicorn"), ("paramiko", "paramiko")
 for pip_name, import_name in DEPS:
     label = pip_name if pip_name == import_name else f"{pip_name} ({import_name})"
     try:
-        mod = importlib.import_module(import_name)
-        print(f"  {label:24} {getattr(mod, '__version__', getattr(mod, 'VERSION', 'ok'))}")
+        importlib.import_module(import_name)
     except Exception as e:
         print(f"  {label:24} NOT IMPORTABLE ({type(e).__name__})")
+        continue
+    try:
+        print(f"  {label:24} {md.version(pip_name)}")
+    except md.PackageNotFoundError:
+        # Imports fine but pip does not own it — the apt-installed ones (python3-gpiozero etc.).
+        print(f"  {label:24} importable (no pip metadata - apt package?)")
 PY
 
 # ===========================================================================

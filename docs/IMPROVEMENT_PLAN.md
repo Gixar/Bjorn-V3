@@ -73,12 +73,23 @@ done
 
 ✓ non-zero, and they move between reads.
 
+**✅ Passed 2026-08-14** against `192.168.1.35`. `screen_version` and `log_version` both move.
+**Gotcha that cost a false FAIL first time round:** `log_version` reads **`0` until something has
+hit `/get_logs` at least once since boot** — `data/logs/temp_log.txt` is created lazily by
+`serve_logs` and deleted at startup by `shared.py:292`, and `_asset_mtime` correctly returns 0
+for an absent file. Curl `/get_logs` once, then re-read. (That first call also always errors —
+see the new row in `BACKLOG.md`.) Steps 5 and 6 are still outstanding, so **B is not closed**.
+
 **5. `[web]`** — `http://<pi>:8000/` → **Ctrl+Shift+R** (a cached `dashboard.js` voids this) →
 DevTools → Network → filter `screen.png`.
 
-✓ idle: no repeating request · preview still updates when the panel changes · console on:
+✓ idle: no repeating `screen.png` · preview still updates when the panel changes · console on:
 `/get_logs` fires on new lines, not on a timer · restart the service: preview recovers, does not
 freeze. → **closes B**
+
+*Only `screen.png` and `/get_logs` are under test.* A repeating **`/api/stats`** every 3s is
+**correct** — it is the WebSocket-fallback poller (`dashboard.js:114`), and it feeds
+`applySnapshot`, which is itself token-gated. Reading it as a failure is the easy mistake here.
 
 **6. `[web]`** — Settings → type a comma-separated portlist → Save → reload.
 

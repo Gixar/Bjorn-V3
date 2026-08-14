@@ -168,6 +168,35 @@ effects but no longer keep the loop hot (the paced idle wait re-runs them anyway
 Same commit: the two missing-status-image warnings in `shared.py` log **once per status** instead of
 once per render frame — SNMPEnum alone had written 10k+ identical lines.
 
+**2026-08-14 — fresh install verified on hardware: 32 PASS / 0 FAIL, the first zero-FAIL sweep.**
+Clean install from `83349da` on the Pi Zero 2 W, then `bjorn_verify.py` full mode. What closed:
+
+- **The airodump "no fresh AP rows" FAIL is closed.** Two consecutive clean captures — a foreground
+  run (4 APs / 6 clients) and the sweep (9 APs / 10 clients) — each with `release() restored wlan1 —
+  type=managed` and `uplink undisturbed`. **Stage A also passed for the first time** (`busy radio is
+  a clean skip — second capture declined, no new ERROR`) instead of SKIP. Note the fix was *not*
+  code: the stderr logging added in `caff610` only makes a recurrence explainable. The stranded-radio
+  hypothesis (a release racing a capture) stands as the best explanation of the original failure.
+- **The heartbeat crash-loop has a hardware regression test.** A stale heartbeat was *deliberately
+  planted* (`touch -d '1 hour ago' /run/bjorn_heartbeat`) — the exact condition that bricked the
+  device earlier that day — and the service came up `active` with `NRestarts=0`. The deployed unit
+  also confirmed `%%s`/`%%Y` escaping, so the earlier empty `${AGE}` was a stale pre-fix unit, not a
+  live bug.
+- **The pandas removal is verified by absence, not by grep.** `pip3 uninstall pandas` on the device,
+  `import pandas` → `ModuleNotFoundError`, then Bjorn restarted `active` / `NRestarts=0`. This is the
+  first boot on a machine where pandas genuinely does not exist; any surviving lazy import in a boot
+  path would have crashed exactly the way the missing Pillow `_imagingft` did.
+- **`#122` / `#155` / `#176` / file groups / help page all flipped to PASS**, confirming they were
+  casualties of a dead web server rather than defects. `#176`'s GUI *save* path still needs one
+  manual comma edit in a browser.
+- **rustscan batch tuning:** `nmap=5 rustscan=5 at batch 0 — this batch is safe`. Still a thin
+  sample; the "re-run against a port-rich host" caveat stands.
+
+Also fixed off the back of this sweep: `hcxtools` was never provisioned, so #3's wpa-sec upload
+would have silently no-opped on a fresh install (`83349da`); and `bjorn_diag`'s dependency probe was
+inventing version numbers — it reported `pymysql 1.4.6` against a pinned 1.1.1 because it guessed
+`__version__ or VERSION or "ok"` off the module instead of reading pip's metadata (`ead892e`).
+
 Next: browser-verify #11; the on-Pi
 Smart-Planner observation window (`planner_report.py`, `planner_benchmark.py`) plus the #8 multi-host
 benchmark and #10 refresh-cadence tuning; then finish #12 (SMB/Telnet/RDP/SQL adapters, then
@@ -409,8 +438,17 @@ and make the #13 auth/bind call.
   `steal_data_sql` on stdlib `csv` so pandas is imported nowhere, and 2026-08-14 dropped the dead
   `pandas==2.2.3` pin from `requirements.txt` (plus its row in `bjorn_diag.sh`'s dependency probe,
   which would otherwise have called the absent package `NOT IMPORTABLE` on a fresh install). That
-  second half is where the 50–80 MB and the 2–5s import actually leave the device. **Deferred:** the
-  **dep re-pin**, which is Pi-only (`pip freeze` on the target Python, not this dev box).
+  second half is where the 50–80 MB and the 2–5s import actually leave the device. Verified on
+  hardware 2026-08-14: pandas uninstalled from the Pi, `import pandas` → `ModuleNotFoundError`, Bjorn
+  boots `active` with `NRestarts=0`. **Deferred:** the **dep re-pin**, which is Pi-only — and which
+  must be done **wheels-only, one package per restart** (`pip3 install --break-system-packages
+  --upgrade --only-binary=:all: <one>`). A bulk `--upgrade` of all 14 pins took the device down on
+  2026-08-14: piwheels metadata casing (`expected 'Pillow', metadata has 'pillow'`) makes pip discard
+  the prebuilt wheel and fall back to a **source build**, and with no `libfreetype6-dev` on the Pi
+  that produced a Pillow with no `_imagingft` — `ImageFont.truetype` raised `ImportError` at
+  `shared.py:641` and Bjorn crash-looped. `--only-binary=:all:` makes pip fail loudly instead.
+  There is no venv here (PEP 668 / `--break-system-packages`), so every install is system-wide and
+  shared — removing a pin never uninstalls what is already there.
 - **Payoff:** fewer Pi requests, a truly live UI; boot/memory wins wait on the dep+pandas work.
 
 ---

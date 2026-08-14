@@ -68,6 +68,13 @@ def _captured_argv(module_name, call):
             mod.subprocess.Popen = saved
         else:
             mod.Popen = saved
+    # Without this the caller's `seen["cmd"]` raises a bare KeyError, which reads as a broken test
+    # rather than what it is: the call bailed out early, so not one thing was asserted about the
+    # argv. These modules catch Exception broadly, so a missing binary or an unwritable staging dir
+    # returns None down the same path a real refusal would — indistinguishable from a pass unless
+    # it is checked here, once, for all three callers.
+    assert "cmd" in seen, (f"actions.{module_name}: returned before reaching Popen, so the "
+                           f"injection property was never checked")
     return seen
 
 
@@ -89,12 +96,15 @@ def test_smb_connector_passes_a_malicious_password_as_one_argument():
         assert f"root%{payload}" in seen["cmd"]
 
 
-def test_steal_files_rdp_passes_a_malicious_password_as_one_argument():
+def test_steal_files_rdp_passes_a_malicious_password_as_one_argument(monkeypatch):
+    # connect_rdp mkdir's its hardcoded '/mnt/shared' staging dir before it builds the command.
+    # As root on the Pi that succeeds; on a non-root CI runner it raises PermissionError, the
+    # module's broad `except Exception` swallows it, and Popen is never reached — so this test
+    # asserted nothing on Linux while passing on Windows, where '/mnt/shared' resolves to a
+    # creatable C:\mnt\shared. The staging directory is not the property under test.
+    monkeypatch.setattr("os.makedirs", lambda *a, **kw: None)
     for payload in PAYLOADS:
-        obj = None
-
         def call(m):
-            nonlocal obj
             obj = m.StealFilesRDP.__new__(m.StealFilesRDP)
             obj.shared_data = SimpleNamespace(orchestrator_should_exit=False)
             obj.rdp_connected = False

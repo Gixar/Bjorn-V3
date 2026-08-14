@@ -305,6 +305,21 @@ section ran to completion for the first time and immediately found a real defect
   `acquire`/`release` record what actually happened (the verifier now tails it automatically on a
   release failure). Prime suspect: the capture and the release raced, leaving `iw` unable to change
   the type.
+  - **2026-08-14 — not root-caused, but the reason it was *unexplainable* is fixed.** Re-reading
+    `wifi_scan.py` off the Pi, the empty log tail was structural rather than mysterious.
+    `_capture` ran airodump under `subprocess.run(capture_output=True)` and **never looked at the
+    result** — not the return code, not stderr. A healthy 30s capture always ends in
+    `TimeoutExpired` (the timeout *is* the stop signal), so a plain return means airodump quit early,
+    i.e. failed — and it had already written the reason to a pipe that was then discarded. Now:
+    stdout goes to `DEVNULL` (it is a full-screen ncurses redraw several times a second — pure Pi
+    Zero memory for nothing), stderr is kept, and an early exit logs `rc=` plus airodump's own
+    message, which is also folded into the "produced no CSV" warning. Two silent `return 'skipped'`
+    paths were closed alongside, since either could produce that same empty tail: the throttle now
+    says how long is left (DEBUG — INFO here is how the orchestrator once wrote 7217 idle lines), and
+    "no non-uplink radio free" logs at INFO when `force=True`, because the "Scan now" button and
+    `bjorn_verify` both arrive that way with someone waiting on an answer. Regression test:
+    `test_capture_surfaces_airodump_stderr_instead_of_swallowing_it`. **Still needs the Pi** — the
+    next run should finally say *why* rather than nothing.
 - Unrelated but worth noting: `http_fingerprints.csv` went from 2 rows to missing, and the planner
   now says `HTTPFingerprint@192.168.1.2 - never tried`. Consistent with the data having been
   cleared from the UI between runs, not a regression.

@@ -71,7 +71,13 @@ class WiFiScan:
                 interval = getattr(self.shared_data, "wifi_scan_interval_offline", 120) or interval
             now = time.time()
             if not force and interval and (now - self._last_scan) < interval:
-                return 'skipped'  # throttled
+                # DEBUG, not INFO: this is the common path on most cycles, and an INFO line here is
+                # exactly how the orchestrator once wrote 7217 idle lines. But it has to say
+                # *something* — a bare silent return is why a wifi_scan.py.log containing only
+                # "WiFiScan initialized." could not be told apart from an action that never ran.
+                logger.debug(f"Wi-Fi scan throttled; {int(interval - (now - self._last_scan))}s "
+                             f"until the next capture is due.")
+                return 'skipped'
 
             # Resolved, not read straight from config: with no uplink there is no radio to protect,
             # so a Bjorn with no dongle falls back to the onboard one rather than skipping recon
@@ -91,7 +97,12 @@ class WiFiScan:
                     logger.error(f"Wi-Fi scan skipped: configured radio {configured!r} is not "
                                  f"present (moved USB port?) and no other radio is free.")
                     return 'failed'
-                logger.debug("No non-uplink radio free for a capture; skipping Wi-Fi scan.")
+                # ...unless a human asked for this one. The "Scan now" button and bjorn_verify both
+                # come through force=True with someone waiting on an answer, so a DEBUG line here
+                # reads as "the button did nothing, silently" — which is how the 2026-08-08 capture
+                # FAIL ended up with an empty log tail under it.
+                (logger.info if force else logger.debug)(
+                    "No non-uplink radio free for a capture; skipping Wi-Fi scan.")
                 return 'skipped'
             ok, detail, reason = monitor_mode.acquire(iface, owner=RADIO_OWNER)
             if not ok:
@@ -147,17 +158,32 @@ class WiFiScan:
 
         airodump-ng runs until killed, so the timeout IS the stop signal — TimeoutExpired is the
         expected path, not an error. `--write-interval 1` keeps the CSV flushed, so the data is
-        already on disk when the process dies."""
+        already on disk when the process dies.
+
+        Corollary, and the reason the 2026-08-08 on-Pi "no fresh AP rows" FAIL had nothing to go on:
+        a *normal* return means airodump quit on its own before the timeout, which a healthy capture
+        never does. That is a failure, airodump explains it on stderr — and the old code captured
+        that message into a pipe and threw it away."""
         tmpdir = tempfile.mkdtemp(prefix="bjorn_wifi_")
         try:
             cmd = self.build_cmd(binp, iface, os.path.join(tmpdir, "scan"), band, channel)
+            err = ""
             try:
-                subprocess.run(cmd, capture_output=True, text=True, timeout=duration)
+                # stdout is airodump's full-screen ncurses refresh, rewritten several times a second
+                # for the whole capture: buffering it costs a Pi Zero real memory and says nothing.
+                # stderr is where it says why it died, which is the only part worth keeping.
+                proc = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                                      text=True, timeout=duration)
             except subprocess.TimeoutExpired:
                 pass  # expected: we stop it by timing it out
+            else:
+                err = (proc.stderr or "").strip().replace("\n", " ")[:300]
+                logger.warning(f"airodump-ng exited on its own (rc={proc.returncode}) before the "
+                               f"{duration}s capture was up: {err or 'no output on stderr'}")
             files = sorted(glob.glob(os.path.join(tmpdir, "scan*.csv")))
             if not files:
-                logger.warning("airodump-ng produced no CSV (does the radio support monitor mode?)")
+                logger.warning("airodump-ng produced no CSV — "
+                               + (err or "does the radio support monitor mode?"))
                 return [], []
             with open(files[-1], newline="", encoding="utf-8", errors="replace") as f:
                 return self.parse_airodump_csv(f.read())

@@ -287,6 +287,41 @@ def test_release_reports_failure_instead_of_claiming_success():
         _restore(saved)
 
 
+def test_capture_surfaces_airodump_stderr_instead_of_swallowing_it():
+    """2026-08-08 on-Pi: 'airodump capture — no fresh AP rows' FAILed with nothing in the log to
+    explain it. airodump-ng only returns before its timeout when it has failed, and it says why on
+    stderr — which the old `capture_output=True` collected into a pipe and dropped on the floor."""
+    import types
+    import subprocess as sp
+    logged = []
+    saved_run, saved_warn = wifi_scan_mod.subprocess.run, wifi_scan_mod.logger.warning
+    wifi_scan_mod.logger.warning = lambda msg, *a, **k: logged.append(str(msg))
+    cfg = types.SimpleNamespace(scan_results_dir=tempfile.mkdtemp(prefix="bjorn_wifi_test_"))
+
+    def dead_airodump(cmd, **kwargs):
+        assert kwargs.get("stdout") is sp.DEVNULL, "the ncurses screen must not be buffered"
+        return types.SimpleNamespace(
+            returncode=1, stdout=None,
+            stderr="ioctl(SIOCSIWMODE) failed: Device or resource busy\n")
+
+    def timed_out(cmd, **kwargs):
+        raise sp.TimeoutExpired(cmd, 30)
+
+    try:
+        wifi_scan_mod.subprocess.run = dead_airodump
+        assert WiFiScan(cfg)._capture("/usr/sbin/airodump-ng", "wlan1", 30) == ([], [])
+        assert any("Device or resource busy" in m for m in logged), logged
+
+        # The healthy path: the timeout IS the stop signal, so it must never report an early exit.
+        logged.clear()
+        wifi_scan_mod.subprocess.run = timed_out
+        assert WiFiScan(cfg)._capture("/usr/sbin/airodump-ng", "wlan1", 30) == ([], [])
+        assert not any("exited on its own" in m for m in logged), logged
+    finally:
+        wifi_scan_mod.subprocess.run = saved_run
+        wifi_scan_mod.logger.warning = saved_warn
+
+
 def test_parse_iface_mode():
     assert monitor_mode.parse_iface_mode("\tifindex 4\n\ttype monitor\n") == "monitor"
     assert monitor_mode.parse_iface_mode("\ttype managed\n") == "managed"

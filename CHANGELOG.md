@@ -14,6 +14,27 @@
   starlette, rich. Those are environment, not code: CI installs them via `requirements-ci.txt`.)*
 
 ### Added
+- **`bjorn_verify.py` now covers the steal half of the offensive core, and reports what changed.**
+  Section 9 checked the six connectors and stopped there. It now also, using the same
+  follow-the-delegation rule (a module importing from `base_stealer` is verified against the
+  base): confirms **every steal resets its latch per run**; counts **byte/free-space caps per
+  module** and fails naming the ones without them — the check that would have caught #6 being
+  recorded as finished while three of six modules had none; and confirms **every `execute()`
+  returns an outcome code `normalize_outcome` recognises**, since anything else silently becomes
+  `FAILED`. Two new info lines report how many steal modules sit on the base and how many are
+  capped, so a partial rollout reads as partial.
+
+  Output gained three blocks: a **per-section tally** (two failures in one area is a different
+  morning from one in each), a **`--- Changes ---`** delta against the newest saved report naming
+  what is `FIXED` / `REGRESSED` / `NEW` — and saying "no baseline" rather than implying nothing
+  moved — and **`Not confirmed this run`**, collecting every WARN and SKIP in one place, because a
+  SKIP read as a pass is how the 2026-08-08 sweep reported a radio test it had never run.
+
+  `execute_body()` is parsed with `ast` rather than split on `"def execute("`: splitting reads to
+  end of file, so a helper defined *below* execute() is attributed to it. Not theoretical — the
+  first version of the outcome-code check flagged a `return "wpasec-…"` from a helper in
+  `wpasec_import.py`. Both new pure helpers are unit-tested in `tests/test_bjorn_verify.py`.
+
 - **`base_stealer.py` — the shared scaffolding for the steal modules (#12), with SSH converted.**
   Mirrors `base_connector.py`: the parent-action gate, per-run latch reset, cracked-credential
   load, run-token-guarded watchdog, credential loop and outcome contract now exist once, and an

@@ -258,13 +258,24 @@ returns `base_connector.py` when the connector contains the literal string
 SMB / Telnet / RDP / SQL conversions. Section 9 has only ever validated the SSH+FTP shape, and
 the delegation-following logic has never had to resolve four adapters at once.
 
-**Pass — Section 9 must print exactly these three verdicts:**
+**Pass — Section 9 covers both halves of the offensive core since 2026-08-14:**
 
 | Verdict | Expected detail |
 |---|---|
 | `PASS` brute force resolves mac/hostname before the queue fill | *"all six ordered correctly (the RDP fix is in the running code)"* |
 | `PASS` a raising worker still drains its queue | *"task_done() is in a finally in every connector"* |
 | `PASS` no UnboundLocalError logged at runtime | *"none in the orchestrator log"* |
+| `PASS` every steal resets its latch per run | *"the reset is inside execute() for all six (base or own file)"* |
+| `FAIL` #6 every steal caps bytes and checks free space | **expected to fail** — *"RDP, Telnet have neither"*, until those adapters convert |
+| `PASS` #5 actions return only known outcome codes | *"every execute() returns a code normalize_outcome recognises"* |
+
+Plus two info lines that are the point of the section now: `steal modules on the base  N/6` and
+`steal byte/space caps  N/6 capped: …`. **The #6 line is the one to read** — it is a per-module
+count precisely because "#6 is done" was recorded while three of six modules had no caps at all.
+
+Run with `--save`, always: the next run reads the newest saved report and prints a
+**`--- Changes ---`** block naming what became `FIXED`, what `REGRESSED`, and which checks are
+`NEW`. Without a baseline it says so rather than implying nothing moved.
 
 **Fail — what each outcome means:**
 

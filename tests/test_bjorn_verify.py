@@ -306,8 +306,45 @@ def test_the_shipped_connectors_pass_both_source_checks():
         assert bv.call_in_finally(src, "worker", "task_done") is True, f"{fn}: unguarded worker"
 
 
+def test_execute_body_is_empty_for_a_module_that_has_no_execute():
+    """The delegation checks split on 'def execute(' and look for a guarantee inside it. Falling
+    back to the whole file for an adapter that has none would find the line somewhere else and
+    report a pass for a module that no longer carries the guarantee at all — the failure mode the
+    steal-module conversion could have introduced."""
+    assert bv.execute_body("class A:\n    def execute(self):\n        self.x = False\n")
+    assert bv.execute_body("class A:\n    pass\n") == ""
+    assert "self.x = False" not in bv.execute_body("self.x = False\nclass A:\n    pass\n")
+
+
+def test_previous_verdicts_reads_back_a_saved_summary(tmp_path):
+    """The change delta is only worth having if it cannot invent one. Parses the Summary block
+    this script writes, and returns nothing at all when there is no earlier report."""
+    (tmp_path / "verify_20260101_000000.txt").write_text(
+        "Bjorn verification\n"
+        "=== 9. Offensive core ===\n"
+        "  [PASS] noise that is not in the summary\n"
+        "=== Summary ===\n"
+        "  PASS  guard refuses the uplink - refusing to use wlan0\n"
+        "  FAIL  airodump capture\n"
+        "  WARN  could not ask\n", encoding="utf-8")
+    found, name = bv.previous_verdicts(str(tmp_path), exclude=None)
+    assert found == {"guard refuses the uplink": bv.PASS,
+                     "airodump capture": bv.FAIL,
+                     "could not ask": bv.WARN}
+    assert name == "verify_20260101_000000.txt"
+    assert "noise that is not in the summary" not in found
+
+    # The report being written right now must not be its own baseline.
+    only = tmp_path / "verify_20260101_000000.txt"
+    assert bv.previous_verdicts(str(tmp_path), exclude=str(only)) == ({}, "")
+    assert bv.previous_verdicts(str(tmp_path / "nope"), exclude=None) == ({}, "")
+
+
 if __name__ == "__main__":
+    # Fixture-taking tests can't run here — same guard as test_connectors.py. Without it, adding
+    # the first tmp_path test turns `python tests/test_bjorn_verify.py` into a TypeError.
+    import inspect
     for name, fn in sorted(globals().items()):
-        if name.startswith("test_") and callable(fn):
+        if name.startswith("test_") and callable(fn) and not inspect.signature(fn).parameters:
             fn()
-    print("ok")
+    print("ok (fixture-free subset; run pytest for all)")

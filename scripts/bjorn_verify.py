@@ -182,11 +182,51 @@ def benchmark_ports(csv_path):
 
 
 def summarize(results):
-    """{verdict: count} over collected (verdict, label, detail) triples."""
+    """{verdict: count} over collected result tuples. Indexed, not unpacked: results grew a
+    section field and this must keep counting older 3-tuples the same way."""
     counts = {PASS: 0, FAIL: 0, WARN: 0, SKIP: 0}
-    for verdict, _label, _detail in results:
-        counts[verdict] = counts.get(verdict, 0) + 1
+    for result in results:
+        counts[result[0]] = counts.get(result[0], 0) + 1
     return counts
+
+
+def _execute_node(source):
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return None, None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "execute":
+            return node, tree
+    return None, None
+
+
+def execute_body(source):
+    """The text of execute() in this source, or "" when it has none.
+
+    Parsed, not split on "def execute(" — that reads to end of file, so anything in a method
+    *below* execute() gets attributed to it. That mis-attribution is not theoretical: the first
+    version of the outcome-code check flagged a `return "wpasec-..."` from a helper defined after
+    execute() in wpasec_import.py.
+
+    Returning "" rather than the whole file matters just as much: a delegating adapter has no
+    execute() at all, and falling back to the full source would find the checked-for line
+    somewhere else and report a pass for a module that no longer carries the guarantee.
+    """
+    node, _tree = _execute_node(source)
+    if node is None:
+        return ""
+    return ast.get_source_segment(source, node) or ""
+
+
+def execute_returns(source):
+    """The set of string literals execute() returns. Empty when there is no execute()."""
+    node, _tree = _execute_node(source)
+    if node is None:
+        return set()
+    return {n.value.value for n in ast.walk(node)
+            if isinstance(n, ast.Return) and isinstance(n.value, ast.Constant)
+            and isinstance(n.value.value, str)}
 
 
 def resolve_repo(override="", script_dir="", probe=os.path.isfile):
@@ -345,6 +385,7 @@ class Report:
         self.color = sys.stdout.isatty()
         self._fh = open(save_path, "w", encoding="utf-8") if save_path else None
         self.save_path = save_path
+        self.current_section = "(preamble)"
 
     def line(self, text):
         print(text)
@@ -352,6 +393,7 @@ class Report:
             self._fh.write(text + "\n")
 
     def section(self, title):
+        self.current_section = title
         self.line(f"\n{'=== ' + title + ' ==='}")
 
     def info(self, label, value):
@@ -363,11 +405,45 @@ class Report:
         if not self.color:
             tint = off = ""
         self.line(f"  {tint}[{verdict}]{off} {label}" + (f" — {detail}" if detail else ""))
-        self.results.append((verdict, label, detail))
+        self.results.append((verdict, label, detail, self.current_section))
 
     def close(self):
         if self._fh:
             self._fh.close()
+
+
+# Written by the Summary block as "  PASS  label" so a later run can read it back. Kept simple on
+# purpose: the delta is a convenience, and a parser that can misread its own output would be worse
+# than no delta at all.
+_RESULT_LINE = re.compile(r"^\s{2}(PASS|FAIL|WARN|SKIP)\s{2,}(.+?)(?:\s+-\s.*)?$")
+
+
+def previous_verdicts(out_dir, exclude):
+    """{label: verdict} from the most recent saved report, for the change delta.
+
+    Returns ({}, "") when there is nothing to compare against — a first run, or one without
+    --save. That is reported as "no baseline", never as "nothing changed": the two look identical
+    in a summary and only one of them means anything.
+    """
+    try:
+        reports = sorted(glob.glob(os.path.join(out_dir, "verify_*.txt")))
+    except OSError:
+        return {}, ""
+    reports = [p for p in reports if os.path.abspath(p) != os.path.abspath(exclude or "")]
+    if not reports:
+        return {}, ""
+    previous = {}
+    in_summary = False
+    for raw in _read(reports[-1]).splitlines():
+        if raw.startswith("=== Summary"):
+            in_summary = True
+            continue
+        if not in_summary:
+            continue
+        match = _RESULT_LINE.match(raw)
+        if match:
+            previous[match.group(2).strip()] = match.group(1)
+    return previous, os.path.basename(reports[-1])
 
 
 def _read(path):
@@ -623,6 +699,36 @@ class Verifier:
                            "now edit it in the GUI with commas and re-run to confirm the save path")
         else:
             self.r.verdict(FAIL, "#176 portlist round-trips as a list", f"not a JSON array: {portlist!r}")
+
+        # #11: the dashboard re-fetches screen.png and the log only when these tokens move. A 0 is
+        # a real answer (the file is absent), which is why the log one is reported separately —
+        # log_version reads 0 on a fresh boot until something first requests /get_logs.
+        stats = self.api.get("/api/stats") or {}
+        screen_v, log_v = stats.get("screen_version"), stats.get("log_version")
+        self.r.info("change tokens", f"screen_version={screen_v} log_version={log_v}")
+        if screen_v:
+            self.r.verdict(PASS, "#11 screen change token is live",
+                           "the preview refreshes on this token instead of a 2s blind poll")
+        else:
+            self.r.verdict(FAIL, "#11 screen change token is live",
+                           f"screen_version={screen_v!r} - _asset_mtime cannot see screen.png, so "
+                           f"the preview would never refresh")
+
+        # The first /get_logs after a boot used to lose a race with its own `tail -f` redirect and
+        # answer an error body. Fixed by creating the file before spawning; this is the check that
+        # would have caught it, and it must run against a freshly booted device to mean anything.
+        code, size = self.api.status_code("/get_logs", timeout=15)
+        logs_body = self.api.get("/get_logs")
+        errored = isinstance(logs_body, dict) and logs_body.get("status") == "error"
+        if code == 200 and not errored:
+            self.r.verdict(PASS, "/get_logs answers without an error body",
+                           f"{size} bytes - the web console has something to stream")
+        else:
+            self.r.verdict(FAIL, "/get_logs answers without an error body",
+                           f"HTTP {code}"
+                           + (f", {logs_body.get('message')}" if errored else "")
+                           + " - if this says ENOENT on temp_log.txt, the deployed tree predates "
+                             "the serve_logs fix")
 
     # -- 5 ------------------------------------------------------------------
     def action_evidence(self):
@@ -899,6 +1005,76 @@ class Verifier:
             self.r.verdict(PASS, "RDP brute force cracked a host",
                            f"{rdp_creds} cred(s) in rdp.csv - the fix is confirmed end to end")
 
+        # --- the steal half (#12 second stage, and the #6 caps it carries) ---------------------
+        # Same delegation rule as the connectors above: a module importing from base_stealer no
+        # longer holds its own execute(), so the guarantees are verified against the base.
+        stealers = [("steal_files_ssh.py", "SSH"), ("steal_files_smb.py", "SMB"),
+                    ("steal_files_ftp.py", "FTP"), ("steal_files_rdp.py", "RDP"),
+                    ("steal_files_telnet.py", "Telnet"), ("steal_data_sql.py", "SQL")]
+        steal_src = {proto: _read(os.path.join(self.repo, "actions", fn)) for fn, proto in stealers}
+        base_steal = _read(os.path.join(self.repo, "base_stealer.py"))
+        missing = [p for p, src in steal_src.items() if not src]
+        if missing:
+            self.r.verdict(WARN, "steal modules readable", f"could not read: {', '.join(missing)}")
+
+        def _eff_steal(src):
+            return base_steal if (base_steal and "from base_stealer import" in src) else src
+
+        converted = [p for p, src in steal_src.items() if "from base_stealer import" in src]
+        self.r.info("steal modules on the base", f"{len(converted)}/6 ({', '.join(converted) or 'none'})")
+        if base_steal:
+            self.r.info("base_stealer.py", "present")
+
+        # The latch. These are long-lived singletons: without a per-run reset, one host's 240s
+        # timeout used to disable every later steal on every host until the service restarted.
+        no_reset = [p for p, src in steal_src.items()
+                    if src and "self.stop_execution = False" not in execute_body(_eff_steal(src))]
+        if no_reset:
+            self.r.verdict(FAIL, "every steal resets its latch per run",
+                           f"{', '.join(no_reset)}: no reset inside execute() - one timeout "
+                           f"disables the steal for the whole uptime")
+        elif steal_src:
+            self.r.verdict(PASS, "every steal resets its latch per run",
+                           "the reset is inside execute() for all six (base or own file)")
+
+        # #6. This check exists because the caps were recorded as universal while three of the six
+        # had none: a large file over SFTP could still fill the card. Counted per module now, so a
+        # partial rollout cannot be read as a finished one again.
+        capped, uncapped = [], []
+        for proto, src in steal_src.items():
+            if not src:
+                continue
+            eff = _eff_steal(src)
+            has_size = "MAX_FILE_BYTES" in eff and "MAX_RUN_BYTES" in eff
+            has_space = "MIN_FREE_BYTES" in eff or "disk_usage" in eff
+            (capped if (has_size and has_space) else uncapped).append(proto)
+        self.r.info("steal byte/space caps", f"{len(capped)}/6 capped: {', '.join(capped) or 'none'}")
+        if uncapped:
+            self.r.verdict(FAIL, "#6 every steal caps bytes and checks free space",
+                           f"{', '.join(uncapped)} have neither - a big or hostile host can fill "
+                           f"the card; they inherit the caps when converted to base_stealer")
+        elif capped:
+            self.r.verdict(PASS, "#6 every steal caps bytes and checks free space",
+                           "all six enforce per-file/per-run budgets and a free-space precheck")
+
+        # #5: the orchestrator funnels legacy returns through normalize_outcome, and anything it
+        # does not recognise becomes FAILED — so a typo makes a working action stamp a failure.
+        known = {"success", "failed", "skipped", "timeout", "no_findings", "resource_busy",
+                 "unavailable", "auth_failed", "error", "ok", "complete", "completed", "failure",
+                 "no-results", "no_results", "busy", "missing"}
+        odd = []
+        for path in sorted(glob.glob(os.path.join(self.repo, "actions", "*.py"))):
+            for value in sorted(execute_returns(_read(path))):
+                if value not in known:
+                    odd.append(f"{os.path.basename(path)}:{value}")
+        if odd:
+            self.r.verdict(FAIL, "#5 actions return only known outcome codes",
+                           f"{', '.join(odd)} - normalize_outcome maps the unknown to FAILED, so "
+                           f"a working action would stamp failed_<ts> and back off")
+        else:
+            self.r.verdict(PASS, "#5 actions return only known outcome codes",
+                           "every execute() returns a code normalize_outcome recognises")
+
     def all_checks(self):
         return (self.preflight, self.wifi_recon, self.benchmark, self.usb_gadget,
                 self.display_and_ui, self.action_evidence, self.delivery, self.dependencies,
@@ -944,11 +1120,55 @@ def main(argv=None):
             report.verdict(WARN, f"{check.__name__} crashed", f"{type(e).__name__}: {e}")
 
     report.section("Summary")
-    for verdict, label, detail in report.results:
+    for result in report.results:
+        verdict, label, detail = result[0], result[1], result[2]
         report.line(f"  {verdict:<5} {label}" + (f" - {detail}" if detail else ""))
     counts = summarize(report.results)
+
+    # Per-section tally. A run with one FAIL in Wi-Fi and one in the offensive core is a very
+    # different morning from two in the same place, and the flat list above does not show that.
+    report.line("\n--- By section ---")
+    per_section = {}
+    for result in report.results:
+        bucket = per_section.setdefault(result[3] if len(result) > 3 else "?",
+                                        {PASS: 0, FAIL: 0, WARN: 0, SKIP: 0})
+        bucket[result[0]] += 1
+    for name, bucket in per_section.items():
+        flags = " ".join(f"{v} {k}" for k, v in bucket.items() if v)
+        marker = "!" if bucket[FAIL] else " "
+        report.line(f" {marker} {name:<44} {flags}")
+
+    # What changed since the last saved report. The point of running this twice.
+    previous, previous_name = previous_verdicts(os.path.join(repo, "data", "output"), save_path)
+    report.line("\n--- Changes ---")
+    if not previous:
+        report.line("  no baseline to compare against (run with --save to leave one)")
+    else:
+        current = {result[1]: result[0] for result in report.results}
+        fixed = [k for k, v in current.items() if previous.get(k) in (FAIL, WARN) and v == PASS]
+        broke = [k for k, v in current.items() if previous.get(k) == PASS and v in (FAIL, WARN)]
+        added = [k for k in current if k not in previous]
+        gone = [k for k in previous if k not in current]
+        report.line(f"  vs {previous_name}")
+        for title, items in (("FIXED", fixed), ("REGRESSED", broke),
+                             ("NEW CHECK", added), ("NOT RUN THIS TIME", gone)):
+            for item in items:
+                report.line(f"    {title:<18} {item}")
+        if not (fixed or broke or added or gone):
+            report.line("    no change in any verdict")
+
+    # Everything the run could not answer, in one place. A SKIP read as a pass is how the
+    # 2026-08-08 sweep reported a radio test it had never run.
+    unanswered = [(r[0], r[1], r[2]) for r in report.results if r[0] in (WARN, SKIP)]
+    if unanswered:
+        report.line("\n--- Not confirmed this run (not the same as passing) ---")
+        for verdict, label, detail in unanswered:
+            report.line(f"  {verdict:<5} {label}" + (f" - {detail}" if detail else ""))
+
     report.line(f"\n  {counts[PASS]} PASS, {counts[FAIL]} FAIL, {counts[WARN]} WARN, "
                 f"{counts[SKIP]} SKIP")
+    if counts[FAIL]:
+        report.line("  FAILING: " + " | ".join(r[1] for r in report.results if r[0] == FAIL))
     if save_path:
         report.line(f"  Saved to {save_path}")
     report.line("\n  A FAIL is a backlog item that stays open. A WARN usually means 'needs a "

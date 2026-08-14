@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Verified
+- **#14 — the CI gate works, and it can fail.** Confirmed 2026-08-14 against `c132a0c`: the run
+  completed `success` with **both** jobs green, including the `lint` job's "Lint (errors only) —
+  core modules + the original four" step. Locally, `pytest tests/ -q` → **363 passed**, and
+  linting a throwaway file containing `undefined_name_check()` reported `E0602` and exited
+  **non-zero** — the property that was missing before `e32c480`, when `fail-under=8` decided the
+  exit code and pylint printed 35 errors while exiting 0. Also worth recording: **38 runs already
+  existed**, green on every commit back through the gate fix. The gate was never unrun, only
+  unread. *(Linting locally on a dev box without the deps installed raises three `E0401`s — PIL,
+  starlette, rich. Those are environment, not code: CI installs them via `requirements-ci.txt`.)*
+
 ### Fixed
 - **`install_bjorn.sh` duplicated config lines on every re-run.** Six appends to
   `/etc/security/limits.conf`, `/etc/systemd/{system,user}.conf`, `/etc/sysctl.conf` and

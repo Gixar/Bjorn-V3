@@ -13,7 +13,8 @@
 ## Index
 
 Four items straddle two sections — the shipped half needs a run, the unshipped half needs code.
-They are listed once in each, never described twice.
+They are listed once in each, never described twice. A ✅ in the § 1 column means that half is
+confirmed and its entry has been deleted; the § 2 half is still open.
 
 | # | Item | § 1 run it | § 2 build it | § 3 not started |
 |---|---|---|---|---|
@@ -26,7 +27,7 @@ They are listed once in each, never described twice.
 | 11 | Live web UI + weight | browser check (B) | dependency re-pin | |
 | 12 | Base + adapters | connectors (C) | `BaseStealer` | |
 | 13 | Web hardening | | auth / bind decision | |
-| 14 | Real CI | Actions run (A) | arm job + matrix | |
+| 14 | Real CI | ✅ confirmed 2026-08-14 | arm job + matrix | |
 | 15 | On-device LLM triage | | | ✔ |
 | — | Smart Planner V2 | observation window (F) | | |
 
@@ -37,9 +38,13 @@ They are listed once in each, never described twice.
 **Nothing here needs a diff.** Every line of code is written and merged; what is missing is a
 run that proves it.
 
-**How this section is used:** the **Run sheet** below is 19 numbered steps — every command, in
+**How this section is used:** the **Run sheet** below is numbered steps — every command, in
 order, tagged with where to run it. The lettered entries after it explain what each result
 *means*; read those only when a step is not a clean pass.
+
+**Step numbers are stable identifiers and are never reused.** When an item confirms, its steps
+and its lettered entry are deleted and the rest keep their numbers, so a note that says "step 11
+failed" stays meaningful. Currently **4–19 remain**; 1–3 closed **A** on 2026-08-14.
 
 **When an item confirms, delete it from this file** — but record the result first, in
 `docs/BACKLOG.md` (sweeps and on-Pi runs) or `CHANGELOG.md` (behaviour and tuned values).
@@ -53,34 +58,6 @@ which is the exact failure this file exists to prevent.
 **Where:** `[dev]` = repo root on your machine · `[pi]` = ssh to the Pi, `cd /home/bjorn/Bjorn`
 · `[web]` = browser. **`✓`** = what a pass looks like. Anything that is not a clean `✓` → read
 that item's letter below.
-
----
-
-**1. `[dev]`** — run both CI jobs. *(Repo root: `.pylintrc`'s init-hook resolves the paths.)*
-
-```bash
-pytest tests/ -q
-pylint --rcfile=.pylintrc --errors-only \
-  retry_policy.py config_validation.py shared.py utils.py \
-  orchestrator.py base_connector.py telegram_client.py scripts/ tests/
-echo "exit=$?"
-```
-
-✓ `363 passed` · `exit=0`
-
-**2. `[dev]`** — prove the gate can still fail.
-
-```bash
-printf 'undefined_name_check()\n' > /tmp/lintcheck.py
-pylint --rcfile=.pylintrc --errors-only /tmp/lintcheck.py; echo "exit=$?"
-rm /tmp/lintcheck.py
-```
-
-✓ exit is **non-zero**. If it is `0`, stop — see **A**.
-
-**3. `[web]`** — https://github.com/Gixar/Bjorn-V3/actions
-
-✓ head commit: `test` green **and** `lint` green. → **closes A**
 
 ---
 
@@ -227,39 +204,6 @@ tail -n 40 data/logs/steal_files_telnet.py.log
 
 ## What the results mean
 
-### A. #14 — the CI gate has never been seen to run
-
-**What landed.** `.github/workflows/ci.yml` is split in two. `test` installs only pytest and runs
-`pytest tests/ -v` — the suite runs against `tests/_stubs.py`, which overrides `sys.modules`
-regardless of what is installed, so the hardware stack is neither needed nor meaningful on a bare
-runner. `lint` installs `pylint~=4.0` plus the installable subset
-(`grep -vE '^\s*(gpiozero|lgpio|spidev)\b' requirements.txt > requirements-ci.txt` — those three
-are Pi-only and cannot install on x86) and runs `pylint --errors-only` over the original four
-paths **plus the core that was never linted**: `shared.py utils.py orchestrator.py
-base_connector.py telegram_client.py`.
-
-**Why it isn't proven.** The 2026-08-14 triage (`e32c480`) found the code clean — zero real
-E-findings in the never-linted core — but the *gate* had three defects, any one of which made a
-run worthless:
-
-1. **`fail-on=E` was missing, so the job could never fail.** `fail-under=8` decided pylint's exit
-   code, and under `--errors-only` the score stays above 8 — pylint printed **35 errors and
-   exited 0**. A real undefined name in the core would have been reported and the job would still
-   have gone green.
-2. **`.pylintrc` carried `suggestion-mode=yes`**, removed in pylint 4. An unknown key is `E0015`,
-   which `--errors-only` counts — a stale line of default boilerplate was enough to fail the
-   build on its own. Hence the `pylint~=4.0` pin: unpinned, an upstream release turns the job red
-   with no code change.
-3. **~40 bogus `E0401 import-error`s across `tests/`**, because the test files reach `shared` /
-   `orchestrator` / `_stubs` / `bjorn_verify` through a runtime `sys.path.insert` that pylint does
-   not execute. Fixed with an `init-hook` adding `.`, `tests`, `scripts`.
-
-All three are fixed and the local command exits 0. **No Actions run has been observed since.**
-
-**Pass:** 1.1 exits 0, 1.2 exits non-zero, 1.3 shows both jobs green.
-**Fail:** 1.2 exiting **0** is the one that matters — it means the exit-code plumbing regressed
-and every later green is meaningless. Check `fail-on` in `.pylintrc` before believing anything.
-
 ### B. #11 — the event-driven dashboard was never opened in a browser
 
 **What landed.** `get_stats_snapshot` (`utils.py:139-140`) carries two change tokens —
@@ -273,11 +217,11 @@ moves, and the blind `setInterval` pollers (2s image, 1.5s logs) are gone.
 sits behind the starlette import wall, so this class of change cannot be unit-tested in this
 repo — the same "confident wrong answer" shape that has bitten here before.
 
-**Pass:** tokens present, non-zero, and moving (2.1); no blind polling but still-live updates
-(2.2); portlist round-trips (2.3).
-**Fail:** three identical readings in 2.1 while the panel is actively rendering means
+**Pass:** tokens present, non-zero, and moving (step 4); no blind polling but still-live updates
+(step 5); portlist round-trips (step 6).
+**Fail:** three identical readings in step 4 while the panel is actively rendering means
 `_asset_mtime` is resolving the wrong path — check `sd.webdir` and `sd.webconsolelog`. Requests
-still repeating on a timer in 2.2 is usually a cached `dashboard.js`; hard-reload before
+still repeating on a timer in step 5 is usually a cached `dashboard.js`; hard-reload before
 concluding anything.
 
 ### C. #12 — the source verifier has not run since the four conversions
@@ -313,7 +257,7 @@ the delegation-following logic has never had to resolve four adapters at once.
   `base_connector.py` is missing or stale. **A WARN is not a pass** — those protocols are no
   longer being checked at all.
 - **`FAIL … referenced before assignment`** — the #1 ordering bug is in the running code; the
-  deployed tree is behind. Re-sync (3.1) and re-run.
+  deployed tree is behind. Re-sync (step 7) and re-run.
 - **`FAIL … task_done() is not in a finally`** — a raising connect can skip `task_done()` and hang
   `queue.join()`, and with it the orchestrator. Regression in the base.
 - **`FAIL … N UnboundLocalError in orchestrator.py.log`** — static and runtime disagree; a
@@ -680,11 +624,11 @@ establishes what that baseline actually achieves. Do F before committing to this
 
 ## Sequencing
 
-1. **§ 1 first — it costs no code.** Run-sheet steps 1–6 need no hardware and take minutes;
-   7–13 are one Pi session, and `bjorn_verify --save` (step 9) is the highest-value single command
-   in this file. Confirming before building stops the next change landing on an unproven base —
-   and C in particular is checking a verifier that has never run against the code it now has to
-   resolve.
+1. **§ 1 first — it costs no code.** Run-sheet steps 4–6 need only a reachable Pi and a browser;
+   7–13 are one hands-on Pi session, and `bjorn_verify --save` (step 9) is the highest-value
+   single command in this file. Confirming before building stops the next change landing on an
+   unproven base — and C in particular is checking a verifier that has never run against the code
+   it now has to resolve.
 2. **§ 2 in order:** `BaseStealer` (#12) → RDP transport (#2) → #5's lint, then its `_last_error`
    panel, then side-effect verification.
 3. **Decide #13** (a human call, not a diff), then #9's non-blocking sweep and #14's extra jobs.

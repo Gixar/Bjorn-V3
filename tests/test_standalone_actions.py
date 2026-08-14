@@ -308,6 +308,45 @@ def test_vuln_scan_submits_only_eligible_hosts_and_stamps_results():
     assert data[4]["NmapVulnScanner"] == "success_20990101_000000", "an already-succeeded host is untouched"
 
 
+# --- the idle-loop spin fix: a standalone-only cycle must not count as host work ---------------
+
+def _proc_fake(select_result, run_returns=True):
+    """Minimal fake self for Orchestrator.process_alive_ips: the planner selects `select_result`
+    and every candidate 'runs' with `run_returns`. The vuln/hint loaders read missing files and
+    return empty (they catch FileNotFoundError), so no real I/O is needed."""
+    return types.SimpleNamespace(
+        actions=[], standalone_actions=[],
+        planner=types.SimpleNamespace(
+            sync_config=lambda *a, **k: None,
+            collect=lambda *a, **k: [],
+            select=lambda *a, **k: select_result,
+        ),
+        shared_data=types.SimpleNamespace(
+            orchestrator_should_exit=False,
+            vuln_summary_file="/nonexistent/vuln.csv",
+            scan_results_dir="/nonexistent",
+        ),
+        _run_candidate=lambda cand, data: run_returns,
+        _host_parallel_workers=lambda n: 1,
+        _flush_action_telemetry=lambda: None,
+    )
+
+
+def test_a_standalone_only_cycle_does_not_count_as_host_work():
+    """The idle-spin fix: a periodic standalone (e.g. SNMPEnum on a hostless net) runs, but
+    process_alive_ips must report False so run() takes its paced idle wait instead of spinning the
+    CPU — ~10 cycles/s was observed on an empty network."""
+    standalone = types.SimpleNamespace(kind="standalone", row=None, ip=None)
+    assert Orchestrator.process_alive_ips(_proc_fake([standalone]), []) is False
+
+
+def test_a_host_action_still_counts_as_work():
+    """The other half: a real host action must still return True so the loop keeps attacking
+    without an idle wait between cycles."""
+    host = types.SimpleNamespace(kind="host", row={"MAC Address": "AA:BB:CC:DD:EE:01"}, ip="10.0.0.5")
+    assert Orchestrator.process_alive_ips(_proc_fake([host]), []) is True
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

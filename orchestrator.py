@@ -274,7 +274,7 @@ class Orchestrator:
                 key = cand.ip or id(cand)
             host_groups.setdefault(key, []).append(cand)
 
-        any_action_executed = False
+        host_action_executed = False
         workers = self._host_parallel_workers(len(host_groups)) if host_groups else 1
         logger.info(
             f"Cycle work: {sum(len(v) for v in host_groups.values())} host action(s) "
@@ -298,27 +298,29 @@ class Orchestrator:
                     if self.shared_data.orchestrator_should_exit:
                         break
                     if _run_group(group):
-                        any_action_executed = True
+                        host_action_executed = True
             else:
                 with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="bjorn-host") as pool:
                     futures = [pool.submit(_run_group, g) for g in host_groups.values()]
                     for fut in as_completed(futures):
                         try:
                             if fut.result():
-                                any_action_executed = True
+                                host_action_executed = True
                         except Exception as e:
                             logger.error(f"Host-group worker failed: {e}")
 
         # Standalones stay sequential — they often share global resources (radio, bettercap).
+        # They run for their side effects but do NOT count as "the cycle did work": a periodic
+        # standalone (e.g. SNMPEnum on a hostless net) must not keep the loop hot, or run() skips
+        # its paced idle wait and spins the CPU — ~10 cycles/s was observed on an empty network.
         for cand in standalones:
             if self.shared_data.orchestrator_should_exit:
                 break
-            if self._run_candidate(cand, current_data):
-                any_action_executed = True
+            self._run_candidate(cand, current_data)
 
         # Worker threads update memory only; one atomic write per cycle protects the SD card.
         self._flush_action_telemetry()
-        return any_action_executed
+        return host_action_executed
 
 
     def execute_action(self, action, ip, ports, row, action_key, current_data,
@@ -691,6 +693,8 @@ class Orchestrator:
             # Consecutive fruitless scans raise the standalone score, so recon that needs no target
             # (BLE, Wi-Fi, SNMP, reporting) takes over as host work dries up.
             idle_boost = min(40, self.failed_scans_count * 12)
+            # True only when a *host* action ran; a periodic standalone alone returns False so this
+            # falls into the paced idle branch below instead of spinning (see process_alive_ips).
             any_action_executed = self.process_alive_ips(current_data, idle_boost=idle_boost)
 
             # P3: one netkb write per cycle here — execute_action no longer writes per action.

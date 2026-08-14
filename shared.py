@@ -719,6 +719,15 @@ class SharedData:
             logger.error(f"Error loading images: {e}")
             raise
 
+    def _warn_missing_image_once(self, key, message):
+        """Log a missing-status-image warning only the first time per key. The display renders many
+        frames per second, so a status with no image would otherwise flood the log every frame
+        (SNMPEnum alone wrote 10k+ identical lines to shared.py.log)."""
+        warned = self.__dict__.setdefault('_status_image_warned', set())
+        if key not in warned:
+            warned.add(key)
+            logger.warning(message)
+
     def update_bjornstatus(self):
         """ Using getattr to obtain the reference of the attribute with the name stored in self.bjornorch_status"""
         try:
@@ -726,7 +735,9 @@ class SharedData:
             if self.bjornstatusimage is None:
                 raise AttributeError
         except AttributeError:
-            logger.warning(f"The image for status {self.bjornorch_status} is not available, using IDLE image by default.")
+            self._warn_missing_image_once(
+                f"status:{self.bjornorch_status}",
+                f"The image for status {self.bjornorch_status} is not available, using IDLE image by default.")
             self.bjornstatusimage = self.attack
         
         self.bjornstatustext = self.bjornorch_status  # Mettre à jour le texte du statut
@@ -754,7 +765,9 @@ class SharedData:
                 self.x_center = (self.width - self.imagegen.width) // 2
                 self.y_bottom = self.height - self.imagegen.height
             else:
-                logger.warning(f"Warning: No images available for status {status}, defaulting to IDLE images.")
+                self._warn_missing_image_once(
+                    f"series:{status}",
+                    f"Warning: No images available for status {status}, defaulting to IDLE images.")
                 if "IDLE" in self.image_series and self.image_series["IDLE"]:
                     random_index = random.randint(0, len(self.image_series["IDLE"]) - 1)
                     self.imagegen = self.image_series["IDLE"][random_index]

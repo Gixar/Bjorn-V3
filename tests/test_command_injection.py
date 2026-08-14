@@ -80,7 +80,9 @@ def _captured_argv(module_name, call):
 
 def test_rdp_connector_passes_a_malicious_password_as_one_argument():
     for payload in PAYLOADS:
-        seen = _captured_argv("rdp_connector", lambda m: m.RDPConnector.rdp_connect(
+        # #12: rdp_connect became BaseConnector's `attempt`. The argv property is unchanged and is
+        # what this asserts — the rename must not quietly stop the test from reaching the command.
+        seen = _captured_argv("rdp_connector", lambda m: m.RDPConnector.attempt(
             m.RDPConnector.__new__(m.RDPConnector), "10.0.0.5", "root", payload))
         assert isinstance(seen["cmd"], list), "argv list, not a shell string"
         assert seen["shell"] is False

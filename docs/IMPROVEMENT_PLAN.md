@@ -6,19 +6,18 @@
 > are not tracked here as open work.
 >
 > **Closed:** **#1** RDP brute-force · **#4** timeouts on every network op · **#7** atomic config +
-> serialized writers · **#14 CI gate** and **#12 connectors** (verified on-Pi, `0fc93ea`).
-> `CHANGELOG.md` and git history hold them.
+> serialized writers · **#14 CI gate** and **#12 connectors** (verified on-Pi, `0fc93ea`) ·
+> **#12 stealers** (all six on `BaseStealer`), **#6** steal caps, and **#2** RDP loot — the four
+> remaining adapters converted in `9b6906d` (2026-08-15). `CHANGELOG.md` and git history hold them.
 >
-> Suite: **367 passing**. Last on-Pi sweep `0fc93ea` (2026-08-14): 37 PASS / 1 FAIL — the FAIL is
-> #6 below (RDP steal uncapped).
+> Suite: **367 passing** (`9b6906d`). The RDP-steal FAIL from the last on-Pi sweep `0fc93ea`
+> (37 PASS / 1 FAIL) is fixed in code — RDP now carries the #6 caps via `BaseStealer` — pending
+> the next on-device sweep to confirm Section 9 reads 6/6.
 
 ## Index — what needs a diff
 
 | # | Item | What is left |
 |---|---|---|
-| 12 | Base + adapters | convert SMB, FTP, RDP, SQL steal modules (SSH + Telnet done) |
-| 6 | Steal caps | RDP steal uncapped — lands when its adapter converts |
-| 2 | RDP loot | RDP remote transport — lands as one adapter method |
 | 5 | Outcome contract | `_last_error` web panel · per-action side-effect verification |
 | 9 | Vuln scan off critical path | non-blocking, planner-scheduled sweep |
 | 11 | Dependency re-pin | refresh the stale 2024 pins (Pi-only, wheels-only) |
@@ -26,7 +25,7 @@
 | 14 | Real CI | arm-emulation job · Python version matrix |
 | 15 | On-device LLM triage | not started |
 
-**#12, #6 and #2 converge on the RDP adapter** — one conversion closes all three.
+**#12, #6 and #2 are closed** — they converged on the RDP adapter, converted in `9b6906d`.
 
 ---
 
@@ -35,101 +34,24 @@
 **These need a diff.** Each shipped something real and stopped short; the named remainder is what
 is left, with where to start. Ordered so the earlier ones unblock the later ones.
 
-### #12 — `BaseStealer` (all six steal modules are still copy-paste)
+### #12 · #6 · #2 — closed (`9b6906d`, 2026-08-15)
 
-**Landed.** The connector half. `base_connector.py` owns the scaffolding once and all six
-connectors are adapters on it — SSH and FTP first (`15f7811`, `84d048b`; FTP went 187 → ~35
-lines), then SMB, Telnet, RDP and SQL (`98780d4`, −528 net lines).
+All six steal modules now sit on `base_stealer.BaseStealer`. SSH and Telnet landed first
+(2026-08-14); the last four — SMB, FTP, SQL, RDP — converted in `9b6906d`, each a thin adapter
+setting class constants and implementing `open_session` / `find_files` / `steal_file`, with
+`b_*` globals unchanged so the orchestrator needed no edit. SMB and SQL kept their asymmetry
+(SMB `harvest` iterates shares; SQL's login-is-the-win returns success on zero tables); FTP/SMB
+try anonymous/guest first.
 
-**Landed 2026-08-14: `base_stealer.py` + the SSH adapter.** The shared flow — parent gate, latch
-reset, credential load, run-token watchdog, credential loop, outcome contract, and the #6 budget
-helpers — exists once. `steal_files_ssh.py` went **192 → 108 lines** and is the proof the shape
-fits. Three decisions recorded in the module docstring so they are not re-litigated: the connect
-hook is **`open_session`, not `connect`** (a method named `connect` collides with the #4 timeout
-AST guard's callee match and would fail it for a rule that does not apply); each adapter keeps its
-own `LOGGER` so the flow still lands in `data/logs/steal_files_<proto>.py.log` where every runbook
-looks; and the latch reset stays inside `execute()`.
+- **#6 (steal caps):** RDP was the last uncapped module. The caps live once on the base
+  (`check_budget` / `fits_budget` / `note_bytes`), so all six are covered; `bjorn_verify`
+  Section 9 should now read 6/6 on the next on-device sweep.
+- **#2 (RDP loot):** RDP-steal verifies the credential (`+auth-only`, no more `/drive:shared`
+  local-disk copy) and hands file collection to the SMB stealer on the same IP — the single
+  adapter method the sequencing was waiting for. `_looks_like_local_root` stays as a backstop.
 
-Both source-parsing tests were taught to follow delegation — `test_status_settle.py` and
-`test_steal_modules.py::test_the_reset_is_present_in_source_for_every_module` — exactly as
-`bjorn_verify` Section 9 was for the connectors. Verified by planting a break in the base: both
-fired. 365 passing.
-
-**Telnet converted (`68e61db`+):** `steal_files_telnet.py` 257 → 185 lines. Less dramatic than
-SSH because the base64/marker transport is genuinely Telnet-specific and stays; the shared flow
-still moved to the base, and it gained the #6 caps it never had (with a `wc -c` size probe before
-the in-memory base64 transfer).
-
-**Missing.** Four adapters: SMB, FTP, RDP, SQL. SMB and SQL need one extra seam each (SMB
-iterates shares, SQL iterates tables/schemas, and both plus FTP have an anonymous-access
-fallback), so expect the base to grow one hook that defaults to current behaviour — the same way
-`base_connector` grew `result_rows`/`after_queue`.
-
-**Do this first.** It is the unblocker:
-
-- RDP-steal's remote transport (#2 below) lands as **one adapter method** instead of a seventh
-  copy;
-- #6's two deferred minors land once instead of six times — an atomic temp+rename per stolen file
-  (today a crash leaves an incomplete loot file; the error path already unlinks partials, so this
-  is tidiness, not correctness) and an **inode-keyed** rather than path-keyed visited-set;
-- the caps stop being six sets of constants that can drift — `steal_data_sql.py` already shipped
-  once *referencing* four of them without defining them, a guaranteed `NameError`.
-
-**Where the shape is already decided.** Follow `base_connector.py`: subclass sets class
-constants, implements the one protocol-specific method, `b_*` globals unchanged so the
-orchestrator needs no edit. Teach the source-parsing verifiers the same delegation trick if they
-grow to cover steal modules.
-
-**Do not "simplify" this on the way past.** In `base_connector`, `attempt()` is
-truthy-not-`True`, and SMB and SQL **deliberately disagree** about the empty list: for SMB, no
-readable share is no win, so `[]` is correctly falsy; for SQL the login *is* the win — the
-pre-#12 worker recorded the cracked credential with zero databases visible — so it returns
-`databases or True`. Unifying them silently drops a valid credential. Both directions are pinned
-by tests. Expect the same asymmetry class in the stealers.
-
-### #6 — reopened: caps were missing on three of six, RDP is the last
-
-**This was marked ✅ DONE and deleted from this file.** The claim was *"every steal enforces a
-free-space precheck, a per-file cap and a per-run budget"*. Actual state, with the closing gaps:
-
-| Module | byte caps | free-space check |
-|---|---|---|
-| `steal_files_ftp` · `steal_files_smb` · `steal_data_sql` | ✅ | ✅ |
-| `steal_files_ssh` | ✅ *(2026-08-14 via `base_stealer`)* | ✅ |
-| `steal_files_telnet` | ✅ *(2026-08-14 via `base_stealer`)* | ✅ |
-| `steal_files_rdp` | ❌ **none** | ❌ **none** |
-
-The earlier fix was not wrong — it covered the three modules its author-supplied patch set
-touched, and the completion was recorded as universal. **RDP is the one module left**, and it
-lands free the moment that adapter converts.
-
-**Missing.** RDP only. The caps live on `BaseStealer` as `check_budget` / `fits_budget` /
-`note_bytes`, so the adapter cannot forget what it does not have to remember. **Do not patch it in
-place** — that recreates the sixth copy this refactor is deleting.
-
-**Now machine-checked.** `bjorn_verify` Section 9 counts caps per module and fails naming the
-gaps; after the Telnet conversion it reads `steal byte/space caps  5/6 capped: SSH, SMB, FTP,
-Telnet, SQL` with the FAIL narrowed to RDP. This item cannot silently be recorded as done again —
-the same sweep that once read 32 PASS / 0 FAIL was clean only because nothing asked.
-
-Still deferred from the original item, and now cheap to do once on the base rather than six times:
-an atomic temp+rename per stolen file, and an inode-keyed rather than path-keyed visited-set.
-
-### #2 — RDP loot has no remote transport
-
-**Landed.** The RDP steal module is hardened and safe: a 30s `xfreerdp` connect timeout, and a
-`_looks_like_local_root` guard that refuses to run when `/mnt/shared` looks like the Pi's own
-filesystem — the original bug was that `find_files` did `os.walk("/mnt/shared")` **locally**, so
-it copied Bjorn's own disk and reported success.
-
-**Missing.** It still cannot pull remote files at all. `/drive` redirection plus `+auth-only`
-fundamentally cannot — the redirect exposes the *Pi's* directory *to* the session, not the
-reverse. This needs a different transport: SMB against the same host (most likely — the SMB
-stealer already exists and the credential pool may already hold a working cred), or a staged
-remote command.
-
-**Sequenced deliberately after `BaseStealer`** so the transport is written once, as an adapter
-method. The deferral is documented in the module's own docstring.
+Still deferred (cheap now that it's once on the base, not six times): atomic temp+rename per
+stolen file, and an inode-keyed rather than path-keyed visited-set. Detail in git history.
 
 ### #5 — the outcome contract is two-thirds done
 
@@ -298,8 +220,7 @@ dependency and no network, so #15's ordering half must beat a working baseline.
 
 ## Sequencing
 
-1. **Finish #12's adapters:** SMB, FTP, SQL, then **RDP** — RDP closes #6 (caps) and #2 (remote
-   transport) in the same conversion.
+1. ~~**Finish #12's adapters:** SMB, FTP, SQL, then RDP — RDP closes #6 and #2.~~ ✅ `9b6906d`.
 2. **#5's `_last_error` panel**, then its side-effect verification.
 3. **Decide #13** (a human call, not a diff), then #9's non-blocking sweep and #14's extra jobs.
 4. **#15 last.**

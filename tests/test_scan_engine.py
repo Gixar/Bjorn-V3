@@ -128,3 +128,39 @@ def test_down_interfaces_are_not_scanned():
         assert NetworkScanner.iface_is_down("tun0", sysfs=tmp) is False
         # Unreadable operstate must not filter the interface out — failing open beats scanning nothing.
         assert NetworkScanner.iface_is_down("nope", sysfs=tmp) is False
+
+
+def test_cleanup_prunes_only_timestamped_scans_not_the_recon_datasets():
+    """clean_scan_results globbed the whole scan_results dir and kept the 20 newest files by
+    mtime. Two timestamped files land there per scan, so the persistent recon CSVs — which are
+    rewritten only when a target answers — became the oldest entries and were deleted. Observed
+    on 2026-08-14: http_fingerprints.csv had rows at 21:06 and was gone by 22:05, taking the
+    action planner's host-type prior and WebTemplateScan's match_server gate with it."""
+    import os, tempfile, types
+    from actions.scanning import NetworkScanner
+
+    keep = ["http_fingerprints.csv", "ble_devices.csv", "wifi_aps.csv", "wifi_clients.csv",
+            "snmp_enum.csv", "web_template_findings.csv"]
+    with tempfile.TemporaryDirectory() as tmp:
+        # Recon datasets written first => oldest by mtime => what the old glob deleted first.
+        for i, name in enumerate(keep):
+            path = os.path.join(tmp, name)
+            with open(path, "w") as f:
+                f.write("header\n")
+            os.utime(path, (1000 + i, 1000 + i))
+        for i in range(30):                       # 30 per-scan files, newer than the datasets
+            for prefix in ("scan_", "result_"):
+                path = os.path.join(tmp, f"{prefix}192.168.1.0_{i:03d}.csv")
+                with open(path, "w") as f:
+                    f.write("header\n")
+                os.utime(path, (2000 + i, 2000 + i))
+
+        updater = types.SimpleNamespace(logger=types.SimpleNamespace(
+            info=lambda *a, **k: None, error=lambda *a, **k: None))
+        NetworkScanner.LiveStatusUpdater.clean_scan_results(updater, tmp)
+
+        left = set(os.listdir(tmp))
+        assert set(keep) <= left, f"cleanup deleted recon datasets: {set(keep) - left}"
+        pruned = sorted(f for f in left if f.startswith(("scan_", "result_")))
+        assert len(pruned) == 20, f"expected the 20 newest per-scan files, got {len(pruned)}"
+        assert pruned[0].endswith("_020.csv")     # oldest 40 of 60 pruned, newest 20 kept

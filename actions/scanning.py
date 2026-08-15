@@ -666,10 +666,18 @@ class NetworkScanner:
         
         def clean_scan_results(self, scan_results_dir):
             """
-            Cleans up old scan result files, keeping only the most recent ones.
+            Cleans up old per-scan result files, keeping only the most recent ones.
+
+            Only the timestamped files this scanner writes are prunable — `scan_<net>_<ts>.csv`
+            and `result_<net>_<ts>.csv`, two per scan. The same directory also holds the
+            persistent recon datasets (http_fingerprints, ble_devices, wifi_aps/clients,
+            snmp_enum, web_template_findings), which are never deleted: a plain '/*' glob sorted
+            by mtime ate whichever of those had gone longest without a rewrite once the directory
+            passed 20 entries.
             """
             try:
-                files = glob.glob(scan_results_dir + '/*')
+                files = (glob.glob(os.path.join(scan_results_dir, 'scan_*.csv'))
+                         + glob.glob(os.path.join(scan_results_dir, 'result_*.csv')))
                 files.sort(key=os.path.getmtime)
                 for file in files[:-20]:
                     os.remove(file)

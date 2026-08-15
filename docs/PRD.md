@@ -94,7 +94,7 @@ target; rewriting in another language; changing the e-Paper/web UX paradigm.
 | # | Requirement | Acceptance criteria |
 |---|-------------|---------------------|
 | P3-1 | **Module contract + template** | Documented base interface every action implements (`b_class`, `b_module`, `b_port`, `execute()`), plus an `examples/` template module + its test. New module addable without touching core. |
-| P3-2 | **Web UI auth** | The web dashboard (currently open on :8000) gets optional token/basic auth so loot/credentials pages aren't served unauthenticated on the LAN. |
+| ~~P3-2~~ | ~~**Web UI auth**~~ | ❌ **Dropped — decided 2026-08-05, closed 2026-08-15.** Bjorn is a single-user device on an operator-controlled network. Not a requirement; do not reopen. |
 | P3-3 | **Remote status / notifications** | Optional push of run summaries (e.g., webhook/ntfy) so the operator doesn't need to be on the LAN to see results. |
 | P3-4 | **At-rest protection for loot** | Option to encrypt/redact `data/output/` credentials/loot; secrets never logged at default log level. |
 | P3-5 | **New recon/attack module(s)** | At least one new module (e.g., HTTP service fingerprinting or SNMP enumeration) delivered against the P3-1 contract as the proof the extension path works. |

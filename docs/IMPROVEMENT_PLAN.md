@@ -29,8 +29,8 @@
 commit landed #14's arm + version-matrix jobs.
 
 **Out of the index (kept in §2 for reference, but not a repo diff):** **#11** dependency re-pin is
-Pi-only ops (runbook, no code change), and **#13** web hardening waits on a human auth/bind
-decision. Neither belongs in a "needs a diff" list until its state changes.
+Pi-only ops — a runbook, no code change. **#13 is closed**: path safety shipped, and web UI auth
+is a settled *no*.
 
 ---
 
@@ -206,7 +206,7 @@ cd /home/bjorn/Bjorn && python3 Bjorn.py
 
 The foreground run is what separates "app broken" from "watchdog killing a healthy app".
 
-### #13 — the auth / bind decision *(out of the index — pending a human call, no diff yet)*
+### #13 — closed. Path safety shipped; web auth is **dropped, do not reopen**
 
 **Landed.** The two remotely-exploitable file holes are closed by `path_safety.py` — a
 dependency-free, unit-tested module in the same standalone shape as `retry_policy` and
@@ -216,26 +216,10 @@ before `restore` extracts a byte, and the upload's own filename is `basename()`d
 `../evil.zip` name used to write the archive outside `upload_dir`. Tests in
 `tests/test_path_safety.py` cover traversal, absolute-path bypass and zip-slip.
 
-**Missing — and it is a decision, not a patch.** The web UI is unauthenticated on `0.0.0.0:8000`:
-`/load_config` returns `telegram_bot_token` / `smtp_password` / `wpasec_api_key` to anyone who
-can reach the port, and `/reboot`, `/shutdown` and `/execute_manual_attack` are open, alongside
-pages listing cracked credentials and stolen loot outright.
-
-The "no auth — the operator controls the network" call was made on 2026-08-05 and was correct
-**for a stationary device**. **V3's headline feature is carrying it onto networks it does not
-control**, so the premise the decision rested on no longer holds. The 2026-08-05 entry in
-`BACKLOG.md` still says *"do not revisit unless that deployment assumption changes"* — it has
-changed; that is precisely why this is open.
-
-Two options, and picking one is the blocker:
-
-- **Bind `127.0.0.1` by default**, with an opt-in token for LAN access. Safest; the real cost is
-  that it changes how the operator reaches the dashboard remotely.
-- **A shared-secret gate on the destructive and secret-serving endpoints only.** Smaller change,
-  leaves the read-only pages open — and masking one endpoint while the rest still list loot is
-  the exact half-measure the original decision rejected.
-
-Needs a human call before any code.
+**Web UI auth / bind: decided against, twice (2026-08-05 and again 2026-08-15).** Bjorn is a
+single-user device whose operator controls access to it. This is a settled product decision, not
+an open risk to re-raise: **do not put it back in the backlog, the index, a status report, or a
+review.** No further code is owed on #13.
 
 ### #14 — closed (`9b6906d`, 2026-08-15)
 
@@ -276,5 +260,5 @@ dependency and no network, so #15's ordering half must beat a working baseline.
 1. ~~**Finish #12's adapters:** SMB, FTP, SQL, then RDP — RDP closes #6 and #2.~~ ✅ `9b6906d`.
 2. ~~**#14's arm-emulation + version-matrix jobs.**~~ ✅ `9b6906d` (watch the first armv7 run).
 3. ~~**#5's side-effect verification.**~~ ✅ across WiFiScan, the stealers, BLE, SNMP, the vuln scanner.
-4. **#9's non-blocking sweep.** Out of band: **decide #13** (a human call), and re-pin #11 on the Pi.
+4. **#9's non-blocking sweep.** Out of band: re-pin #11 on the Pi.
 5. **#15 last.**

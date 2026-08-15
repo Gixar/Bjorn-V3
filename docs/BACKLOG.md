@@ -173,8 +173,9 @@ a past decision, needs a call before code) · Cortex export (YAGNI, no swarm).
 
 **Dropped, do not revisit:** GPS tagging and the wardriving map view (PG-6) · `device_type` netkb
 column (two separate-file precedents make it unnecessary) · Cortex `.csv.gz` export · PG-5 plugin
-system (folded into the P3-1 module contract) · **web UI authentication** (decided 2026-08-05 —
-single-user device on an operator-controlled network; see the security-review section above) ·
+system (folded into the P3-1 module contract) · **web UI authentication / bind-to-localhost**
+(decided 2026-08-05, **re-affirmed and closed 2026-08-15** — single-user device on an
+operator-controlled network. Settled. Do not raise it again in a report, review or backlog) ·
 **every display/panel item** (decided 2026-08-15 — the panel in use works, and no hardware change
 is planned): **#113** V4 unreadable, **#166** tri-color 2.13" B/C, the `epd_test.py` `Thread-1`
 notice, and the display half of **#122**. Upstream panel reports are not this tool's bugs.

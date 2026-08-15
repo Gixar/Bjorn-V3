@@ -684,12 +684,11 @@ class Verifier:
 
     # -- 4 ------------------------------------------------------------------
     def display_and_ui(self):
-        self.r.section("4. Display + web UI (#122, #113, #176)")
+        self.r.section("4. Display + web UI (#122, #176)")
         self.r.info("epd_type", self.cfg("epd_type"))
         code, size = self.api.status_code("/screen.png", timeout=15)
         if code == 200 and size > 1000:
-            self.r.verdict(PASS, "#122 framebuffer renders",
-                           f"screen.png {size} bytes - compare it against the physical panel for #113")
+            self.r.verdict(PASS, "#122 framebuffer renders", f"screen.png {size} bytes")
         else:
             self.r.verdict(FAIL, "#122 framebuffer renders", f"HTTP {code}, {size} bytes")
         portlist = (self.api.get("/load_config") or {}).get("portlist")

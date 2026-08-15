@@ -260,5 +260,8 @@ dependency and no network, so #15's ordering half must beat a working baseline.
 1. ~~**Finish #12's adapters:** SMB, FTP, SQL, then RDP — RDP closes #6 and #2.~~ ✅ `9b6906d`.
 2. ~~**#14's arm-emulation + version-matrix jobs.**~~ ✅ `9b6906d` (watch the first armv7 run).
 3. ~~**#5's side-effect verification.**~~ ✅ across WiFiScan, the stealers, BLE, SNMP, the vuln scanner.
-4. **#9's non-blocking sweep.** Out of band: re-pin #11 on the Pi.
-5. **#15 last.**
+4. **Stand up the weak-target lab** — [`WEAK_TARGET.md`](WEAK_TARGET.md). The connectors, the
+   credential pool and all six stealers have never run against a host that answers; every sweep to
+   date verified plumbing only. One afternoon, and it is worth more than any remaining item here.
+5. **#9's non-blocking sweep.** Out of band: re-pin #11 on the Pi.
+6. **#15 last.**

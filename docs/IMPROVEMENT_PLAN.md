@@ -14,7 +14,7 @@
 > was real (WiFiScan, the six stealers, BLE, SNMP, the vuln scanner). `CHANGELOG.md` and git
 > history hold them.
 >
-> Suite: **375 passing**. The RDP-steal FAIL from the last on-Pi sweep `0fc93ea`
+> Suite: **382 passing**. The RDP-steal FAIL from the last on-Pi sweep `0fc93ea`
 > (37 PASS / 1 FAIL) is fixed in code — RDP now carries the #6 caps via `BaseStealer` — pending
 > the next on-device sweep to confirm Section 9 reads 6/6.
 
@@ -22,7 +22,7 @@
 
 | # | Item | What is left |
 |---|---|---|
-| 15 | On-device LLM triage | not started |
+| 15 | On-device LLM triage | audit half shipped; **target re-ranking deliberately not built** — see §3 |
 
 **#12, #6, #2 and #14 are closed** — the steal adapters converged on RDP (`9b6906d`), and the same
 commit landed #14's arm + version-matrix jobs.
@@ -252,27 +252,63 @@ the first push.
 
 ---
 
-# § 3 — Not started
+# § 3 — #15, the bold bet: on-device, out-of-band LLM triage
 
-### #15 — the bold bet: on-device, out-of-band LLM triage
+The PRD's **P-AI** section names two halves. **The audit half shipped; the re-ranking half is
+deliberately not built.**
 
-**No code exists.** The PRD's entire **P-AI** section is scoped but deferred, and roughly half
-the groundwork already exists offline in `scripts/analyze_reports.py`, which summarizes
-run-reports via Claude.
+### Shipped — the defensive audit
 
-**The shape, within the PRD's own guardrails.** Between cycles — **never in the hot loop** — hand
-the redacted netKB to **Claude Haiku** to:
+`AIAudit` (`actions/ai_audit.py`) is a standalone action, so it runs in the idle window between
+cycles, never on the hot loop. It hands the redacted netkb to **Claude Haiku** and writes the
+returned Markdown to `data/output/reports/ai_audit_<ts>.md`: hosts ordered by risk, each finding
+with why it matters and the concrete fix, closing with the highest-leverage actions.
 
-- **re-rank the next targets** with a rationale short enough for the e-Paper to show;
-- **write the P2 defensive audit report** — per-finding severity plus remediation.
+**`ai_triage.py` is the part that matters** — a standalone, dependency-free module in the same
+shape as `path_safety` / `retry_policy`, holding the one rule worth testing: *no secret leaves the
+device*. It is an **allowlist, not a denylist** — each host record is built field by field
+(`IPs`, `Ports`, which checks succeeded, CVE tokens), never copied-then-scrubbed. A denylist leaks
+the day someone adds a netkb column, so a test plants exactly that regression. Cracked credentials
+and loot are not filtered at all: those live in `crackedpwd/` and `stolen_data/`, and this module
+never reads those files. MAC addresses and hostnames are dropped (hardware ID; routinely a
+person's name) — a remediation report addresses hosts by IP. Action marks are reduced to the verb,
+so `success_<ts>` becomes `success`: the timestamp is a fingerprint of operator activity and
+tells the model nothing.
 
-**Non-negotiables carried over from the PRD:** it degrades to today's heuristic planner with no
-key or no network; there is a per-run token budget; and findings expose Bjorn's actions as
-**typed, authorization-gated tools** — the harness decides what may run, not the model. It
-reasons over Bjorn's *own findings* for triage and remediation, **not** novel exploit generation.
+**The PRD's non-negotiables, and how each is met:**
 
-**Why it is last.** Smart Planner V2 already does deterministic local re-ranking with no
-dependency and no network, so #15's ordering half must beat a working baseline.
+- **Degrades, never fails.** No key, no `anthropic` package, no network, nothing alive, or not yet
+  due → `'skipped'`, which leaves no netkb mark. `b_needs_internet = True` means the orchestrator
+  skips it outright while offline. Default is **off** (`ai_triage_enabled: false`).
+- **Per-run token budget.** `ai_triage_max_hosts` caps the input, `max_tokens` caps the output,
+  and the response's token usage is logged so the spend is observable rather than assumed.
+- **Authorization-gated tools.** Satisfied by construction: the model is given **no tools at all**.
+  It receives findings and returns prose; nothing it emits can run. That is the cheapest possible
+  version of "the harness decides what may run" and the only one worth having while the output is
+  a report.
+- **Its own findings, not exploit generation.** The system prompt is explicitly defensive and
+  states that the credential itself is never supplied.
+
+**The API key is read from `ANTHROPIC_API_KEY` in the environment, never from
+`shared_config.json`** — the web UI's `/load_config` serves that file verbatim to anyone who can
+reach port 8000. Set it in the systemd unit. `anthropic` is deliberately **not** in
+`requirements.txt`: it is an opt-in extra, imported lazily, and absent from CI (hence the
+`.pylintrc` `ignored-modules` entry).
+
+### Not built — target re-ranking, and why
+
+Smart Planner V2 already re-ranks deterministically with no key, no network and no dependency, and
+this file said from the start that #15's ordering half **must beat that baseline**. Nothing here
+measures it yet, so shipping an LLM ordering now would swap a working planner for an unmeasured
+one that also costs money and needs a network. The audit half has no local equivalent, so it is
+pure addition — that asymmetry is the whole reason for the split.
+
+If the re-ranking half is wanted, the honest first step is a bake-off, not a feature: run
+`scripts/planner_benchmark.py` against a Haiku ordering on the same netkb and compare. Say so and
+it gets built.
+
+**Untested on hardware:** no live API call has been made from a Pi — the tests use an injected
+fake client. Needs `pip install anthropic` and a key on the device.
 
 ---
 
@@ -285,4 +321,4 @@ dependency and no network, so #15's ordering half must beat a working baseline.
    credential pool and all six stealers have never run against a host that answers; every sweep to
    date verified plumbing only. One afternoon, and it is worth more than any remaining item here.
 5. ~~**#9's non-blocking sweep.**~~ ✅ 2026-08-15. Out of band: re-pin #11 on the Pi.
-6. **#15 last.**
+6. ~~**#15 last.**~~ ✅ audit half shipped 2026-08-15; re-ranking half needs a bake-off first (§3).

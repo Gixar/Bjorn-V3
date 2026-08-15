@@ -2,6 +2,29 @@
 
 ## [Unreleased]
 
+### Added
+- **#15's defensive audit — findings become a remediation report.** New standalone action
+  `AIAudit` (`actions/ai_audit.py`) runs in the idle window, hands the redacted netkb to
+  **Claude Haiku**, and writes Markdown to `data/output/reports/`: hosts ordered by risk, each
+  finding with why it matters and the concrete fix. Off by default (`ai_triage_enabled: false`);
+  `anthropic` is an opt-in extra, imported lazily and kept out of `requirements.txt`.
+  **The key is read from `ANTHROPIC_API_KEY` in the environment, never from
+  `shared_config.json`** — `/load_config` serves that file to anyone who can reach port 8000.
+  New `ai_triage.py` is the part that matters: a standalone, dependency-free redaction module
+  (same shape as `path_safety`/`retry_policy`) built as an **allowlist, not a denylist** — each
+  host record is assembled field by field (IP, ports, which checks succeeded, CVE tokens), never
+  copied-then-scrubbed, so a netkb column added later cannot leak by default. Credentials and loot
+  are never filtered because they are never read. MACs and hostnames are dropped; `success_<ts>`
+  is reduced to `success` (the timestamp fingerprints operator activity and teaches the model
+  nothing). Guarded by a planted denylist regression. Every degradation path — no key, no SDK, no
+  network, nothing alive, not yet due, or the call failing — returns `'skipped'`, leaving no netkb
+  mark. Token budget is capped at both ends (`ai_triage_max_hosts` in, `max_tokens` out) and the
+  usage is logged. The model gets **no tools**, which is the cheapest possible form of the PRD's
+  "the harness decides what may run".
+  **Target re-ranking is deliberately not built** — Smart Planner V2 already re-ranks
+  deterministically with no key and no network, and the plan required #15's ordering half to beat
+  that baseline; nothing measures it yet, so a bake-off comes before the feature.
+
 ### Changed
 - **The vulnerability sweep no longer blocks the cycle (#9 closed).** `_run_vuln_scans` waited on
   its pool, so with each nmap bounded at 300s (#4) and 2 workers, a ten-host sweep held the whole

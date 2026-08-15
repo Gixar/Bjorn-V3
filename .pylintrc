@@ -70,7 +70,9 @@ ignore-patterns=^\.#
 # Unix pattern matching.
 # Pi-only hardware libs: absent on the x86 CI runner by design (see requirements.txt), so
 # --errors-only must not raise import-error for them. Everything else installs in CI.
-ignored-modules=gpiozero,lgpio,spidev
+# gpiozero/lgpio/spidev are Pi-only; anthropic is an opt-in extra the #15 AI audit imports
+# lazily, so it is deliberately absent from requirements.txt and from the CI environment.
+ignored-modules=gpiozero,lgpio,spidev,anthropic
 
 # Python code to execute, usually for sys.path manipulation such as
 # pygtk.require().

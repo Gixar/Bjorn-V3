@@ -18,7 +18,7 @@ _BOOL_KEYS = ("manual_mode", "websrv", "debug_mode", "scan_vuln_running",
               "adaptive_scan_interval", "smart_planner_enabled",
               "offline_mode_enabled", "wifi_autojoin",
               "wifi_autojoin_open", "bettercap_enabled", "bettercap_arp_spoof",
-              "bettercap_sniff", "bettercap_pwn_enabled")
+              "bettercap_sniff", "bettercap_pwn_enabled", "ai_triage_enabled")
 # Keys that must be present and a string. Deliberately only the new Bettercap credentials for now:
 # folding the older string keys (wifi_scan_iface, telegram_bot_token, smtp_host, ...) in here would
 # turn a saved config holding a JSON null into a startup failure on upgrade, for no benefit anyone
@@ -30,7 +30,7 @@ _NONNEG_INT_KEYS = (
     "startup_delay", "scan_interval", "scan_vuln_interval",
     "failed_retry_delay", "success_retry_delay", "ref_width", "ref_height",
     "battery_shutdown_percent", "bruteforce_threads", "host_parallel", "rustscan_batch_size",
-    "wpasec_interval", "telegram_min_interval",
+    "wpasec_interval", "telegram_min_interval", "ai_triage_interval", "ai_triage_max_hosts",
     "ble_scan_duration", "ble_scan_interval", "ble_scan_interval_offline", "smtp_port",
     "wifi_scan_duration", "wifi_scan_interval", "wifi_scan_channel",
     "wifi_scan_interval_offline", "offline_cycle_interval", "comment_info_ratio",

@@ -38,6 +38,7 @@ def _good_config():
         "bettercap_api_url": "http://127.0.0.1:8081", "bettercap_user": "bjorn",
         "bettercap_password": "",
         "bettercap_pwn_enabled": False, "bettercap_pwn_iface": "",
+        "ai_triage_enabled": False, "ai_triage_interval": 21600, "ai_triage_max_hosts": 25,
         "bettercap_pwn_min_rssi": -80,
     }
 

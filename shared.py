@@ -165,6 +165,12 @@ class SharedData:
             "credential_reuse": True,  # replay a cracked user:password across other hosts/protocols (tried first); shared pool in crackedpwd/known_creds.csv
             "wpasec_api_key": "",      # wpa-sec.stanev.org API key (secret, user-supplied); empty = wpa-sec import disabled
             "wpasec_interval": 3600,   # min seconds between wpa-sec fetches (throttle; 0 = every idle cycle)
+            # #15 AI audit. The API key is NOT here on purpose: /load_config serves this file to
+            # anyone who can reach port 8000, so the key is read from the ANTHROPIC_API_KEY
+            # environment variable instead (set it in the systemd unit).
+            "ai_triage_enabled": False,   # opt-in: needs a key, a network and an Anthropic account
+            "ai_triage_interval": 21600,  # min seconds between audits (6h; 0 = every idle cycle)
+            "ai_triage_max_hosts": 25,    # input half of the per-run token budget
             "ref_width" :122 ,
             "ref_height" : 250,
             "epd_type": "epd2in13_V4",

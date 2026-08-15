@@ -66,6 +66,6 @@ jobs:
       - name: Lint (errors only) — core modules + the original four
         run: >
           pylint --rcfile=.pylintrc --errors-only
-          retry_policy.py config_validation.py
+          retry_policy.py config_validation.py ai_triage.py
           shared.py utils.py orchestrator.py base_connector.py telegram_client.py
           scripts/ tests/

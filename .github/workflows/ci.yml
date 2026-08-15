@@ -32,7 +32,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Run pytest on armv7 via QEMU
-        uses: uraimo/run-on-arch-action@v2
+        uses: uraimo/run-on-arch-action@ac33288c3728ca72563c97b8b88dda5a65a84448  # v2
         with:
           arch: armv7
           distro: ubuntu22.04

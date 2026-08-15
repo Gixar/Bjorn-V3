@@ -387,16 +387,9 @@ the first is a real defect in new code and should be Tier 1.
    the network is hostile enough to have blocked Telegram. *Fix:* refuse to send when the
    connection is not encrypted, rather than silently downgrading; if the LAN-relay case is worth
    keeping, it needs its own explicit opt-in key, not a silent `pass`.
-2. ~~**[Tier 3, M–L] The unauthenticated web UI serves secrets via `/load_config`.**~~
-   ❌ **WON'T FIX — decided 2026-08-05.** The finding is accurate: the config endpoint returns the
-   whole JSON, `telegram_bot_token` / `smtp_password` / `wpasec_api_key` included, to anyone who can
-   reach port 8000. It is also **pre-existing and systemic rather than new** — the same server
-   offers Reboot/Shutdown, manual attacks, and pages listing cracked credentials and stolen loot
-   outright, so masking one endpoint would fix nothing while implying the rest were safe. Adding
-   real auth means auth + session + every page, and the project doesn't want it: Bjorn is a
-   single-user device on a network its operator controls. **Do not revisit** unless that
-   deployment assumption changes. *(The Wave 4 `load_config` default-merge did not widen this:
-   unset keys are empty strings, and a key that has ever been saved was already in the file.)*
+2. ~~**[Tier 3, M–L] Web UI auth.**~~ ❌ **WON'T FIX — decided 2026-08-05, closed 2026-08-15.**
+   Bjorn is a single-user device on a network its operator controls. Settled; see the
+   "Dropped, do not revisit" list above. Not restated here, and not to be re-raised.
 
 ## Wave 3 — implemented 2026-08-03 (no hardware required)
 

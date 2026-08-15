@@ -2,6 +2,41 @@
 
 ## [Unreleased]
 
+### Added
+- **The last four steal modules are on `base_stealer` — all six now share one flow (#12 closed).**
+  `steal_files_smb`, `steal_files_ftp`, `steal_data_sql` and `steal_files_rdp` became thin adapters
+  on `BaseStealer`, joining SSH and Telnet; the parent gate, latch reset, credential load,
+  run-token watchdog, credential loop, outcome contract and #6 budgets exist once (−891 lines
+  across the four). The base grew one seam — an overridable `harvest(conn, ip, row)` (default
+  find-then-steal loop) — so the two modules that don't fit the ROOT/walk shape keep their own:
+  **SMB** iterates shares, **SQL** iterates tables and treats a successful auth with zero tables
+  as the win (login-is-the-win, the pre-#12 behaviour, so a cracked credential is never dropped).
+  FTP and SMB try anonymous/guest first by prepending it to the credential list. `b_*` globals are
+  unchanged, so the orchestrator needed no edit, and `test_steal_modules.py` now asserts all six
+  use `open_session`.
+- **`_last_error` reaches the web panel (#5a).** `utils.get_stats_snapshot` exposes
+  `bettercap_last_error` (from `bettercap_poller._last_error`, which the poller already recorded
+  and nothing surfaced), and the `/bettercap` panel shows it in red under the status line when
+  non-null. A wrong password that used to fail silently now says so on screen.
+
+### Fixed
+- **RDP steal was uncapped and could only copy the Pi's own disk (#6 + #2 closed).** The
+  conversion carries both closes. #6: RDP was the last of six modules with no byte or free-space
+  caps; it now gets `check_budget` / `fits_budget` / `note_bytes` from the base, so
+  `bjorn_verify` Section 9 should read **6/6 capped** on the next device sweep. #2: the old
+  `/drive:shared,/mnt/shared` redirect shared the *Pi's* directory *into* the session and walked
+  it locally — copying Bjorn's own files and reporting success. RDP now runs `+auth-only` to
+  verify the credential and hands file collection to the SMB stealer on the same IP (a host with
+  RDP:3389 almost always exposes SMB:445, and the cracked credential is already in the pool). The
+  `_looks_like_local_root` guard stays as a backstop; `test_command_injection.py` was updated for
+  the new `steal_file(conn, remote_file, local_dir)` signature.
+
+### Security
+- **The one third-party GitHub Action is pinned to a commit SHA.**
+  `uraimo/run-on-arch-action` (the armv7 CI job added for #14) was pinned to the movable `@v2`
+  tag; a moved or compromised tag would run arbitrary code with `github.token`. Pinned to
+  `ac33288` (`# v2`). The `actions/*` steps stay on tags — first-party, lower risk.
+
 ### Verified
 - **#14 — the CI gate works, and it can fail.** Confirmed 2026-08-14 against `c132a0c`: the run
   completed `success` with **both** jobs green, including the `lint` job's "Lint (errors only) —

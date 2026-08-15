@@ -18,7 +18,7 @@
 
 | # | Item | What is left |
 |---|---|---|
-| 5 | Outcome contract | `_last_error` web panel · per-action side-effect verification |
+| 5 | Outcome contract | per-action side-effect verification (`_last_error` panel done) |
 | 9 | Vuln scan off critical path | non-blocking, planner-scheduled sweep |
 | 11 | Dependency re-pin | refresh the stale 2024 pins (Pi-only, wheels-only) |
 | 13 | Web hardening | the auth / bind decision (needs a human call) |
@@ -81,8 +81,9 @@ failed polls a day** with nothing on screen.
    on a `*_enabled`/`*_interval` setting must have a `'skipped'` return — the `WiFiScan: success=4`
    bug generalised off its hardcoded four-module list. Both were verified to **fail** on a planted
    break, not just pass on clean code — the #14 lesson.
-2. **`_last_error` on the web panel.** The poller records it; nothing surfaces it. One field in
-   the stats snapshot and one line in the bettercap panel.
+2. ~~**`_last_error` on the web panel.**~~ ✅ **done `9b6906d` (2026-08-15).**
+   `utils.get_stats_snapshot` exposes `bettercap_last_error` (from
+   `bettercap_poller._last_error`); the bettercap panel shows it in red when non-null.
 3. **Per-action side-effect verification.** The real work. Modules still self-report: success
    should mean the capture *wrote rows*, the radio *is* `managed`. **This defect class has now
    bitten four times** — `WiFiScan: success=4` for an action that never completed a capture,
@@ -221,6 +222,6 @@ dependency and no network, so #15's ordering half must beat a working baseline.
 ## Sequencing
 
 1. ~~**Finish #12's adapters:** SMB, FTP, SQL, then RDP — RDP closes #6 and #2.~~ ✅ `9b6906d`.
-2. **#5's `_last_error` panel**, then its side-effect verification.
+2. **#5's side-effect verification** (the `_last_error` panel is done, `9b6906d`).
 3. **Decide #13** (a human call, not a diff), then #9's non-blocking sweep and #14's extra jobs.
 4. **#15 last.**

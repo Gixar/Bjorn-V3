@@ -1,392 +1,32 @@
-# Improvement Plan — what is still open
+# Improvement Plan — what is left to build
 
-> Baseline audited: **v3.0.1-beta**. Items that are done **and** proven have been removed from
-> this file; `CHANGELOG.md` and git history hold them. What is left splits three ways by the
-> kind of effort it needs.
+> Baseline audited: **v3.0.1-beta**. This file tracks only work that **needs code**. Items that
+> were merely awaiting an on-hardware run were dropped on 2026-08-14 (they only grew the count);
+> confirm on the device when convenient via `bjorn_verify.py --save` and `BACKLOG.md`, but they
+> are not tracked here as open work.
 >
-> **Closed and removed:** **#1** RDP brute-force (Pi-verified, `bjorn_verify` Section 9) ·
-> **#4** a wall-clock timeout on every network op (locked by an AST guard) · **#7** atomic config
-> + serialized writers.
+> **Closed:** **#1** RDP brute-force · **#4** timeouts on every network op · **#7** atomic config +
+> serialized writers · **#14 CI gate** and **#12 connectors** (verified on-Pi, `0fc93ea`).
+> `CHANGELOG.md` and git history hold them.
 >
-> **#6 was removed and has been put back** — see § 2. It was recorded as *"every steal has a
-> free-space precheck + per-file/per-run byte budgets"*; it was true of three modules out of six.
-> Worth remembering when reading any other ✅ in this file: that claim survived an audit, a
-> removal, and a re-read, and was caught only by opening the files to do unrelated work.
->
-> Suite at the time of writing: **367 passing**. Last on-Pi sweep: `0fc93ea`, 2026-08-14 —
-> 37 PASS / 1 FAIL / 3 WARN / 3 SKIP, the FAIL being #6 below (see `BACKLOG.md`).
-
-## Index
-
-Four items straddle two sections — the shipped half needs a run, the unshipped half needs code.
-They are listed once in each, never described twice. A ✅ in the § 1 column means that half is
-confirmed and its entry has been deleted; the § 2 half is still open.
-
-| # | Item | § 1 run it | § 2 build it | § 3 not started |
-|---|---|---|---|---|
-| 2 | RDP + Telnet loot | Telnet steal (H) | RDP remote transport | |
-| 3 | wpa-sec upload loop | live upload (G) | | |
-| 5 | Outcome contract | | verification + panel | |
-| 6 | Steal caps | | rdp still uncapped (telnet done) | |
-| 8 | Parallel host execution | benchmark (D) | | |
-| 9 | Vuln scan off critical path | | non-blocking sweep | |
-| 10 | e-ink frame cost | refresh cadence (E) | | |
-| 11 | Live web UI + weight | browser check (B) | dependency re-pin | |
-| 12 | Base + adapters | ✅ confirmed 2026-08-14 | `BaseStealer` × 5 | |
-| 13 | Web hardening | | auth / bind decision | |
-| 14 | Real CI | ✅ confirmed 2026-08-14 | arm job + matrix | |
-| 15 | On-device LLM triage | | | ✔ |
-| — | Smart Planner V2 | observation window (F) | | |
-
----
-
-# § 1 — Awaiting confirmation
-
-**Nothing here needs a diff.** Every line of code is written and merged; what is missing is a
-run that proves it.
-
-**How this section is used:** the **Run sheet** below is numbered steps — every command, in
-order, tagged with where to run it. The lettered entries after it explain what each result
-*means*; read those only when a step is not a clean pass.
-
-**Step numbers are stable identifiers and are never reused.** When an item confirms, its steps
-and its lettered entry are deleted and the rest keep their numbers, so a note that says "step 11
-failed" stays meaningful. Currently **4–8 and 10–19 remain**; 1–3 closed **A** and step 9 closed
-**C**, both on 2026-08-14.
-
-**When an item confirms, delete it from this file** — but record the result first, in
-`docs/BACKLOG.md` (sweeps and on-Pi runs) or `CHANGELOG.md` (behaviour and tuned values).
-An item removed without a recorded result is indistinguishable from one that was never checked,
-which is the exact failure this file exists to prevent.
-
----
-
-## Run sheet
-
-**Where:** `[dev]` = repo root on your machine · `[pi]` = ssh to the Pi, `cd /home/bjorn/Bjorn`
-· `[web]` = browser. **`✓`** = what a pass looks like. Anything that is not a clean `✓` → read
-that item's letter below.
-
----
-
-**4. `[dev]`** — screen/log change tokens.
-
-```bash
-for i in 1 2 3; do
-  curl -s http://<pi>:8000/api/stats \
-  | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d["screen_version"],d["log_version"])'
-  sleep 5
-done
-```
-
-✓ non-zero, and they move between reads.
-
-**✅ Passed 2026-08-14** against `192.168.1.35`. `screen_version` and `log_version` both move.
-**Gotcha that cost a false FAIL first time round:** `log_version` reads **`0` until something has
-hit `/get_logs` at least once since boot** — `data/logs/temp_log.txt` is created lazily by
-`serve_logs` and deleted at startup by `shared.py:292`, and `_asset_mtime` correctly returns 0
-for an absent file. Curl `/get_logs` once, then re-read. (That first call also always errors —
-see the new row in `BACKLOG.md`.) Steps 5 and 6 are still outstanding, so **B is not closed**.
-
-**5. `[web]`** — `http://<pi>:8000/` → **Ctrl+Shift+R** (a cached `dashboard.js` voids this) →
-DevTools → Network → filter `screen.png`.
-
-✓ idle: no repeating `screen.png` · preview still updates when the panel changes · console on:
-`/get_logs` fires on new lines, not on a timer · restart the service: preview recovers, does not
-freeze. → **closes B**
-
-*Only `screen.png` and `/get_logs` are under test.* A repeating **`/api/stats`** every 3s is
-**correct** — it is the WebSocket-fallback poller (`dashboard.js:114`), and it feeds
-`applySnapshot`, which is itself token-gated. Reading it as a failure is the easy mistake here.
-
-**6. `[web]`** — Settings → type a comma-separated portlist → Save → reload.
-
-✓ round-trips as a list. → **closes #176**
-
----
-
-**7. `[dev]`** — deploy current `main`. *(The installer skips an existing install; never
-overwrite `config/shared_config.json`.)*
-
-```bash
-rsync -av --exclude 'data/' --exclude '.git/' --exclude 'config/shared_config.json' \
-  ./ bjorn@<pi>:/home/bjorn/Bjorn/
-ssh bjorn@<pi> 'sudo systemctl restart bjorn && systemctl is-active bjorn'
-```
-
-✓ `active`
-
-**8. `[dev]`** — restamp the commit under test.
-
-```bash
-ssh bjorn@<pi> "printf 'synced_at=%s\nsource_commit=%s\n' \
-  \"\$(date -Is)\" '$(git log -1 --format="%H %cs %s")' >> /home/bjorn/Bjorn/build_info"
-```
-
-**9. `[pi]`** — full verification sweep. ✅ **Closed C on 2026-08-14** (`0fc93ea`: 37 PASS,
-1 FAIL, 3 WARN, 3 SKIP — the FAIL is #6 on RDP/Telnet, expected). Still the standard re-check
-after any deploy, and steps 10–13 below assume it has been run.
-
-```bash
-sudo python3 scripts/bjorn_verify.py --save
-```
-
-**Always `--save`.** The next run diffs against the newest saved report and prints
-`--- Changes ---` naming what is `FIXED` / `REGRESSED` / `NEW`. Without a baseline it says so —
-which is what the 2026-08-14 run reported, because it was run without the flag.
-
-**10. `[pi]`** — is parallelism engaging?
-
-```bash
-grep "Cycle work:" data/logs/orchestrator.py.log | tail -3
-```
-
-✓ `parallel workers=2` (expected on a Zero 2 W). `workers=1` with 3+ hosts = serial fallback.
-
-**11. `[pi]`** — measure it. *(Needs 3+ alive hosts with open ports.)*
-
-```bash
-grep -E "Cycle work:|Action outcome:" data/logs/orchestrator.py.log | tail -30
-```
-
-✓ sum the `duration=` fields of one cycle, compare to the wall clock between its `Cycle work:`
-line and its last `Action outcome:` line → **wall ≈ sum ÷ 2**, not ≈ sum.
-
-**12. `[web]` + `[pi]`** — A/B. Settings → `host_parallel` = `1` → Save → restart → repeat step
-11 → set back to `0`.
-
-✓ serial run is measurably slower. → **closes D**
-
-**13. `[pi]`** — watch the panel ~3 min. Ghosting → lower the constant; flashing → raise it.
-
-```bash
-sudo sed -i 's/^FULL_REFRESH_EVERY_FRAMES = .*/FULL_REFRESH_EVERY_FRAMES = 30/' display.py
-sudo systemctl restart bjorn
-```
-
-✓ legible, no distracting flash, panel silent on a static screen. → **closes E**
-
----
-
-**14. `[pi]`** — after several hours on a LAN with real targets.
-
-```bash
-grep "Planner chose:" data/logs/orchestrator.py.log | tail -20
-python3 scripts/planner_report.py --path data/action_telemetry.json
-```
-
-✓ attempts accumulating · `estimated_success` moved **away from 0.5** · `duration_ewma_s`
-plausible per action. → **closes F**
-*(Reset: stop the service, delete `data/action_telemetry.json`, start it.)*
-
----
-
-**15. `[pi]`** — wpa-sec preconditions. *(Set `wpasec_api_key` on the config page first.)*
-
-```bash
-which hcxpcapngtool
-ls -la data/output/handshakes/
-```
-
-✓ the tool resolves · captures exist.
-
-**16. `[pi]`** — upload half.
-
-```bash
-grep -o '"uploaded": "[^"]*"' data/output/handshakes/index.json | head
-tail -n 30 data/logs/wpasec_import.py.log
-```
-
-✓ an `uploaded` timestamp, **one per BSSID**, and the capture visible on your wpa-sec dashboard.
-
-**17. `[pi]`** — download half.
-
-```bash
-ls -la data/output/crackedpwd/wifi_wpasec.csv
-sudo grep -n 'autoconnect-priority' /etc/NetworkManager/system-connections/wpasec-*.nmconnection
-```
-
-✓ a PSK in the CSV · priority is **`-10`**. Anything else → stop, P1 defect. → **closes G**
-
-**18. `[web]`** — manual-attack dropdown → `StealFilesTelnet` against an authorized Telnet host
-that already has a cracked credential in `data/output/crackedpwd/telnet.csv`.
-
-**19. `[pi]`** — check what actually landed.
-
-```bash
-ls -la data/output/data_stolen/
-sha256sum data/output/data_stolen/<file>
-tail -n 40 data/logs/steal_files_telnet.py.log
-```
-
-✓ hash **matches the source file** — test a binary and a `$`-containing file. A file that arrives
-*wrong* is the failure mode here; "a file appeared" is not a pass. → **closes H**
-
----
-
-## What the results mean
-
-### B. #11 — the event-driven dashboard was never opened in a browser
-
-**What landed.** `get_stats_snapshot` (`utils.py:139-140`) carries two change tokens —
-`screen_version` and `log_version`, each `os.stat(path).st_mtime_ns` via `_asset_mtime`, `0` if
-the file is absent. Both ride on the `/ws/stats` push (every `stats_ws_interval`, default 2s)
-**and** on `GET /api/stats`, so the fallback path is event-driven too.
-`dashboard.js::applySnapshot` re-fetches `screen.png` and `/get_logs` only when its stored token
-moves, and the blind `setInterval` pollers (2s image, 1.5s logs) are gone.
-
-**Why it isn't proven.** Verified by trace only. There is no JS harness, and the server helper
-sits behind the starlette import wall, so this class of change cannot be unit-tested in this
-repo — the same "confident wrong answer" shape that has bitten here before.
-
-**Pass:** tokens present, non-zero, and moving (step 4); no blind polling but still-live updates
-(step 5); portlist round-trips (step 6).
-**Fail:** three identical readings in step 4 while the panel is actively rendering means
-`_asset_mtime` is resolving the wrong path — check `sd.webdir` and `sd.webconsolelog`. Requests
-still repeating on a timer in step 5 is usually a cached `dashboard.js`; hard-reload before
-concluding anything.
-
-### D. #8 — parallel host execution has never been timed
-
-**What landed.** `process_alive_ips` groups candidates by host row (MAC) and runs each group's
-actions in planner order — so a same-host parent→child stays sequential and the child sees the
-parent's row update — while **distinct host groups run concurrently** under a
-`ThreadPoolExecutor`. Standalones stay serial (they share the radio and bettercap). A
-per-action-class lock serializes two hosts needing the same connector singleton. Cycle-end
-`write_data` is single-threaded and #7-locked.
-
-**Know what to expect before measuring.** `_host_parallel_workers` (`orchestrator.py:190`) is a
-budget, not a free-for-all:
-
-```
-budget = cores × 4
-inner  = bruteforce_threads          # resolved at init: min(8, cores×4)
-auto   = budget ÷ inner
-cap    = min(host_groups, planner_max_host_actions)   # planner default 4
-workers = min(cap, auto)
-```
-
-On a **Pi Zero 2 W** (4 cores): `budget=16`, `inner=8`, `auto=2` → with 3+ host groups,
-**`workers=2`**. The honest expectation is roughly **2× on this board**, not `1/k` for arbitrary
-`k`. If you want more, `bruteforce_threads` is what is eating the budget — that trade-off is what
-the formula encodes: outer × inner must not thrash the board.
-
-**Why it isn't proven.** The budget cap has a unit test
-(`test_host_parallel_worker_count_stays_within_budget`). The wall-clock win does not.
-
-**Pass:** wall clock at `host_parallel: 0` is meaningfully below the serial run, in the direction
-of `sum ÷ 2` on this board.
-**Fail — two distinct failures, do not conflate them:**
-
-- **wall ≈ sum despite `workers=2`** — the per-action-class lock is serializing everything, i.e.
-  the hosts are contending on the same connector singleton. Expected if both only offer SSH;
-  retest with mixed services before calling it a defect.
-- **the parallel run is *slower*** — the board is thrashing. Lower `bruteforce_threads` before
-  lowering `host_parallel`.
-
-**Record:** both wall-clock numbers, the host/action counts, and the board. An unqualified
-speedup figure is exactly the claim this repo has learned not to make.
-
-### E. #10 — the e-ink refresh cadence was picked, not tuned
-
-**What landed.** The render loop's EPD write is a single `Display._display_frame(image)` that
-mirrors `_write_screen_png`'s byte-compare gate: `image.tobytes()` is compared against the last
-frame pushed and the panel write is **skipped when unchanged**. The duplicate `display_partial`
-call is gone, `init_partial_update()` runs only when actually writing, and a full refresh fires
-every `FULL_REFRESH_EVERY_FRAMES` (`display.py:35`, currently **60** ≈ once/min) via
-`EPDHelper.display_full` + the existing `init_full_update`.
-
-**Why it isn't proven.** 60 is a guess. Ghosting and flashing are physical properties of the
-panel — no test can see them. This is the calibration knob a minimal model cannot infer.
-
-Note this device runs `epd2in13_V3`; a V4 panel may want a different value (see the #113 note in
-`BACKLOG.md` — that bug is blocked on buying a V4 panel).
-
-**Pass:** legible after several minutes, no distracting flash, panel quiet on a static screen.
-**Record:** the chosen value **and the panel model** in `CHANGELOG.md`. It is a knob, not a bug —
-marked `ponytail:` in the source.
-
-### F. Smart Planner V2 — learning has never seen a real target
-
-**What landed.** A deterministic local-adaptation layer, no LLM and no new dependency: the
-planner blends its static heuristic with a **Beta-smoothed success rate** and an **EWMA
-duration** per action, learned into `data/action_telemetry.json` (atomic write, bounded to 512
-records, no secrets or loot, gitignored). Retries became `(action, target)`-scoped with
-cause-aware backoff. `action_outcome.py`'s `ActionOutcome`/`normalize_outcome` arrived in the
-same batch — that is also #5's typed contract. Off-switch `smart_planner_enabled` (default true)
-restores legacy scoring.
-
-**Why it isn't proven.** The `+536%` useful-work/hour figure is from the synthetic
-`mixed_lab_v1` fixture in `scripts/planner_benchmark.py` — a deterministic **scheduling
-simulation** with precomputed outcomes. It is an ordering regression test, not a field promise,
-and the file says so. No telemetry has ever been collected against a real network. This is the
-one item that cannot be rushed: estimates start at their priors and only separate with attempts.
-
-**Pass — three things, in order of what matters:**
-
-- attempts accumulating and `estimated_success` moved **away from 0.5** for actions with history;
-- `duration_ewma_s` in the right order of magnitude per action — a brute-force reading as 0.1s
-  means it is returning early, not succeeding fast;
-- the resulting order is defensible: cheap high-yield actions first. That is the whole claim.
-
-**Fail:** if the ordering looks worse than the static heuristic on a real network, set
-`smart_planner_enabled: false` and record why. That is what the off-switch is for.
-
-### G. #3 — the wpa-sec loop has never talked to wpa-sec
-
-**What landed.** `wpasec_import.py` uploads *then* downloads, closing the capture → crack →
-auto-join chain. A completeness gate runs `hcxpcapngtool -o out.hc22000 <pcap>` and treats
-non-empty output as a real EAPOL/PMKID capture (tool missing → log + skip, never a crash);
-complete captures are deduped **by BSSID** so one AP uploads once; the multipart POST goes to
-`?api` with `Cookie: key=`; the index entry is stamped `uploaded` with an ISO timestamp,
-atomically, and `bettercap_pwn.build_index` carries `uploaded`/`complete`/`hc22000` forward across
-a re-index. `_urlopen`/`_which`/`_spawn` are injectable, so the whole path tests offline.
-`hcxtools` is installer-provisioned since `83349da` — before that the upload half silently
-no-opped on a fresh install.
-
-**Why it isn't proven.** No live upload has ever happened; everything above is exercised against
-injected fakes.
-
-**Pass — two separate claims, confirm them separately:** an `uploaded` stamp plus the capture
-visible on the wpa-sec dashboard (upload); a PSK in `wifi_wpasec.csv` plus a `wpasec-<ssid>`
-profile carrying `autoconnect-priority=-10` (download).
-
-**That priority is load-bearing.** A cracked network must never outrank Bjorn's own uplink — the
-author's rewrite dropped it once and it was restored on integration; `test_nmconnection_contents`
-pins it.
-
-**Fail:** *"hcxpcapngtool not installed"* → the install predates `83349da`;
-`sudo apt-get install -y hcxtools`. Complete captures with no stamp and no error → check the API
-key and that the POST reached `?api`.
-
-### H. #2 — Telnet steal has never run against a live host
-
-**What landed.** The base64 download was rebuilt so both historical failure modes are
-*structurally* impossible rather than merely fixed:
-
-- markers carry **underscores**, outside the base64 alphabet, so a marker can never collide with
-  payload bytes;
-- the remote command **splits the literals with `''`**, so the shell's command-echo carries
-  `__BJORN''_B64_...` and not the contiguous marker `read_until` scans for — the echo can no
-  longer be mistaken for the payload boundary.
-
-Reliability is now at parity with SSH/RDP: connect + read timeouts, latch reset per run, a
-`run_token`-guarded daemon timer, `telnet_connected` actually set on connect, and a bounded,
-prompt-independent `find`. Telnet is back in `test_steal_modules.py::MODULES`, plus
-`test_telnet_download_is_binary_safe_and_echo_proof`, which round-trips all 256 byte values and a
-`$`-laden payload through a fake login shell reproducing the command-echo ordering.
-
-**Why it isn't proven.** Unit-verified only. It also assumes `base64` exists on the target
-(busybox or coreutils); if absent, the read yields nothing and the file is skipped with a logged
-warning — never a crash, but never any loot either.
-
-**Pass:** hashes match, including for a binary file and one containing `$`.
-**Fail — the failure mode here is a file that arrives and is *wrong*,** not one that is missing.
-A plausible-looking but truncated file is exactly what the old `cat` + `read_until(b"$")`
-implementation produced. A *missing* file with *"base64 not found"* in the log is the benign
-case — the target lacks the tool and the skip is working as designed.
-
-*(RDP loot is the other half of #2 and is not here — it has no code yet. See § 2.)*
+> Suite: **367 passing**. Last on-Pi sweep `0fc93ea` (2026-08-14): 37 PASS / 1 FAIL — the FAIL is
+> #6 below (RDP steal uncapped).
+
+## Index — what needs a diff
+
+| # | Item | What is left |
+|---|---|---|
+| 12 | Base + adapters | convert SMB, FTP, RDP, SQL steal modules (SSH + Telnet done) |
+| 6 | Steal caps | RDP steal uncapped — lands when its adapter converts |
+| 2 | RDP loot | RDP remote transport — lands as one adapter method |
+| 5 | Outcome contract | `_last_error` web panel · per-action side-effect verification |
+| 9 | Vuln scan off critical path | non-blocking, planner-scheduled sweep |
+| 11 | Dependency re-pin | refresh the stale 2024 pins (Pi-only, wheels-only) |
+| 13 | Web hardening | the auth / bind decision (needs a human call) |
+| 14 | Real CI | arm-emulation job · Python version matrix |
+| 15 | On-device LLM triage | not started |
+
+**#12, #6 and #2 converge on the RDP adapter** — one conversion closes all three.
 
 ---
 
@@ -652,19 +292,14 @@ key or no network; there is a per-run token budget; and findings expose Bjorn's 
 reasons over Bjorn's *own findings* for triage and remediation, **not** novel exploit generation.
 
 **Why it is last.** Smart Planner V2 already does deterministic local re-ranking with no
-dependency and no network, so #15's ordering half must beat a working baseline — and §1 F is what
-establishes what that baseline actually achieves. Do F before committing to this.
+dependency and no network, so #15's ordering half must beat a working baseline.
 
 ---
 
 ## Sequencing
 
-1. **§ 1 first — it costs no code.** Run-sheet steps 4–6 need only a reachable Pi and a browser;
-   7–13 are one hands-on Pi session, and `bjorn_verify --save` (step 9) is the highest-value
-   single command in this file. Confirming before building stops the next change landing on an
-   unproven base — and C in particular is checking a verifier that has never run against the code
-   it now has to resolve.
-2. **§ 2 in order:** `BaseStealer` (#12) → RDP transport (#2) → #5's lint, then its `_last_error`
-   panel, then side-effect verification.
+1. **Finish #12's adapters:** SMB, FTP, SQL, then **RDP** — RDP closes #6 (caps) and #2 (remote
+   transport) in the same conversion.
+2. **#5's `_last_error` panel**, then its side-effect verification.
 3. **Decide #13** (a human call, not a diff), then #9's non-blocking sweep and #14's extra jobs.
-4. **§ 3 last:** #15, and only after §1 F says what the deterministic planner already delivers.
+4. **#15 last.**

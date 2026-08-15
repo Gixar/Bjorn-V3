@@ -159,4 +159,7 @@ data/output/vulnerabilities/*
 !data/output/vulnerabilities/.gitkeep
 data/output/scan_results/*
 !data/output/scan_results/.gitkeep
+# bjorn_verify.py artifacts — a report and a pip snapshot per run; device state, not source.
+data/output/verify_*.txt
+data/output/pip_freeze_*.txt
 bjorn_reports_*.tar.gz

@@ -99,18 +99,19 @@ def test_smb_connector_passes_a_malicious_password_as_one_argument():
 
 
 def test_steal_files_rdp_passes_a_malicious_password_as_one_argument(monkeypatch):
-    # connect_rdp mkdir's its hardcoded '/mnt/shared' staging dir before it builds the command.
-    # As root on the Pi that succeeds; on a non-root CI runner it raises PermissionError, the
-    # module's broad `except Exception` swallows it, and Popen is never reached — so this test
-    # asserted nothing on Linux while passing on Windows, where '/mnt/shared' resolves to a
-    # creatable C:\mnt\shared. The staging directory is not the property under test.
+    # #12: open_session (was connect_rdp). Auth-only; no /mnt/shared staging mkdir.
+    # FakeProc returns returncode=1 by default; open_session raises on that, so we
+    # still capture argv before the raise.
     monkeypatch.setattr("os.makedirs", lambda *a, **kw: None)
     for payload in PAYLOADS:
         def call(m):
             obj = m.StealFilesRDP.__new__(m.StealFilesRDP)
             obj.shared_data = SimpleNamespace(orchestrator_should_exit=False)
-            obj.rdp_connected = False
-            return m.StealFilesRDP.connect_rdp(obj, "10.0.0.5", "root", payload)
+            setattr(obj, obj.CONNECTED_FLAG, False)
+            try:
+                return m.StealFilesRDP.open_session(obj, "10.0.0.5", "root", payload)
+            except RuntimeError:
+                return None  # expected: FakeProc.returncode=1
 
         seen = _captured_argv("steal_files_rdp", call)
         assert isinstance(seen["cmd"], list) and seen["shell"] is False
@@ -135,7 +136,10 @@ def test_stealing_a_maliciously_named_file_copies_it_instead_of_running_it(tmp_p
 
     obj = mod.StealFilesRDP.__new__(mod.StealFilesRDP)
     obj.shared_data = SimpleNamespace(orchestrator_should_exit=False)
-    mod.StealFilesRDP.steal_file(obj, str(src), str(tmp_path / "out"))
+    obj._run_bytes = 0
+    obj.stop_execution = False
+    # Signature is now steal_file(conn, remote_file, local_dir); conn unused for staged copy.
+    mod.StealFilesRDP.steal_file(obj, None, str(src), str(tmp_path / "out"))
 
     assert not (tmp_path / marker).exists(), "the filename was executed — injection is back"
     assert not Path(marker).exists(), "the filename was executed — injection is back"
@@ -146,8 +150,8 @@ def test_stealing_a_maliciously_named_file_copies_it_instead_of_running_it(tmp_p
 def test_the_steal_filters_would_actually_match_such_a_name():
     """Guards the premise: if no plausible payload could pass the extension/name filters, the
     finding would be theoretical. `.flag` is a default steal extension."""
-    src = (ACTIONS / "steal_files_rdp.py").read_text(encoding="utf-8")
-    assert "steal_file_extensions" in src and "endswith" in src
+    base_src = (Path(__file__).resolve().parent.parent / "base_stealer.py").read_text(encoding="utf-8")
+    assert "steal_file_extensions" in base_src and "endswith" in base_src
     evil = "loot; touch /tmp/PWNED #.flag"
     assert any(evil.endswith(ext) for ext in [".bjorn", ".hack", ".flag"])
 

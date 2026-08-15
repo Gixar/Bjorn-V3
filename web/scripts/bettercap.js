@@ -68,6 +68,22 @@ function bcRefreshStatus() {
             const h = document.getElementById("bc-hunter-status");
             if (h) h.textContent = "status unavailable";
         });
+    // #5(a): surface BettercapPoller._last_error (via /api/stats) in red when non-null.
+    fetch("/api/stats")
+        .then((r) => r.json())
+        .then((s) => {
+            const errEl = document.getElementById("bc-last-error");
+            if (!errEl) return;
+            const msg = s.bettercap_last_error;
+            if (msg) {
+                errEl.textContent = "Last poll error: " + msg;
+                errEl.style.display = "";
+            } else {
+                errEl.textContent = "";
+                errEl.style.display = "none";
+            }
+        })
+        .catch(() => {});
 }
 
 async function bcHuntNow() {

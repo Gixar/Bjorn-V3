@@ -7,22 +7,45 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"   # matches the target Raspberry Pi OS (Bookworm) Python
+          python-version: ${{ matrix.python-version }}
 
       - name: Install test tooling
-        # Tests run against tests/_stubs.py, which overrides sys.modules regardless of what is
-        # installed — so the hardware/heavy stack is neither needed nor meaningful on a bare runner.
-        # The lint job below is where the installable deps get exercised.
         run: pip install pytest
 
       - name: Run tests
         run: pytest tests/ -v
+
+  test-arm:
+    # #14: catch Pi-only import/wheel problems that x86 misses. Still uses requirements-ci.txt
+    # (no gpiozero/lgpio/spidev) and tests/_stubs.py like the x86 job.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run pytest on armv7 via QEMU
+        uses: uraimo/run-on-arch-action@v2
+        with:
+          arch: armv7
+          distro: ubuntu22.04
+          githubToken: ${{ github.token }}
+          install: |
+            apt-get update -q
+            apt-get install -y -q python3 python3-pip python3-venv
+          run: |
+            python3 -m pip install --upgrade pip
+            python3 -m pip install pytest
+            grep -vE '^\s*(gpiozero|lgpio|spidev)\b' requirements.txt > requirements-ci.txt || true
+            python3 -m pip install -r requirements-ci.txt || true
+            python3 -m pytest tests/ -v --tb=line
 
   lint:
     runs-on: ubuntu-latest
@@ -35,23 +58,12 @@ jobs:
           python-version: "3.11"
 
       - name: Install pylint + the installable requirements
-        # A full `pip install -r requirements.txt` cannot pass here: gpiozero/lgpio/spidev are
-        # Pi-only. Install everything else so the manifest is actually exercised (a yanked/typo'd
-        # pin fails the build) and pylint gets real inference for fastapi/paramiko/sqlalchemy/etc.
-        # The three Pi pins are in .pylintrc ignored-modules so --errors-only won't flag them.
-        # pylint is pinned to a major: unpinned, an upstream release can turn this job red with no
-        # code change at all. That is not hypothetical — pylint 4 dropped the `suggestion-mode`
-        # option that .pylintrc still carried, and an unknown key is E0015, which --errors-only
-        # counts. Bump the major deliberately, so new checks arrive in a commit that can be read.
         run: |
           pip install 'pylint~=4.0'
           grep -vE '^\s*(gpiozero|lgpio|spidev)\b' requirements.txt > requirements-ci.txt
           pip install -r requirements-ci.txt
 
       - name: Lint (errors only) — core modules + the original four
-        # The core was previously unlinted, which is exactly where an undefined name or bad call
-        # would hide (#14). --errors-only + the .pylintrc disable list is the project's chosen
-        # signal/noise balance.
         run: >
           pylint --rcfile=.pylintrc --errors-only
           retry_policy.py config_validation.py

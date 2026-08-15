@@ -139,6 +139,8 @@ class WebUtils:
             "screen_version": self._asset_mtime(os.path.join(sd.webdir, "screen.png")),
             "log_version": self._asset_mtime(sd.webconsolelog),
             "timestamp": datetime.now(timezone.utc).isoformat(),
+            "bettercap_last_error": getattr(
+                getattr(sd, "bettercap_poller", None), "_last_error", None),
         }
 
     @staticmethod

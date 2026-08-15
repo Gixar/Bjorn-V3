@@ -20,11 +20,11 @@ _stubs.install()
 
 MODULES = [
     ("steal_files_ssh", "StealFilesSSH", "SSHBruteforce", "open_session"),
-    ("steal_files_smb", "StealFilesSMB", "SMBBruteforce", "connect_smb"),
-    ("steal_files_ftp", "StealFilesFTP", "FTPBruteforce", "connect_ftp"),
-    ("steal_files_rdp", "StealFilesRDP", "RDPBruteforce", "connect_rdp"),
+    ("steal_files_smb", "StealFilesSMB", "SMBBruteforce", "open_session"),
+    ("steal_files_ftp", "StealFilesFTP", "FTPBruteforce", "open_session"),
+    ("steal_files_rdp", "StealFilesRDP", "RDPBruteforce", "open_session"),
     ("steal_files_telnet", "StealFilesTelnet", "TelnetBruteforce", "open_session"),
-    ("steal_data_sql", "StealDataSQL", "SQLBruteforce", "connect_sql"),
+    ("steal_data_sql", "StealDataSQL", "SQLBruteforce", "open_session"),
 ]
 
 

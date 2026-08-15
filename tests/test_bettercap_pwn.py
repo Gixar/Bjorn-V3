@@ -485,3 +485,42 @@ def test_build_cmd_only_locks_a_channel_when_one_was_chosen():
     rather than breaking every hunt."""
     assert "wifi.recon.channel" not in pwn.build_cmd("wlan1", "/out", channel=0)[-1]
     assert "set wifi.recon.channel 6" in pwn.build_cmd("wlan1", "/out", channel=6)[-1]
+
+
+def _shipped_defaults():
+    """The literal defaults in shared.get_default_config, read from source.
+
+    `shared` is a stub in this suite (tests/_stubs.py), so the class cannot be imported to ask it.
+    Parsing the dict literal is the same trick the outcome-contract guards use, and it asserts what
+    actually ships rather than what a fixture says.
+    """
+    import ast
+    tree = ast.parse((Path(__file__).resolve().parent.parent / "shared.py")
+                     .read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "get_default_config":
+            for sub in ast.walk(node):
+                if isinstance(sub, ast.Dict):
+                    return {k.value: v.value for k, v in zip(sub.keys, sub.values)
+                            if isinstance(k, ast.Constant) and isinstance(v, ast.Constant)}
+    raise AssertionError("get_default_config dict literal not found in shared.py")
+
+
+def test_hunter_is_on_by_default_and_the_master_switch_is_not():
+    """The walk case: no uplink, so the offline cycle is the hunter's whole purpose. It ships on
+    (collect-by-default, like BLE and the Wi-Fi survey) — it is passive and self-refuses on a
+    single-radio device, which is what makes it safe to default on.
+
+    `bettercap_enabled` must stay OFF, and not only because managed-mode recon is a bigger
+    posture: can_start() treats the two as mutually exclusive, so switching the master switch on
+    *disables* the hunter. Defaulting both to True would have shipped a hunter that never runs."""
+    defaults = _shipped_defaults()
+    assert defaults["bettercap_pwn_enabled"] is True
+    assert defaults["bettercap_enabled"] is False, "the master switch blocks the hunter"
+
+    ok, reason, _ = pwn.can_start(
+        SimpleNamespace(bettercap_pwn_enabled=defaults["bettercap_pwn_enabled"],
+                        bettercap_enabled=defaults["bettercap_enabled"],
+                        bettercap_pwn_iface=defaults["bettercap_pwn_iface"]),
+        wireless=["wlan0", "wlan1"], uplink="", holder="", binary=True)
+    assert ok, f"the shipped defaults must let the hunter start offline: {reason}"

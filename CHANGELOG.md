@@ -26,6 +26,19 @@
   that baseline; nothing measures it yet, so a bake-off comes before the feature.
 
 ### Changed
+- **The handshake hunter is on by default (`bettercap_pwn_enabled: true`).** Carrying Bjorn
+  somewhere with no uplink is exactly what it is for, and it did nothing: the offline cycle's
+  `_offline_idle()` only starts the hunter when that key is set, and it shipped off. It now joins
+  BLE and the Wi-Fi survey in collect-by-default. Safe to default on because it stays passive and
+  self-refuses on a single-radio device (it would otherwise hold the only path back online).
+  **`bettercap_enabled` (managed-mode recon) stays off, and that is load-bearing, not caution:**
+  `bettercap_pwn.can_start()` treats the two as mutually exclusive, so turning the master switch
+  on *disables* the hunter — defaulting both to true would have shipped a hunter that never runs.
+  Guarded by a test that reads the shipped default out of `shared.py` (the `shared` module is
+  stubbed in the suite, so a fixture would assert nothing), and `bjorn_verify` section 8a now
+  checks it — **a `shared_config.json` saved before this upgrade still wins over the new default**,
+  which is the failure that section exists to catch.
+
 - **The vulnerability sweep no longer blocks the cycle (#9 closed).** `_run_vuln_scans` waited on
   its pool, so with each nmap bounded at 300s (#4) and 2 workers, a ten-host sweep held the whole
   orchestrator for up to 25 minutes: no rescan, no connectors, no stealers, no standalone recon,

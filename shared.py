@@ -222,7 +222,16 @@ class SharedData:
             "bettercap_sniff": False,         # passive traffic sniff
             # Handshake Hunter (Stage C): monitor mode on a SECOND radio, during offline cycles.
             # Refuses to start on a single-radio device — it would hold the only path back online.
-            "bettercap_pwn_enabled": False,   # hunt for handshakes while there is no uplink
+            #
+            # ON BY DEFAULT (collect-by-default, like BLE and the Wi-Fi survey). Carrying Bjorn
+            # somewhere with no uplink is exactly what this is for, and the alternative use of that
+            # window is sleeping — so hunting costs nothing that was being spent elsewhere. It
+            # stays passive (listen + deauth-free capture) and self-refuses on a single-radio
+            # device, which is what makes it safe to default on where `bettercap_enabled` is not.
+            # Note the two are MUTUALLY EXCLUSIVE (see bettercap_pwn.can_start): switching the
+            # managed-mode master switch on *disables* the hunter, so leaving it off is what keeps
+            # this one working.
+            "bettercap_pwn_enabled": True,    # hunt for handshakes while there is no uplink
             "bettercap_pwn_iface": "",        # radio to hunt on; blank = any non-uplink radio
             "bettercap_pwn_min_rssi": -80,    # dBm (NEGATIVE): ignore APs weaker than this
             "steal_file_names": ["ssh.csv","hack.txt"],

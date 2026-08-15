@@ -814,6 +814,7 @@ class Verifier:
         # changed default - everything keeps working, it just collects nothing.
         for key, label in (("ble_scan_enabled", "BLE recon on by default"),
                            ("wifi_scan_enabled", "Wi-Fi survey on by default"),
+                           ("bettercap_pwn_enabled", "handshake hunter on by default"),
                            ("use_rustscan", "RustScan is the default engine")):
             value = self.cfg(key, "<absent>")
             if truthy(value):

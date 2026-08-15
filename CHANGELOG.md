@@ -48,6 +48,15 @@
   `bjorn_verify` Section 9 was for the connectors; both were confirmed to fail on a planted break.
 
 ### Fixed
+- **The Telnet steal is on `base_stealer` (#12), and gained the #6 caps it never had.**
+  `steal_files_telnet.py` went 257 → 185 lines; the base64/marker transport is genuinely
+  Telnet-specific and stays, but the parent gate, latch reset, credential loop and watchdog are
+  now shared. It gains a **remote size probe** (`wc -c`) before the transfer, because this
+  transport reads the whole file into memory as base64 — a size cap applied only *after* decoding
+  would let a multi-gigabyte file OOM a 512 MB Pi Zero on the way to being rejected; unknown size
+  falls through to a post-decode budget check. `open_session` now raises on a failed login rather
+  than returning `None`, which the base reads as "try the next credential". The verifier's #6
+  count is now `5/6 capped` with only RDP left.
 - **The SSH steal had no size or free-space limits at all (#6).** `steal_files_ssh` was recorded
   as covered by the steal-caps work; it never was, and neither were `steal_files_rdp` or
   `steal_files_telnet` — three of the six. SFTP could pull a file of any size onto a 512 MB Pi

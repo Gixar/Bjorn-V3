@@ -23,7 +23,7 @@ MODULES = [
     ("steal_files_smb", "StealFilesSMB", "SMBBruteforce", "connect_smb"),
     ("steal_files_ftp", "StealFilesFTP", "FTPBruteforce", "connect_ftp"),
     ("steal_files_rdp", "StealFilesRDP", "RDPBruteforce", "connect_rdp"),
-    ("steal_files_telnet", "StealFilesTelnet", "TelnetBruteforce", "connect_telnet"),
+    ("steal_files_telnet", "StealFilesTelnet", "TelnetBruteforce", "open_session"),
     ("steal_data_sql", "StealDataSQL", "SQLBruteforce", "connect_sql"),
 ]
 

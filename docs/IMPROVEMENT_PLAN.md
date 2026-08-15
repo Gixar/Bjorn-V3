@@ -27,7 +27,7 @@ confirmed and its entry has been deleted; the § 2 half is still open.
 | 2 | RDP + Telnet loot | Telnet steal (H) | RDP remote transport | |
 | 3 | wpa-sec upload loop | live upload (G) | | |
 | 5 | Outcome contract | | verification + panel | |
-| 6 | Steal caps | | rdp + telnet still uncapped | |
+| 6 | Steal caps | | rdp still uncapped (telnet done) | |
 | 8 | Parallel host execution | benchmark (D) | | |
 | 9 | Vuln scan off critical path | | non-blocking sweep | |
 | 10 | e-ink frame cost | refresh cadence (E) | | |
@@ -415,7 +415,12 @@ Both source-parsing tests were taught to follow delegation — `test_status_sett
 `bjorn_verify` Section 9 was for the connectors. Verified by planting a break in the base: both
 fired. 365 passing.
 
-**Missing.** Five adapters: SMB, FTP, RDP, Telnet, SQL. SMB and SQL need one extra seam each (SMB
+**Telnet converted (`68e61db`+):** `steal_files_telnet.py` 257 → 185 lines. Less dramatic than
+SSH because the base64/marker transport is genuinely Telnet-specific and stays; the shared flow
+still moved to the base, and it gained the #6 caps it never had (with a `wc -c` size probe before
+the in-memory base64 transfer).
+
+**Missing.** Four adapters: SMB, FTP, RDP, SQL. SMB and SQL need one extra seam each (SMB
 iterates shares, SQL iterates tables/schemas, and both plus FTP have an anonymous-access
 fallback), so expect the base to grow one hook that defaults to current behaviour — the same way
 `base_connector` grew `result_rows`/`after_queue`.
@@ -442,32 +447,30 @@ pre-#12 worker recorded the cracked credential with zero databases visible — s
 `databases or True`. Unifying them silently drops a valid credential. Both directions are pinned
 by tests. Expect the same asymmetry class in the stealers.
 
-### #6 — reopened: three of six steals never got the caps
+### #6 — reopened: caps were missing on three of six, RDP is the last
 
 **This was marked ✅ DONE and deleted from this file.** The claim was *"every steal enforces a
-free-space precheck, a per-file cap and a per-run budget"*. Actual state when counted on
-2026-08-14:
+free-space precheck, a per-file cap and a per-run budget"*. Actual state, with the closing gaps:
 
 | Module | byte caps | free-space check |
 |---|---|---|
 | `steal_files_ftp` · `steal_files_smb` · `steal_data_sql` | ✅ | ✅ |
-| `steal_files_ssh` | ✅ *(added 2026-08-14 via `base_stealer`)* | ✅ |
-| `steal_files_rdp` · `steal_files_telnet` | ❌ **none** | ❌ **none** |
+| `steal_files_ssh` | ✅ *(2026-08-14 via `base_stealer`)* | ✅ |
+| `steal_files_telnet` | ✅ *(2026-08-14 via `base_stealer`)* | ✅ |
+| `steal_files_rdp` | ❌ **none** | ❌ **none** |
 
-So the thing #6 exists to prevent — a large or hostile host filling a 512 MB Pi Zero's card — is
-still reachable through the RDP and Telnet steals. Nothing about the earlier fix was wrong; it
-simply covered the three modules whose author-supplied patch set touched them, and the completion
-was recorded as universal.
+The earlier fix was not wrong — it covered the three modules its author-supplied patch set
+touched, and the completion was recorded as universal. **RDP is the one module left**, and it
+lands free the moment that adapter converts.
 
-**Missing.** RDP and Telnet. Both land free when those adapters convert (§ #12 above): the caps
-now live on `BaseStealer` as `check_budget` / `fits_budget` / `note_bytes`, so an adapter cannot
-forget what it does not have to remember. **Do not patch them in place** — that recreates the
-sixth copy this refactor is deleting.
+**Missing.** RDP only. The caps live on `BaseStealer` as `check_budget` / `fits_budget` /
+`note_bytes`, so the adapter cannot forget what it does not have to remember. **Do not patch it in
+place** — that recreates the sixth copy this refactor is deleting.
 
 **Now machine-checked.** `bjorn_verify` Section 9 counts caps per module and fails naming the
-gaps; the 2026-08-14 sweep on `0fc93ea` reported `steal byte/space caps  4/6 capped: SSH, SMB,
-FTP, SQL` and the corresponding FAIL. This item cannot silently be recorded as done again — the
-same sweep that previously read 32 PASS / 0 FAIL was clean only because nothing asked.
+gaps; after the Telnet conversion it reads `steal byte/space caps  5/6 capped: SSH, SMB, FTP,
+Telnet, SQL` with the FAIL narrowed to RDP. This item cannot silently be recorded as done again —
+the same sweep that once read 32 PASS / 0 FAIL was clean only because nothing asked.
 
 Still deferred from the original item, and now cheap to do once on the base rather than six times:
 an atomic temp+rename per stolen file, and an inode-keyed rather than path-keyed visited-set.

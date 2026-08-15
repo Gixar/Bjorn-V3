@@ -1058,9 +1058,10 @@ class Verifier:
             (capped if (has_size and has_space) else uncapped).append(proto)
         self.r.info("steal byte/space caps", f"{len(capped)}/6 capped: {', '.join(capped) or 'none'}")
         if uncapped:
+            verb = "has" if len(uncapped) == 1 else "have"
             self.r.verdict(FAIL, "#6 every steal caps bytes and checks free space",
-                           f"{', '.join(uncapped)} have neither - a big or hostile host can fill "
-                           f"the card; they inherit the caps when converted to base_stealer")
+                           f"{', '.join(uncapped)} {verb} neither - a big or hostile host can fill "
+                           f"the card; caps land when the module converts to base_stealer")
         elif capped:
             self.r.verdict(PASS, "#6 every steal caps bytes and checks free space",
                            "all six enforce per-file/per-run budgets and a free-space precheck")

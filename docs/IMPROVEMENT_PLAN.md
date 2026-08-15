@@ -9,7 +9,10 @@
 > serialized writers · **#12 connectors** (verified on-Pi, `0fc93ea`) · **#12 stealers** (all six
 > on `BaseStealer`), **#6** steal caps, and **#2** RDP loot — the four remaining adapters converted
 > in `9b6906d` (2026-08-15) · **#14** real CI — the gate first, then the arm-emulation job + the
-> 3.11/3.12 version matrix (`9b6906d`). `CHANGELOG.md` and git history hold them.
+> 3.11/3.12 version matrix (`9b6906d`) · **#5** outcome contract — the two AST guards, the
+> `_last_error` panel, and per-action side-effect verification across every action where the gap
+> was real (WiFiScan, the six stealers, BLE, SNMP, the vuln scanner). `CHANGELOG.md` and git
+> history hold them.
 >
 > Suite: **367 passing** (`9b6906d`). The RDP-steal FAIL from the last on-Pi sweep `0fc93ea`
 > (37 PASS / 1 FAIL) is fixed in code — RDP now carries the #6 caps via `BaseStealer` — pending
@@ -19,7 +22,6 @@
 
 | # | Item | What is left |
 |---|---|---|
-| 5 | Outcome contract | per-action side-effect verification (`_last_error` panel done) |
 | 9 | Vuln scan off critical path | non-blocking, planner-scheduled sweep |
 | 15 | On-device LLM triage | not started |
 
@@ -56,7 +58,7 @@ try anonymous/guest first.
 Still deferred (cheap now that it's once on the base, not six times): atomic temp+rename per
 stolen file, and an inode-keyed rather than path-keyed visited-set. Detail in git history.
 
-### #5 — the outcome contract is two-thirds done
+### #5 — the outcome contract *(closed — all three parts done, kept as the migration reference)*
 
 **Landed.** `action_outcome.py` defines `ActionOutcome` / `OutcomeCode` / `normalize_outcome()`,
 and the orchestrator wraps **every** `execute()` — legacy strings, mappings, an `ActionOutcome`,
@@ -127,8 +129,20 @@ failed polls a day** with nothing on screen.
    "ran, found nothing" as `success` (the recon convention #5's AST-guard work established — a
    healthy host with nothing to show must not enter failed-retry backoff).
 
-   **Still to migrate:** `nmap_vuln_scanner`, and `http_fingerprint` (already guards success on
-   having rows, so low priority).
+   **nmap_vuln_scanner done.** `scan_vulnerabilities` keyed success on nmap not *raising*, but
+   `subprocess.run` doesn't raise on a non-zero exit — so a nmap that errored (bad args, no
+   permission for `-sV`, an unresolvable target) returned its stdout and execute stamped
+   `success_<ts>`, and with `retry_success` off the host was never re-scanned. It now returns
+   `None` (→ the existing `'skipped'` path) on a non-zero exit, surfacing nmap's stderr. nmap
+   exits 0 even when hosts are down, so a clean scan that found no vulns still succeeds. Planted-
+   break test.
+
+   **Effectively complete.** The remaining candidate, `http_fingerprint`, already returns
+   `'failed'` unless it built rows *and* `_save`'d them (it guards `if not rows: return 'failed'`
+   before writing), so it has no self-report gap to close. #5's side-effect verification is done
+   across every action where the gap was real: WiFiScan, the six stealers, BLE, SNMP, and the vuln
+   scanner; the connectors and http_fingerprint were examined and already tie success to their
+   writes.
 
 Migration is opt-in per module (return an `ActionOutcome`), so this is incremental, not a rewrite.
 
@@ -261,6 +275,6 @@ dependency and no network, so #15's ordering half must beat a working baseline.
 
 1. ~~**Finish #12's adapters:** SMB, FTP, SQL, then RDP — RDP closes #6 and #2.~~ ✅ `9b6906d`.
 2. ~~**#14's arm-emulation + version-matrix jobs.**~~ ✅ `9b6906d` (watch the first armv7 run).
-3. **#5's side-effect verification** (the `_last_error` panel is done, `9b6906d`).
+3. ~~**#5's side-effect verification.**~~ ✅ across WiFiScan, the stealers, BLE, SNMP, the vuln scanner.
 4. **#9's non-blocking sweep.** Out of band: **decide #13** (a human call), and re-pin #11 on the Pi.
 5. **#15 last.**

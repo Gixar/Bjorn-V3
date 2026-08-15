@@ -114,6 +114,17 @@ class NmapVulnScanner:
             # target blocks the whole vuln-scan pass (and the orchestrator idle branch).
             # 5 minutes is generous for -sV + vulners on a modest port list.
             result = subprocess.run(nmap_args, capture_output=True, text=True, timeout=300)
+            if result.returncode != 0:
+                # subprocess.run does not raise on a non-zero exit (no check=True), so without this
+                # a nmap that errored — bad args, no permission for -sV, an unresolvable target —
+                # returned its (often empty) stdout and execute() reported 'success', stamping
+                # success_<ts> so that with retry_success off the host was never re-scanned. nmap
+                # exits 0 even when every host is down, so a non-zero code is a real error: the
+                # scan did not happen (#5, the status-that-cannot-fail class). A clean scan that
+                # simply found no vulnerabilities still succeeds — that is the recon convention.
+                err = (result.stderr or "").strip().replace("\n", " ")[:300]
+                logger.error(f"nmap exited {result.returncode} for {ip}: {err or 'no stderr'}")
+                return None
             combined_result += result.stdout
 
             vulnerabilities = self.parse_vulnerabilities(result.stdout)

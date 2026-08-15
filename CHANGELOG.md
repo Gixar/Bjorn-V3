@@ -24,6 +24,16 @@
   import or an armv7 wheel problem before a device does. Not yet observed green on a real run.
 
 ### Fixed
+- **A vuln scan that nmap couldn't run no longer reports success (#5 closed).** `scan_vulnerabilities`
+  keyed success on nmap not *raising*, but `subprocess.run` (no `check=True`) doesn't raise on a
+  non-zero exit — so a nmap that errored (bad args, no permission for `-sV`, an unresolvable
+  target) returned its stdout and `execute()` stamped `success_<ts>`, and with `retry_success` off
+  the host was never re-scanned. It now returns `None` on a non-zero exit (the existing
+  `'skipped'` path) and logs nmap's stderr. nmap exits 0 even when every host is down, so a clean
+  scan that found no vulnerabilities still succeeds. This closes **#5**: the two AST guards, the
+  `_last_error` panel, and per-action side-effect verification across every action where the gap
+  was real — WiFiScan, the six stealers, BLE, SNMP, and the vuln scanner. The connectors and
+  `http_fingerprint` were examined and already tie success to their writes.
 - **BLE scan on a Pi with no Bluetooth controller no longer reports success (#5, recon).**
   `ble_scan._scan` ran three `bluetoothctl` calls and ignored all of them, so a bare Pi (no BT
   adapter) recorded a `success` every cycle. `power on` prints `No default controller available`

@@ -80,6 +80,41 @@ def test_end_to_end_sample_no_apache_sig():
     }
 
 
+def test_scan_reports_failure_when_nmap_exits_nonzero():
+    """#5 side-effect verification: nmap that exits non-zero (bad args, no -sV permission, an
+    unresolvable target) did not scan the host. subprocess.run does not raise on a non-zero exit,
+    so the pre-#5 code returned the (often empty) stdout and execute() stamped success_<ts> —
+    with retry_success off the host was then never re-scanned. A clean scan that simply found no
+    vulnerabilities still succeeds (the recon convention)."""
+    import tempfile
+    from types import SimpleNamespace
+    import actions.nmap_vuln_scanner as mod
+
+    obj = mod.NmapVulnScanner.__new__(mod.NmapVulnScanner)
+    obj.shared_data = SimpleNamespace(bjornstatustext2="", nmap_scan_aggressivity="-T4",
+                                      vuln_scan_sv=False, vuln_scan_vulners=False,
+                                      vuln_offline_cve=False)
+    obj.summary_file = tempfile.NamedTemporaryFile(delete=False, suffix=".csv").name
+    obj.scan_results = []
+    obj._cve_signatures = []
+
+    real_run = mod.subprocess.run
+
+    def run_rc(rc, stdout=""):
+        return lambda *a, **k: SimpleNamespace(returncode=rc, stdout=stdout, stderr="boom")
+
+    try:
+        mod.subprocess.run = run_rc(1)  # nmap errored
+        assert obj.scan_vulnerabilities("10.0.0.9", "h", "AA:BB", ["80"]) is None, \
+            "a non-zero nmap exit is a scan that did not happen, not a success"
+
+        mod.subprocess.run = run_rc(0, "80/tcp open http\nnothing vulnerable here\n")  # clean, no vulns
+        assert obj.scan_vulnerabilities("10.0.0.9", "h", "AA:BB", ["80"]) is not None, \
+            "a clean scan that found no vulns still succeeds"
+    finally:
+        mod.subprocess.run = real_run
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

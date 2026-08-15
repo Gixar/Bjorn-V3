@@ -18,6 +18,10 @@
   `bettercap_last_error` (from `bettercap_poller._last_error`, which the poller already recorded
   and nothing surfaced), and the `/bettercap` panel shows it in red under the status line when
   non-null. A wrong password that used to fail silently now says so on screen.
+- **CI's deferred jobs landed — #14 closed.** The `test` job runs a **3.11/3.12 version matrix**,
+  and a new **`test-arm`** job runs the suite on **armv7 via QEMU** (`uraimo/run-on-arch-action`),
+  reusing the `requirements-ci.txt` filter and `tests/_stubs.py` — the job that catches a Pi-only
+  import or an armv7 wheel problem before a device does. Not yet observed green on a real run.
 
 ### Fixed
 - **RDP steal was uncapped and could only copy the Pi's own disk (#6 + #2 closed).** The

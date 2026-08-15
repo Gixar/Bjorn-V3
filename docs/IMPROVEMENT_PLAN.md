@@ -6,9 +6,10 @@
 > are not tracked here as open work.
 >
 > **Closed:** **#1** RDP brute-force · **#4** timeouts on every network op · **#7** atomic config +
-> serialized writers · **#14 CI gate** and **#12 connectors** (verified on-Pi, `0fc93ea`) ·
-> **#12 stealers** (all six on `BaseStealer`), **#6** steal caps, and **#2** RDP loot — the four
-> remaining adapters converted in `9b6906d` (2026-08-15). `CHANGELOG.md` and git history hold them.
+> serialized writers · **#12 connectors** (verified on-Pi, `0fc93ea`) · **#12 stealers** (all six
+> on `BaseStealer`), **#6** steal caps, and **#2** RDP loot — the four remaining adapters converted
+> in `9b6906d` (2026-08-15) · **#14** real CI — the gate first, then the arm-emulation job + the
+> 3.11/3.12 version matrix (`9b6906d`). `CHANGELOG.md` and git history hold them.
 >
 > Suite: **367 passing** (`9b6906d`). The RDP-steal FAIL from the last on-Pi sweep `0fc93ea`
 > (37 PASS / 1 FAIL) is fixed in code — RDP now carries the #6 caps via `BaseStealer` — pending
@@ -20,12 +21,14 @@
 |---|---|---|
 | 5 | Outcome contract | per-action side-effect verification (`_last_error` panel done) |
 | 9 | Vuln scan off critical path | non-blocking, planner-scheduled sweep |
-| 11 | Dependency re-pin | refresh the stale 2024 pins (Pi-only, wheels-only) |
-| 13 | Web hardening | the auth / bind decision (needs a human call) |
-| 14 | Real CI | arm-emulation job · Python version matrix |
 | 15 | On-device LLM triage | not started |
 
-**#12, #6 and #2 are closed** — they converged on the RDP adapter, converted in `9b6906d`.
+**#12, #6, #2 and #14 are closed** — the steal adapters converged on RDP (`9b6906d`), and the same
+commit landed #14's arm + version-matrix jobs.
+
+**Out of the index (kept in §2 for reference, but not a repo diff):** **#11** dependency re-pin is
+Pi-only ops (runbook, no code change), and **#13** web hardening waits on a human auth/bind
+decision. Neither belongs in a "needs a diff" list until its state changes.
 
 ---
 
@@ -107,7 +110,7 @@ planner-scheduled standalone. A true non-blocking background sweep means a long-
 outside the cycle, which raises netkb write ordering against #7's locks — a larger, riskier
 change, deliberately deferred.
 
-### #11 — the dependency re-pin
+### #11 — the dependency re-pin *(out of the index — Pi-only ops, no repo diff)*
 
 **Landed.** pandas is gone end to end: `2579fc3` moved the last three modules to stdlib `csv`,
 the `pandas==2.2.3` pin was dropped from `requirements.txt` on 2026-08-14 (with its row in
@@ -153,7 +156,7 @@ cd /home/bjorn/Bjorn && python3 Bjorn.py
 
 The foreground run is what separates "app broken" from "watchdog killing a healthy app".
 
-### #13 — the auth / bind decision
+### #13 — the auth / bind decision *(out of the index — pending a human call, no diff yet)*
 
 **Landed.** The two remotely-exploitable file holes are closed by `path_safety.py` — a
 dependency-free, unit-tested module in the same standalone shape as `retry_policy` and
@@ -184,14 +187,13 @@ Two options, and picking one is the blocker:
 
 Needs a human call before any code.
 
-### #14 — the deferred CI jobs
+### #14 — closed (`9b6906d`, 2026-08-15)
 
-**Landed.** The `test` + `lint` split, the installable-subset trick for the three Pi-only pins,
-core modules under lint for the first time, and a gate that can actually fail.
-
-**Missing, deferred by choice rather than blocked:** an **arm-emulation job** matching the Pi
-target — the one that would catch a Pi-only import or an armv7 wheel problem before a device does
-— and a **Python version matrix**. Both are additive workflow changes with no code impact.
+The deferred CI jobs landed. The `test` job runs a **3.11/3.12 matrix**, and a new **`test-arm`**
+job runs the suite on **armv7 via QEMU** (`uraimo/run-on-arch-action`, pinned to a commit SHA)
+with the same `requirements-ci.txt` filter and `tests/_stubs.py` — the job that catches a Pi-only
+import or an armv7 wheel problem before a device does. Not yet observed green on a real run; watch
+the first push.
 
 ---
 
@@ -222,6 +224,7 @@ dependency and no network, so #15's ordering half must beat a working baseline.
 ## Sequencing
 
 1. ~~**Finish #12's adapters:** SMB, FTP, SQL, then RDP — RDP closes #6 and #2.~~ ✅ `9b6906d`.
-2. **#5's side-effect verification** (the `_last_error` panel is done, `9b6906d`).
-3. **Decide #13** (a human call, not a diff), then #9's non-blocking sweep and #14's extra jobs.
-4. **#15 last.**
+2. ~~**#14's arm-emulation + version-matrix jobs.**~~ ✅ `9b6906d` (watch the first armv7 run).
+3. **#5's side-effect verification** (the `_last_error` panel is done, `9b6906d`).
+4. **#9's non-blocking sweep.** Out of band: **decide #13** (a human call), and re-pin #11 on the Pi.
+5. **#15 last.**

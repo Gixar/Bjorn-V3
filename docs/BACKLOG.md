@@ -329,6 +329,43 @@ the sweep could not name the commit under test. The installer's stamp only resol
 from a git checkout — worth fixing before the next sweep, since "which code produced this report"
 is exactly what a report is for.
 
+## On-Pi sweep — 2026-08-14, `0fc93ea` (37 PASS, 1 FAIL, 3 WARN, 3 SKIP)
+
+First run of the extended `bjorn_verify.py`, on a deployed tree that finally names its own commit
+(`build_info` resolved `0fc93ea`, not `unknown`).
+
+**The one FAIL is the point of the run, not a regression:** `#6 every steal caps bytes and checks
+free space — RDP, Telnet have neither`. Both were uncapped before this sweep and before the
+previous one; the difference is that the verifier now counts caps per module
+(`steal byte/space caps  4/6 capped: SSH, SMB, FTP, SQL`) instead of not looking. **The
+2026-08-14 fresh-install sweep's "32 PASS / 0 FAIL" was clean because it never asked the
+question** — worth remembering the next time a zero-FAIL report feels like an answer.
+
+**Confirmed on hardware this run:**
+- **Section 9 covers the offensive core end to end.** All three connector guarantees still hold
+  after the six-connector conversion (`all six ordered correctly`, `task_done() is in a finally`,
+  `no UnboundLocalError`), and the new steal checks pass: the latch reset resolves through
+  `base_stealer` for the converted module, and every `execute()` returns a code
+  `normalize_outcome` recognises.
+- **The `/get_logs` boot race is fixed** — *"answers without an error body"*, 0 bytes, where the
+  old code returned an ENOENT error body on the first call after every boot.
+- **Wi-Fi recon is fully green again:** 6 APs / 7 clients captured, `release()` restored `wlan1`
+  to managed, uplink undisturbed, and Stage A's busy-radio skip held.
+- `#11`'s `screen_version` token is live on the device (the server half of the live-UI work).
+- Bettercap still off until asked; planner scoring, single idle line, offline mode, file groups,
+  help page all still pass.
+
+**Note on `log_version=0` in that report:** correct, not a defect. `data/logs/temp_log.txt` is
+created lazily by the first `/get_logs` request and deleted at every startup, and the verifier
+reads `/api/stats` *before* it calls `/get_logs`. Reordered afterwards so the token check means
+something.
+
+**Still not confirmed (3 WARN, 3 SKIP, none a defect):** web templates / SNMP / credential reuse
+need a target · usb0 needs a plugged-in host · wpa-sec and Telegram/SMTP are unconfigured.
+
+Run without `--save`, so there was no baseline for the new `--- Changes ---` delta. Use `--save`
+from now on — the delta is the reason to run this twice.
+
 ## Security review of `b624337` — 2026-08-05 (2 findings, neither fixed yet)
 
 Automated review of the pushed commit. Both are recorded here rather than patched on the spot;

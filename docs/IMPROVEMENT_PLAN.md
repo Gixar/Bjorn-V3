@@ -13,7 +13,8 @@
 > Worth remembering when reading any other ✅ in this file: that claim survived an audit, a
 > removal, and a re-read, and was caught only by opening the files to do unrelated work.
 >
-> Suite at the time of writing: **363 passing**, tip `89bccc4`, in sync with `v3/main`.
+> Suite at the time of writing: **367 passing**. Last on-Pi sweep: `0fc93ea`, 2026-08-14 —
+> 37 PASS / 1 FAIL / 3 WARN / 3 SKIP, the FAIL being #6 below (see `BACKLOG.md`).
 
 ## Index
 
@@ -31,7 +32,7 @@ confirmed and its entry has been deleted; the § 2 half is still open.
 | 9 | Vuln scan off critical path | | non-blocking sweep | |
 | 10 | e-ink frame cost | refresh cadence (E) | | |
 | 11 | Live web UI + weight | browser check (B) | dependency re-pin | |
-| 12 | Base + adapters | connectors (C) | `BaseStealer` | |
+| 12 | Base + adapters | ✅ confirmed 2026-08-14 | `BaseStealer` × 5 | |
 | 13 | Web hardening | | auth / bind decision | |
 | 14 | Real CI | ✅ confirmed 2026-08-14 | arm job + matrix | |
 | 15 | On-device LLM triage | | | ✔ |
@@ -50,7 +51,8 @@ order, tagged with where to run it. The lettered entries after it explain what e
 
 **Step numbers are stable identifiers and are never reused.** When an item confirms, its steps
 and its lettered entry are deleted and the rest keep their numbers, so a note that says "step 11
-failed" stays meaningful. Currently **4–19 remain**; 1–3 closed **A** on 2026-08-14.
+failed" stays meaningful. Currently **4–8 and 10–19 remain**; 1–3 closed **A** and step 9 closed
+**C**, both on 2026-08-14.
 
 **When an item confirms, delete it from this file** — but record the result first, in
 `docs/BACKLOG.md` (sweeps and on-Pi runs) or `CHANGELOG.md` (behaviour and tuned values).
@@ -121,14 +123,17 @@ ssh bjorn@<pi> "printf 'synced_at=%s\nsource_commit=%s\n' \
   \"\$(date -Is)\" '$(git log -1 --format="%H %cs %s")' >> /home/bjorn/Bjorn/build_info"
 ```
 
-**9. `[pi]`** — full verification sweep.
+**9. `[pi]`** — full verification sweep. ✅ **Closed C on 2026-08-14** (`0fc93ea`: 37 PASS,
+1 FAIL, 3 WARN, 3 SKIP — the FAIL is #6 on RDP/Telnet, expected). Still the standard re-check
+after any deploy, and steps 10–13 below assume it has been run.
 
 ```bash
 sudo python3 scripts/bjorn_verify.py --save
 ```
 
-✓ Section 9 prints **three PASS** verdicts. A `WARN` is **not** a pass — see **C**.
-→ **closes C**
+**Always `--save`.** The next run diffs against the newest saved report and prints
+`--- Changes ---` naming what is `FIXED` / `REGRESSED` / `NEW`. Without a baseline it says so —
+which is what the 2026-08-14 run reported, because it was run without the flag.
 
 **10. `[pi]`** — is parallelism engaging?
 
@@ -240,63 +245,6 @@ repo — the same "confident wrong answer" shape that has bitten here before.
 `_asset_mtime` is resolving the wrong path — check `sd.webdir` and `sd.webconsolelog`. Requests
 still repeating on a timer in step 5 is usually a cached `dashboard.js`; hard-reload before
 concluding anything.
-
-### C. #12 — the source verifier has not run since the four conversions
-
-**What landed.** All six connectors are adapters on `base_connector.py` (`98780d4`, −528 net
-lines). The scaffolding — `__init__` / `load_scan_file` / `worker` (with `task_done` in a
-`finally`) / `run_bruteforce` (mac resolved *before* the queue fill, so #1 cannot recur) /
-`save` / `dedupe` — exists exactly once.
-
-The load-bearing part for verification: `bjorn_verify.py` Section 9, `test_bjorn_verify.py` and
-`test_connector_netkb_reuse.py` parse each connector's *source* for those guarantees. Since they
-now live in the base, the verifiers were taught to **follow delegation** — `_effective(src)`
-returns `base_connector.py` when the connector contains the literal string
-`from base_connector import` (`bjorn_verify.py:842`). All six carry that exact line today.
-
-**Why it isn't proven.** The last full sweep ran against `83349da`, which **predates** the
-SMB / Telnet / RDP / SQL conversions. Section 9 has only ever validated the SSH+FTP shape, and
-the delegation-following logic has never had to resolve four adapters at once.
-
-**Pass — Section 9 covers both halves of the offensive core since 2026-08-14:**
-
-| Verdict | Expected detail |
-|---|---|
-| `PASS` brute force resolves mac/hostname before the queue fill | *"all six ordered correctly (the RDP fix is in the running code)"* |
-| `PASS` a raising worker still drains its queue | *"task_done() is in a finally in every connector"* |
-| `PASS` no UnboundLocalError logged at runtime | *"none in the orchestrator log"* |
-| `PASS` every steal resets its latch per run | *"the reset is inside execute() for all six (base or own file)"* |
-| `FAIL` #6 every steal caps bytes and checks free space | **expected to fail** — *"RDP, Telnet have neither"*, until those adapters convert |
-| `PASS` #5 actions return only known outcome codes | *"every execute() returns a code normalize_outcome recognises"* |
-
-Plus two info lines that are the point of the section now: `steal modules on the base  N/6` and
-`steal byte/space caps  N/6 capped: …`. **The #6 line is the one to read** — it is a per-module
-count precisely because "#6 is done" was recorded while three of six modules had no caps at all.
-
-Run with `--save`, always: the next run reads the newest saved report and prints a
-**`--- Changes ---`** block naming what became `FIXED`, what `REGRESSED`, and which checks are
-`NEW`. Without a baseline it says so rather than implying nothing moved.
-
-**Fail — what each outcome means:**
-
-- **`WARN … could not parse run_bruteforce in: <protocols>`** — the conversion-specific risk, and
-  a *silent* loss of coverage rather than an error. Delegation did not resolve: the adapter's
-  import line drifted from the literal `from base_connector import`, or the deployed
-  `base_connector.py` is missing or stale. **A WARN is not a pass** — those protocols are no
-  longer being checked at all.
-- **`FAIL … referenced before assignment`** — the #1 ordering bug is in the running code; the
-  deployed tree is behind. Re-sync (step 7) and re-run.
-- **`FAIL … task_done() is not in a finally`** — a raising connect can skip `task_done()` and hang
-  `queue.join()`, and with it the orchestrator. Regression in the base.
-- **`FAIL … N UnboundLocalError in orchestrator.py.log`** — static and runtime disagree; a
-  connector crashed mid-run. Trust the log over the source read.
-
-Section 9 also prints info lines for cracked creds per protocol and the stolen-loot count, and
-adds a `PASS` if `rdp.csv` is non-empty (*"the fix is confirmed end to end"*). Empty is the normal
-result without a crackable target.
-
-**Record:** `--save` writes the report under `data/output/`. Note the PASS/FAIL totals and the
-`build_info` commit in `docs/BACKLOG.md` alongside the previous sweeps.
 
 ### D. #8 — parallel host execution has never been timed
 
@@ -515,6 +463,11 @@ was recorded as universal.
 now live on `BaseStealer` as `check_budget` / `fits_budget` / `note_bytes`, so an adapter cannot
 forget what it does not have to remember. **Do not patch them in place** — that recreates the
 sixth copy this refactor is deleting.
+
+**Now machine-checked.** `bjorn_verify` Section 9 counts caps per module and fails naming the
+gaps; the 2026-08-14 sweep on `0fc93ea` reported `steal byte/space caps  4/6 capped: SSH, SMB,
+FTP, SQL` and the corresponding FAIL. This item cannot silently be recorded as done again — the
+same sweep that previously read 32 PASS / 0 FAIL was clean only because nothing asked.
 
 Still deferred from the original item, and now cheap to do once on the base rather than six times:
 an atomic temp+rename per stolen file, and an inode-keyed rather than path-keyed visited-set.

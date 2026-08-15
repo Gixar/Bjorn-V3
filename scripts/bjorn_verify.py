@@ -700,20 +700,6 @@ class Verifier:
         else:
             self.r.verdict(FAIL, "#176 portlist round-trips as a list", f"not a JSON array: {portlist!r}")
 
-        # #11: the dashboard re-fetches screen.png and the log only when these tokens move. A 0 is
-        # a real answer (the file is absent), which is why the log one is reported separately —
-        # log_version reads 0 on a fresh boot until something first requests /get_logs.
-        stats = self.api.get("/api/stats") or {}
-        screen_v, log_v = stats.get("screen_version"), stats.get("log_version")
-        self.r.info("change tokens", f"screen_version={screen_v} log_version={log_v}")
-        if screen_v:
-            self.r.verdict(PASS, "#11 screen change token is live",
-                           "the preview refreshes on this token instead of a 2s blind poll")
-        else:
-            self.r.verdict(FAIL, "#11 screen change token is live",
-                           f"screen_version={screen_v!r} - _asset_mtime cannot see screen.png, so "
-                           f"the preview would never refresh")
-
         # The first /get_logs after a boot used to lose a race with its own `tail -f` redirect and
         # answer an error body. Fixed by creating the file before spawning; this is the check that
         # would have caught it, and it must run against a freshly booted device to mean anything.
@@ -729,6 +715,28 @@ class Verifier:
                            + (f", {logs_body.get('message')}" if errored else "")
                            + " - if this says ENOENT on temp_log.txt, the deployed tree predates "
                              "the serve_logs fix")
+
+        # #11: the dashboard re-fetches screen.png and the log only when these tokens move.
+        # Deliberately read *after* /get_logs above: temp_log.txt is created lazily by the first
+        # such request and deleted at every startup, so reading first reports log_version=0 on a
+        # freshly booted device and invites the reader to call a correct answer a bug.
+        stats = self.api.get("/api/stats") or {}
+        screen_v, log_v = stats.get("screen_version"), stats.get("log_version")
+        self.r.info("change tokens", f"screen_version={screen_v} log_version={log_v}")
+        if screen_v:
+            self.r.verdict(PASS, "#11 screen change token is live",
+                           "the preview refreshes on this token instead of a 2s blind poll")
+        else:
+            self.r.verdict(FAIL, "#11 screen change token is live",
+                           f"screen_version={screen_v!r} - _asset_mtime cannot see screen.png, so "
+                           f"the preview would never refresh")
+        if log_v:
+            self.r.verdict(PASS, "#11 log change token is live",
+                           "the console refreshes on this token instead of a 1.5s blind poll")
+        else:
+            self.r.verdict(WARN, "#11 log change token is live",
+                           "log_version=0 after a successful /get_logs - _asset_mtime cannot see "
+                           "webconsolelog, so the console would load once and freeze")
 
     # -- 5 ------------------------------------------------------------------
     def action_evidence(self):

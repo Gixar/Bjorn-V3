@@ -24,6 +24,17 @@
   import or an armv7 wheel problem before a device does. Not yet observed green on a real run.
 
 ### Fixed
+- **A stranded Wi-Fi radio no longer reads as a successful scan (#5, side-effect verification
+  started).** `WiFiScan.execute()` called `monitor_mode.release()` and **discarded its return
+  value** — but `release()` reports `True`/`False` after verifying the radio is actually back in
+  managed mode, so a capture that left the radio stuck in monitor mode still returned `'success'`.
+  That is the exact `WiFiScan: success=4` class the outcome contract exists to kill: a status line
+  that cannot fail. The success path now returns an `ActionOutcome` — `ERROR "radio not restored"`
+  when `release()` reports the radio never came back (the run is a failure regardless of what was
+  captured, because the radio is off the network until fixed), and `SUCCESS` with an
+  `evidence_count` otherwise. A planted-break test asserts a stranded radio no longer reads as
+  success. WiFiScan is the first per-module migration of #5's side-effect verification; the
+  `skipped`/`failed` string returns are unchanged (`normalize_outcome` accepts both).
 - **RDP steal was uncapped and could only copy the Pi's own disk (#6 + #2 closed).** The
   conversion carries both closes. #6: RDP was the last of six modules with no byte or free-space
   caps; it now gets `check_budget` / `fits_budget` / `note_bytes` from the base, so

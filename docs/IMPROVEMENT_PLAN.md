@@ -94,6 +94,20 @@ failed polls a day** with nothing on screen.
    fail", and #14's lint gate that could not fail. Self-reporting is the single common cause, and
    every instance was found by a human noticing, never by a test.
 
+   **Started — WiFiScan is the first module migrated (the `success=4` action itself).** It now
+   returns an `ActionOutcome` on the success path: it *honours `monitor_mode.release()`'s verified
+   True/False* (which it previously discarded), returning `ERROR "radio not restored"` when the
+   radio is stranded in monitor mode despite a good capture, and `SUCCESS` with an
+   `evidence_count` otherwise. A planted-break test (`test_wifi_scan.py`) confirms a stranded
+   radio no longer reads as success — the check the four humans had to be. Pattern for the rest:
+   tie the success path to the observable side effect and return `ActionOutcome`; the `skipped` /
+   `failed` string returns stay as-is (`normalize_outcome` accepts both).
+
+   **Still to migrate** (return `ActionOutcome`, verify the side effect): the recon writers whose
+   success should mean rows landed — `ble_scan`, `snmp_enum`, `http_fingerprint` (already guards
+   on rows, low priority), the six connectors/stealers (success = a credential/loot actually
+   recorded), and `nmap_vuln_scanner`.
+
 Migration is opt-in per module (return an `ActionOutcome`), so this is incremental, not a rewrite.
 
 ### #9 — the vuln sweep still blocks the idle branch

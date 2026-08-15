@@ -337,6 +337,41 @@ def test_guard_rejects_blank_and_unknown_interfaces():
         _restore(saved)
 
 
+def test_wifi_scan_fails_when_the_radio_is_not_restored():
+    """#5(3) side-effect verification: a capture that runs but leaves the radio in monitor mode is
+    NOT a success. Success is earned by the radio being back on the air — read from release()'s
+    verified True/False — not by airodump having run. This is the `WiFiScan: success=4` class: a
+    status line that cannot fail tells you nothing."""
+    import types
+    from action_outcome import OutcomeCode
+    saved = (wifi_scan_mod.shutil.which, wifi_scan_mod.offline_mode.is_online,
+             wifi_scan_mod.offline_mode.scan_iface, wifi_scan_mod.monitor_mode.acquire,
+             wifi_scan_mod.monitor_mode.release)
+    cfg = types.SimpleNamespace(scan_results_dir=tempfile.mkdtemp(prefix="bjorn_wifi_test_"),
+                                wifi_scan_enabled=True, wifi_scan_iface="wlan1",
+                                wifi_scan_interval=0)
+    wifi_scan_mod.shutil.which = lambda _n: "/usr/sbin/airodump-ng"
+    wifi_scan_mod.offline_mode.is_online = lambda: True
+    wifi_scan_mod.offline_mode.scan_iface = lambda _sd: "wlan1"
+    wifi_scan_mod.monitor_mode.acquire = lambda *a, **k: (True, "", "")
+    scanner = WiFiScan(cfg)
+    scanner._capture = lambda *a, **k: ([{"BSSID": "AA:BB:CC:DD:EE:01", "ESSID": "X"}], [])
+    try:
+        wifi_scan_mod.monitor_mode.release = lambda *a, **k: False   # radio never comes back
+        outcome = scanner.execute()
+        assert outcome.code is OutcomeCode.ERROR, "a stranded radio must not read as success"
+        assert not outcome.succeeded
+
+        scanner._last_scan = 0.0  # clear the throttle for a second run
+        wifi_scan_mod.monitor_mode.release = lambda *a, **k: True    # verified back in managed
+        outcome = scanner.execute()
+        assert outcome.succeeded and outcome.evidence_count == 1, "a restored radio + a capture is a win"
+    finally:
+        (wifi_scan_mod.shutil.which, wifi_scan_mod.offline_mode.is_online,
+         wifi_scan_mod.offline_mode.scan_iface, wifi_scan_mod.monitor_mode.acquire,
+         wifi_scan_mod.monitor_mode.release) = saved
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

@@ -28,6 +28,7 @@ from logger import Logger
 from csv_safe import sanitize_row
 import monitor_mode
 import offline_mode
+from action_outcome import ActionOutcome, OutcomeCode
 
 logger = Logger(name="wifi_scan.py", level=logging.INFO)
 
@@ -126,20 +127,35 @@ class WiFiScan:
                 logger.error(f"Wi-Fi scan skipped: {detail}")
                 return 'failed'
             self._last_scan = now  # only a real capture starts the throttle
+            restored = None
             try:
                 duration = max(10, int(getattr(self.shared_data, "wifi_scan_duration", 30)))
                 aps, clients = self._capture(binp, iface, duration,
                                              getattr(self.shared_data, "wifi_scan_band", "bg"),
                                              getattr(self.shared_data, "wifi_scan_channel", 0))
             finally:
-                monitor_mode.release(iface, owner=RADIO_OWNER)
+                # Honour release()'s verified result — it returns False when the radio never came
+                # back to managed mode. Discarding it is how a stranded radio (2026-08-08) still
+                # read as `success=4`: the side effect that earns success here is "the radio is
+                # back on the air", not "airodump ran".
+                restored = monitor_mode.release(iface, owner=RADIO_OWNER)
 
             if aps or clients:
                 self._record(aps, clients)
                 logger.success(f"Wi-Fi scan: {len(aps)} AP(s), {len(clients)} client(s).")
             else:
                 logger.info("Wi-Fi scan completed; nothing heard.")
-            return 'success'
+
+            evidence = len(aps) + len(clients)
+            if restored is False:
+                logger.error(f"Wi-Fi scan: {iface} did not return to managed mode — failing the "
+                             f"run despite the capture. The radio is off the network until fixed.")
+                return ActionOutcome(OutcomeCode.ERROR, reason="radio not restored to managed",
+                                     evidence_count=evidence)
+            return ActionOutcome(
+                OutcomeCode.SUCCESS,
+                reason=(f"{len(aps)} ap / {len(clients)} client" if evidence else "nothing heard"),
+                evidence_count=evidence)
         except Exception as e:
             logger.error(f"Error in Wi-Fi scan: {e}")
             return 'failed'

@@ -14,7 +14,7 @@
 > was real (WiFiScan, the six stealers, BLE, SNMP, the vuln scanner). `CHANGELOG.md` and git
 > history hold them.
 >
-> Suite: **367 passing** (`9b6906d`). The RDP-steal FAIL from the last on-Pi sweep `0fc93ea`
+> Suite: **375 passing**. The RDP-steal FAIL from the last on-Pi sweep `0fc93ea`
 > (37 PASS / 1 FAIL) is fixed in code — RDP now carries the #6 caps via `BaseStealer` — pending
 > the next on-device sweep to confirm Section 9 reads 6/6.
 
@@ -22,7 +22,6 @@
 
 | # | Item | What is left |
 |---|---|---|
-| 9 | Vuln scan off critical path | non-blocking, planner-scheduled sweep |
 | 15 | On-device LLM triage | not started |
 
 **#12, #6, #2 and #14 are closed** — the steal adapters converged on RDP (`9b6906d`), and the same
@@ -146,7 +145,7 @@ failed polls a day** with nothing on screen.
 
 Migration is opt-in per module (return an `ActionOutcome`), so this is incremental, not a rewrite.
 
-### #9 — the vuln sweep still blocks the idle branch
+### #9 — closed. The vuln sweep is off the cycle
 
 **Landed.** `orchestrator._run_vuln_scans` replaced the serial idle-branch loop with a bounded
 `ThreadPoolExecutor(max_workers=2)` — 2, not #8's budget, because nmap is CPU-heavy rather than
@@ -155,10 +154,32 @@ retry-delay skip gates, and it fixed a latent silent lie: `skipped` now leaves *
 matching `NmapVulnScanner.execute()`'s own contract, where the old loop wrongly stamped it
 `failed_`. Covered by `test_vuln_scan_submits_only_eligible_hosts_and_stamps_results`.
 
-**Missing.** It still runs *inside* the idle branch and blocks it until done, rather than being a
-planner-scheduled standalone. A true non-blocking background sweep means a long-lived worker
-outside the cycle, which raises netkb write ordering against #7's locks — a larger, riskier
-change, deliberately deferred.
+**Closed (2026-08-15).** The sweep now *submits* and returns. `_run_vuln_scans` hands each
+eligible host to a long-lived 2-worker pool; `_apply_vuln_results` drains finished scans at the
+top of a later cycle and stamps netkb from the main thread. What it cost before: with each nmap
+bounded at 300s (#4), a ten-host sweep held the orchestrator for up to **25 minutes** — no
+rescan, no connectors, no stealers, no standalone recon, and `stop_orchestrator()`'s un-timed
+`join()` waiting it out on shutdown.
+
+**The netkb-ordering risk that deferred this turned out to be avoidable rather than manageable.**
+The worry was a background worker racing #7's locks. It doesn't, because no worker touches netkb:
+each reads a snapshot of its row and puts `(ip, result)` on a `queue.Queue`, and every write still
+happens on the main thread inside the existing single-writer discipline. **No new lock was added.**
+Three details that are not obvious:
+
+- Results are keyed by **IP, not row object** — `read_data()` builds new dicts every cycle and
+  minutes pass between submit and completion, so the submitted row no longer exists. A host that
+  left netkb meanwhile is dropped with a log line.
+- An **in-flight set** stops the interval gate stacking a second scan onto a host already being
+  scanned; it is main-thread-only, so it needs no lock either.
+- `_vuln_worker` reports in a **`finally`** — a worker that raises past its own `except` would
+  otherwise strand its IP in-flight forever, making that host permanently unscannable. That is
+  the #5 defect class (a silent permanent skip) reappearing in new clothes.
+
+**Deliberately not done: planner-scheduled.** The index called for "non-blocking, planner-scheduled".
+Scheduling it through the planner was worth doing only because the sweep blocked; now that it is
+fire-and-forget, moving the trigger from the interval gate to a planner score is a
+reorganisation with no behaviour change to show for it. Say so if you want it anyway.
 
 ### #11 — the dependency re-pin *(out of the index — Pi-only ops, no repo diff)*
 
@@ -263,5 +284,5 @@ dependency and no network, so #15's ordering half must beat a working baseline.
 4. **Stand up the weak-target lab** — [`WEAK_TARGET.md`](WEAK_TARGET.md). The connectors, the
    credential pool and all six stealers have never run against a host that answers; every sweep to
    date verified plumbing only. One afternoon, and it is worth more than any remaining item here.
-5. **#9's non-blocking sweep.** Out of band: re-pin #11 on the Pi.
+5. ~~**#9's non-blocking sweep.**~~ ✅ 2026-08-15. Out of band: re-pin #11 on the Pi.
 6. **#15 last.**

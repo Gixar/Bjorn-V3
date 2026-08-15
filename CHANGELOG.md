@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+### Changed
+- **The vulnerability sweep no longer blocks the cycle (#9 closed).** `_run_vuln_scans` waited on
+  its pool, so with each nmap bounded at 300s (#4) and 2 workers, a ten-host sweep held the whole
+  orchestrator for up to 25 minutes: no rescan, no connectors, no stealers, no standalone recon,
+  and `stop_orchestrator()`'s un-timed `join()` waiting it out on shutdown. It now *submits* to a
+  long-lived 2-worker pool and returns; `_apply_vuln_results` drains finished scans at the top of
+  a later cycle and stamps netkb there. **No new lock:** a worker reads a snapshot of its row and
+  the only thing leaving the thread is `(ip, result)` on a `queue.Queue`, so nothing touches
+  `current_data` or netkb off the main thread and #7's single-writer discipline is untouched.
+  Results are keyed by **IP**, not by row object, because `read_data()` builds new dicts every
+  cycle and minutes pass between submit and completion; a host that left netkb meanwhile is
+  dropped with a log line. An in-flight set stops the interval gate stacking a second scan on a
+  host still being scanned, and `_vuln_worker` reports in a `finally` so a worker that raises
+  can't strand its IP in-flight and make the host permanently unscannable. Shutdown is
+  `wait=False, cancel_futures=True` — a restart just rescans. Guarded by a timing assertion that
+  fails (`blocked for 10.0s`) if the wait ever comes back.
+
 ### Added
 - **The last four steal modules are on `base_stealer` — all six now share one flow (#12 closed).**
   `steal_files_smb`, `steal_files_ftp`, `steal_data_sql` and `steal_files_rdp` became thin adapters

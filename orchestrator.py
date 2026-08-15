@@ -24,6 +24,7 @@ import os
 import time
 import logging
 import threading
+import queue
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from actions.nmap_vuln_scanner import NmapVulnScanner
@@ -69,6 +70,13 @@ class Orchestrator:
         self.offline_since = None  # set on the cycle the uplink disappears, cleared when it returns
         self.last_autojoin_detail = None  # dedupes the once-a-minute auto-join outcome in the log
         self.last_hunt_detail = None      # same, for the hunter's refusal reason
+        # #9: the vuln sweep runs off the cycle. The pool is long-lived (one per orchestrator, not
+        # one per sweep) so submitting never waits; workers hand back (ip, result) on a queue and
+        # the *main thread* stamps netkb from it. Workers touch no shared state, which is why this
+        # needs no new lock — #7's single-writer discipline is untouched.
+        self._vuln_pool = None            # created on first sweep; nmap is CPU-heavy, so 2 workers
+        self._vuln_results = queue.Queue()
+        self._vuln_inflight = set()       # IPs submitted and not yet drained; main-thread only
 
     def load_actions(self):
         """Load all actions from the actions file"""
@@ -544,20 +552,30 @@ class Orchestrator:
                 (logger.info if ok else logger.error)(f"Hunter: {detail}")
 
     def _run_vuln_scans(self, current_data):
-        """Scan every eligible alive host for vulns through a small bounded pool instead of the
-        old serial `for row` loop that ran one host at a time on the critical path (#9).
+        """Submit every eligible alive host to the background vuln pool and return immediately (#9).
 
-        Each nmap is already wall-clock-bounded (#4, subprocess.run timeout), update_summary_file
-        is _summary_lock-guarded (#7), and each host mutates only its own row dict, so 2-worker
-        parallelism is safe. 2 workers, not #8's I/O budget: nmap -sV/vulners is CPU+network heavy,
-        so keep the conservative RPi-Zero cap. The success/failed retry-delay skip gates are the
-        same as before; the one behaviour fix is that 'skipped' now leaves no netkb mark (matching
-        NmapVulnScanner.execute()'s own contract — the old loop wrongly stamped it 'failed')."""
+        This used to block the idle branch until every host was done. Each nmap is bounded at 300s
+        (#4), so with 2 workers a ten-host sweep held the whole orchestrator for up to 25 minutes:
+        no rescan, no connectors, no stealers, no standalone recon, and `stop_orchestrator()`'s
+        un-timed `join()` waiting it out on shutdown. Now the sweep only *starts* here; results are
+        drained and stamped by `_apply_vuln_results` at the top of a later cycle.
+
+        Why this needs no new lock: a worker reads a snapshot of its row, and the only thing that
+        leaves the thread is `(ip, result)` on a queue. Nothing touches `current_data` or netkb off
+        the main thread, so #7's single-writer discipline is intact. `update_summary_file` was
+        already `_summary_lock`-guarded, and each nmap keeps its own #4 timeout.
+
+        2 workers, not #8's I/O budget: nmap -sV/vulners is CPU+network heavy, so keep the
+        conservative RPi-Zero cap. The success/failed retry-delay gates are unchanged."""
         eligible = []
         for row in current_data:
             if row.get("Alive") != '1':
                 continue
             ip = row["IPs"]
+            # Already scanning this host from an earlier sweep — the interval gate fires again
+            # while long nmaps are still running, and re-submitting would stack them.
+            if ip in self._vuln_inflight:
+                continue
             scan_status = row.get("NmapVulnScanner", "")
 
             # Skip a host whose vuln scan succeeded recently.
@@ -582,23 +600,61 @@ class Orchestrator:
         if not eligible:
             return
 
-        with ThreadPoolExecutor(max_workers=2, thread_name_prefix="bjorn-vuln") as pool:
-            futs = {pool.submit(self.nmap_vuln_scanner.execute, row["IPs"], row, "NmapVulnScanner"): row
-                    for row in eligible}
-            for fut in as_completed(futs):
-                row = futs[fut]
-                try:
-                    result = fut.result()
-                except Exception as e:
-                    logger.error(f"Vulnerability scan failed for {row['IPs']}: {e}")
-                    result = None
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                # 'skipped' (scan did not run) leaves no netkb mark so the host is retried — the
-                # contract NmapVulnScanner.execute() documents. Only stamp real success/failure.
-                if result == 'success':
-                    row["NmapVulnScanner"] = f'success_{timestamp}'
-                elif result is not None and result != 'skipped':
-                    row["NmapVulnScanner"] = f'failed_{timestamp}'
+        if self._vuln_pool is None:
+            self._vuln_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="bjorn-vuln")
+        for row in eligible:
+            ip = row["IPs"]
+            # Snapshot the three fields execute() reads. The row dict belongs to this cycle's
+            # current_data and is replaced by the next read_data(); the worker must not hold it.
+            snapshot = {"Ports": row.get("Ports", ""), "Hostnames": row.get("Hostnames", ""),
+                        "MAC Address": row.get("MAC Address", "")}
+            self._vuln_inflight.add(ip)
+            self._vuln_pool.submit(self._vuln_worker, ip, snapshot)
+        logger.info(f"Vulnerability sweep submitted for {len(eligible)} host(s); "
+                    f"results land on a later cycle.")
+
+    def _vuln_worker(self, ip, row_snapshot):
+        """One host's vuln scan, off the cycle. The only thing that leaves this thread is
+        (ip, result) on the queue — never a netkb write."""
+        result = None
+        try:
+            result = self.nmap_vuln_scanner.execute(ip, row_snapshot, "NmapVulnScanner")
+        except Exception as e:
+            logger.error(f"Vulnerability scan failed for {ip}: {e}")
+        finally:
+            # In a finally: a worker that raised past the except (or was interrupted) must still
+            # report, or its IP stays in _vuln_inflight forever and the host is never rescanned.
+            self._vuln_results.put((ip, result))
+
+    def _apply_vuln_results(self, current_data):
+        """Stamp finished background scans onto the freshly-read rows. Main thread only.
+
+        Results are keyed by IP, not by row object: minutes pass between submit and completion, and
+        read_data() builds new dicts every cycle, so the row that was submitted no longer exists.
+        A host that left the netkb in the meantime is dropped."""
+        applied = 0
+        while True:
+            try:
+                ip, result = self._vuln_results.get_nowait()
+            except queue.Empty:
+                break
+            self._vuln_inflight.discard(ip)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            # 'skipped' (scan did not run) leaves no netkb mark so the host is retried — the
+            # contract NmapVulnScanner.execute() documents. Only stamp real success/failure.
+            if result == 'success':
+                mark = f'success_{timestamp}'
+            elif result is not None and result != 'skipped':
+                mark = f'failed_{timestamp}'
+            else:
+                continue
+            row = next((r for r in current_data if r.get("IPs") == ip), None)
+            if row is None:
+                logger.info(f"Vuln result for {ip} dropped — the host is no longer in netkb.")
+                continue
+            row["NmapVulnScanner"] = mark
+            applied += 1
+        return applied
 
     def execute_standalone_action(self, action, current_data, planner_score=None,
                                   planner_reason=""):
@@ -688,6 +744,9 @@ class Orchestrator:
             if self.run_offline_cycle():
                 continue
             current_data = self.shared_data.read_data()
+            # #9: stamp any background vuln scans that finished while the cycle was elsewhere.
+            # Before the write_data below, so results reach netkb on the cycle they land.
+            self._apply_vuln_results(current_data)
             any_action_executed = False
             action_retry_pending = False
             # Consecutive fruitless scans raise the standalone score, so recon that needs no target
@@ -767,6 +826,11 @@ class Orchestrator:
 
             if action_retry_pending:
                 self.failed_scans_count = 0
+
+        # Don't wait on in-flight nmaps: each is bounded at 300s (#4) and a restart just rescans
+        # the host. cancel_futures drops the ones that never started.
+        if self._vuln_pool is not None:
+            self._vuln_pool.shutdown(wait=False, cancel_futures=True)
 
 if __name__ == "__main__":
     orchestrator = Orchestrator()

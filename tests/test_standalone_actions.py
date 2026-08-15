@@ -11,8 +11,10 @@ Two bugs this locks down, both found while adding a 5th standalone action:
 The methods are exercised unbound against a fake `self`, so no Orchestrator (and none of the
 hardware/network stack it constructs) is built. Heavy imports stubbed via _stubs.
 """
+import queue
 import sys
 import threading
+import time
 import types
 from pathlib import Path
 
@@ -275,10 +277,36 @@ def test_host_parallel_worker_count_stays_within_budget():
     assert _workers(0, 8, 4)(100) <= _workers(0, 1, 4)(100)
 
 
-def test_vuln_scan_submits_only_eligible_hosts_and_stamps_results():
-    """#9: the vuln sweep runs eligible alive hosts through a bounded pool. Dead hosts and hosts
+def _vuln_fake(scanner):
+    """Fake `self` carrying the #9 background-sweep state. `_vuln_worker` is bound explicitly
+    because `_run_vuln_scans` submits it as a callable off the instance."""
+    fake = types.SimpleNamespace(
+        nmap_vuln_scanner=scanner,
+        shared_data=types.SimpleNamespace(
+            retry_success_actions=False, success_retry_delay=900, failed_retry_delay=600),
+        _vuln_pool=None,
+        _vuln_results=queue.Queue(),
+        _vuln_inflight=set(),
+    )
+    fake._vuln_worker = lambda ip, snap: Orchestrator._vuln_worker(fake, ip, snap)
+    return fake
+
+
+class _InlinePool:
+    """Runs the work on submit, so the queue is populated deterministically. It still proves the
+    contract that matters: the sweep itself never stamps netkb, only the drain does."""
+    def submit(self, fn, *args):
+        fn(*args)
+
+
+def test_vuln_scan_submits_only_eligible_hosts_and_drain_stamps_results():
+    """#9: the sweep picks eligible alive hosts and hands them to the pool. Dead hosts and hosts
     that succeeded recently (retry-on-success off) are skipped; 'skipped' leaves no netkb mark
-    (the contract execute() documents — the old serial loop wrongly stamped it 'failed')."""
+    (the contract execute() documents — the old serial loop wrongly stamped it 'failed').
+
+    Stamping now happens in _apply_vuln_results, against a *later* read of netkb: the drain is
+    given a fresh list of row dicts, as read_data() would return minutes after the submit, to
+    prove results are keyed by IP rather than by the row object that was submitted."""
     scanned = []
     results = {"10.0.0.1": "success", "10.0.0.2": "skipped", "10.0.0.3": "failed"}
 
@@ -287,11 +315,8 @@ def test_vuln_scan_submits_only_eligible_hosts_and_stamps_results():
             scanned.append(ip)
             return results[ip]
 
-    fake = types.SimpleNamespace(
-        nmap_vuln_scanner=FakeScanner(),
-        shared_data=types.SimpleNamespace(
-            retry_success_actions=False, success_retry_delay=900, failed_retry_delay=600),
-    )
+    fake = _vuln_fake(FakeScanner())
+    fake._vuln_pool = _InlinePool()
     data = [
         {"Alive": "1", "IPs": "10.0.0.1", "NmapVulnScanner": ""},
         {"Alive": "0", "IPs": "10.0.0.9", "NmapVulnScanner": ""},                       # dead -> not scanned
@@ -302,10 +327,76 @@ def test_vuln_scan_submits_only_eligible_hosts_and_stamps_results():
     Orchestrator._run_vuln_scans(fake, data)
 
     assert set(scanned) == {"10.0.0.1", "10.0.0.2", "10.0.0.3"}, "dead / already-succeeded hosts must not be scanned"
-    assert data[0]["NmapVulnScanner"].startswith("success_")
-    assert data[2]["NmapVulnScanner"] == "", "'skipped' must leave no netkb mark"
-    assert data[3]["NmapVulnScanner"].startswith("failed_")
-    assert data[4]["NmapVulnScanner"] == "success_20990101_000000", "an already-succeeded host is untouched"
+    assert all(r["NmapVulnScanner"] in ("", "success_20990101_000000") for r in data), \
+        "the sweep must not stamp netkb itself — that is the main thread's job"
+
+    # A later cycle: same hosts, brand-new dicts, plus one host that has since left the netkb.
+    later = [{"Alive": "1", "IPs": ip, "NmapVulnScanner": ""} for ip in ("10.0.0.1", "10.0.0.2")]
+    applied = Orchestrator._apply_vuln_results(fake, later)
+
+    assert later[0]["NmapVulnScanner"].startswith("success_")
+    assert later[1]["NmapVulnScanner"] == "", "'skipped' must leave no netkb mark"
+    assert applied == 1, "only the success stamped; skipped writes nothing and 10.0.0.3 is gone"
+    assert fake._vuln_inflight == set(), "every drained result must clear its in-flight entry"
+
+
+def test_vuln_sweep_returns_while_the_scans_are_still_running():
+    """#9, the point of the change: _run_vuln_scans must not block the cycle.
+
+    It used to wait on the pool, so with nmap bounded at 300s (#4) and 2 workers a ten-host sweep
+    held the orchestrator for up to 25 minutes — no rescan, no connectors, no stealers, and an
+    un-timed join() on shutdown. Here the fake scanner blocks until the test releases it; the
+    sweep must still return, and a second sweep must not re-submit a host already in flight."""
+    release = threading.Event()
+    started = threading.Event()
+
+    class BlockingScanner:
+        def execute(self, ip, row, status):
+            started.set()
+            assert release.wait(timeout=10), "scanner was never released"
+            return "success"
+
+    fake = _vuln_fake(BlockingScanner())
+    data = [{"Alive": "1", "IPs": "10.0.0.1", "NmapVulnScanner": ""}]
+    try:
+        began = time.monotonic()
+        Orchestrator._run_vuln_scans(fake, data)          # would wait for the scan before the fix
+        submit_took = time.monotonic() - began
+        # The scan is still blocked and will be for seconds yet. Submitting must not have waited
+        # for it — that is the whole of #9. Generous bound: the real block is 10s, nmap's is 300s.
+        assert submit_took < 2, f"_run_vuln_scans blocked for {submit_took:.1f}s on a running scan"
+        assert started.wait(timeout=10), "the scan never started"
+        assert fake._vuln_inflight == {"10.0.0.1"}
+
+        # The interval gate fires again while the scan is still running: no second submit.
+        Orchestrator._run_vuln_scans(fake, data)
+        assert Orchestrator._apply_vuln_results(fake, data) == 0, "nothing has finished yet"
+        assert data[0]["NmapVulnScanner"] == ""
+
+        release.set()
+        fake._vuln_pool.shutdown(wait=True)
+        assert Orchestrator._apply_vuln_results(fake, data) == 1
+        assert data[0]["NmapVulnScanner"].startswith("success_")
+    finally:
+        release.set()
+        if fake._vuln_pool is not None:
+            fake._vuln_pool.shutdown(wait=False)
+
+
+def test_vuln_worker_reports_even_when_execute_raises():
+    """A worker that dies must still put a result, or its IP is stuck in _vuln_inflight forever
+    and the host is never scanned again — a silent permanent skip, the #5 defect class."""
+    class Boom:
+        def execute(self, ip, row, status):
+            raise RuntimeError("nmap exploded")
+
+    fake = _vuln_fake(Boom())
+    fake._vuln_pool = _InlinePool()
+    data = [{"Alive": "1", "IPs": "10.0.0.1", "NmapVulnScanner": ""}]
+    Orchestrator._run_vuln_scans(fake, data)
+
+    assert Orchestrator._apply_vuln_results(fake, data) == 0, "a raise is not a netkb stamp"
+    assert fake._vuln_inflight == set(), "the host must be eligible again, not stuck in flight"
 
 
 # --- the idle-loop spin fix: a standalone-only cycle must not count as host work ---------------

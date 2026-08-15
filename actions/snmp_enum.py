@@ -26,6 +26,18 @@ b_parent = None
 OID_SYSDESCR = "1.3.6.1.2.1.1.1.0"
 OID_SYSNAME = "1.3.6.1.2.1.1.5.0"
 
+# net-snmp prints these to stdout and STILL exits 0 when the varbind is an SNMP exception (the OID
+# isn't served). With -Ovq that phrase becomes the "value", so a host that answered but doesn't
+# serve sysDescr would be recorded as a found SNMP host with the error string as its description —
+# a hollow success (#5: a recorded finding must be a real value, not a non-answer). Exact net-snmp
+# phrases, unlikely to appear inside a genuine sysDescr.
+_SNMP_NON_ANSWERS = (
+    "no such object",
+    "no such instance",
+    "no more variables left",
+    "past the end of the mib",
+)
+
 
 class SNMPEnum:
     def __init__(self, shared_data):
@@ -80,7 +92,10 @@ class SNMPEnum:
 
     @staticmethod
     def _clean_value(s):
-        return s.strip().strip('"').strip()
+        v = s.strip().strip('"').strip()
+        if any(marker in v.lower() for marker in _SNMP_NON_ANSWERS):
+            return ""  # snmpget exited 0 on an unserved OID — not a real value, so not a hit
+        return v
 
     def _known_ips(self):
         known = set()

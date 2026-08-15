@@ -77,6 +77,11 @@ class BLEScan:
 
             duration = max(3, int(getattr(self.shared_data, "ble_scan_duration", 10)))
             devices = self._scan(binp, duration)
+            if devices is None:
+                # No usable Bluetooth controller — the scan could not run, so this is not a
+                # success (nor "nothing nearby"). Skip instead of reporting a hollow success
+                # every cycle (#5: the WiFiScan: success=4 / status-line-that-cannot-fail class).
+                return 'skipped'
             if devices:
                 new_trackers = self._record(devices, binp)
                 msg = f"BLE scan: {len(devices)} device(s)"
@@ -89,7 +94,15 @@ class BLEScan:
             return 'failed'
 
     def _scan(self, binp, duration):
-        subprocess.run([binp, "power", "on"], capture_output=True, text=True, timeout=10)
+        """Return [(mac, name)], or None when there is no usable Bluetooth controller.
+
+        None is distinct from [] (scanned, nothing nearby): bluetoothctl `power on` prints
+        'No default controller available' on a Pi with no adapter — the scan cannot run, and the
+        caller skips rather than reporting success (#5)."""
+        power = subprocess.run([binp, "power", "on"], capture_output=True, text=True, timeout=10)
+        if "No default controller" in ((power.stdout or "") + (power.stderr or "")):
+            logger.info("No Bluetooth controller available; skipping BLE scan.")
+            return None
         subprocess.run([binp, "--timeout", str(duration), "scan", "on"],
                        capture_output=True, text=True, timeout=duration + 15)
         proc = subprocess.run([binp, "devices"], capture_output=True, text=True, timeout=15)

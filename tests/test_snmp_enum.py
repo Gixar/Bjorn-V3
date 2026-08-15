@@ -24,6 +24,19 @@ def test_clean_value_strips_quotes_and_whitespace():
     assert SNMPEnum._clean_value("") == ""
 
 
+def test_clean_value_rejects_snmp_non_answers():
+    """#5 side-effect verification: snmpget -Ovq exits 0 while printing these for an unserved OID,
+    so without filtering, a host that answered but doesn't serve sysDescr would be recorded as a
+    found SNMP host with the error phrase as its description — a hollow success. _clean_value must
+    treat them as empty (no value → no hit → not recorded), while leaving a real sysDescr intact."""
+    for phrase in ("No Such Object available on this agent at this OID",
+                   "No Such Instance currently exists at this OID",
+                   "No more variables left in this MIB View (It is past the end of the MIB tree)"):
+        assert SNMPEnum._clean_value(phrase) == "", f"non-answer not filtered: {phrase!r}"
+    # A genuine description that merely contains the word 'object' is still a real value.
+    assert SNMPEnum._clean_value("HP LaserJet object store v3") == "HP LaserJet object store v3"
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

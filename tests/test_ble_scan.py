@@ -104,6 +104,35 @@ def test_offline_uses_the_shorter_interval():
         mod.shutil.which, mod.offline_mode.is_online = real_which, real_online
 
 
+def test_no_bluetooth_controller_skips_rather_than_reporting_success():
+    """#5 side-effect verification: a bare Pi with no BT adapter must not report a hollow success
+    every cycle. bluetoothctl `power on` prints 'No default controller available'; _scan returns
+    None on that (distinct from [] = scanned, nothing nearby) and execute() skips — a scan that
+    cannot run is not a success (the WiFiScan: success=4 class)."""
+    import tempfile
+    from types import SimpleNamespace
+    import actions.ble_scan as mod
+
+    cfg = SimpleNamespace(scan_results_dir=tempfile.mkdtemp(prefix="bjorn_ble_test_"),
+                          ble_scan_enabled=True, ble_scan_duration=3, ble_scan_interval=0)
+    scanner = BLEScan(cfg)
+    real_which, real_online, real_run = (mod.shutil.which, mod.offline_mode.is_online,
+                                         mod.subprocess.run)
+    mod.shutil.which = lambda _n: "/usr/bin/bluetoothctl"
+    mod.offline_mode.is_online = lambda: True
+
+    def fake_run(cmd, **kwargs):
+        out = "No default controller available\n" if cmd[1:3] == ["power", "on"] else ""
+        return SimpleNamespace(stdout=out, stderr="", returncode=1)
+
+    mod.subprocess.run = fake_run
+    try:
+        assert scanner.execute() == 'skipped', "no BT controller must skip, not report success"
+    finally:
+        (mod.shutil.which, mod.offline_mode.is_online,
+         mod.subprocess.run) = real_which, real_online, real_run
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

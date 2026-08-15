@@ -24,6 +24,18 @@
   import or an armv7 wheel problem before a device does. Not yet observed green on a real run.
 
 ### Fixed
+- **BLE scan on a Pi with no Bluetooth controller no longer reports success (#5, recon).**
+  `ble_scan._scan` ran three `bluetoothctl` calls and ignored all of them, so a bare Pi (no BT
+  adapter) recorded a `success` every cycle. `power on` prints `No default controller available`
+  in that case; `_scan` now returns `None` on it — distinct from `[]` (scanned, nothing nearby) —
+  and `execute()` returns `'skipped'`. "Ran, nothing nearby" stays a success (the recon
+  convention: a healthy scan with nothing to show must not enter failed-retry backoff).
+- **SNMP enum no longer records an unserved OID as a found host (#5, recon).** `snmpget -Ovq`
+  exits 0 while printing `No Such Object available on this agent at this OID` when the varbind is
+  an SNMP exception, so a host that answered but doesn't serve sysDescr was recorded with that
+  error phrase as its description — a hollow "found SNMP" hit. `_clean_value` now maps the exact
+  net-snmp non-answer phrases to `""`, so a recorded hit is a real value. A genuine description
+  that merely contains a word like "object" is left intact.
 - **A steal that finds files but downloads none no longer reports success (#5, stealers).** The
   default `harvest` on `base_stealer` returned `True` on files *found* (`len(remote_files)`), so a
   run that located five files and failed every transfer still logged `success` + `stolen 5

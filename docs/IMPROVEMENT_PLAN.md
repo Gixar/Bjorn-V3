@@ -118,9 +118,17 @@ failed polls a day** with nothing on screen.
    on disk" re-read would false-negative a real success. The gap is already closed; adding a
    re-read would cost IO and risk breaking a working contract.
 
-   **Still to migrate** (return `ActionOutcome`, verify the side effect): the standalone recon
-   writers whose success should mean rows landed — `ble_scan`, `snmp_enum`,
-   `http_fingerprint` (already guards on rows, low priority), and `nmap_vuln_scanner`.
+   **BLE + SNMP done.** `ble_scan` reported `success` every cycle on a Pi with no Bluetooth
+   controller (it swallowed all three `bluetoothctl` results); `_scan` now returns `None` on
+   `No default controller available` and execute skips — a scan that cannot run is not a success.
+   `snmp_enum` recorded a host as a found SNMP service when `snmpget -Ovq` exited 0 while printing
+   `No Such Object available…` for an unserved OID; `_clean_value` now filters those net-snmp
+   non-answers, so a recorded hit is a real value. Both have planted-break tests, and both keep
+   "ran, found nothing" as `success` (the recon convention #5's AST-guard work established — a
+   healthy host with nothing to show must not enter failed-retry backoff).
+
+   **Still to migrate:** `nmap_vuln_scanner`, and `http_fingerprint` (already guards success on
+   having rows, so low priority).
 
 Migration is opt-in per module (return an `ActionOutcome`), so this is incremental, not a rewrite.
 

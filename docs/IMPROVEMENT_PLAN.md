@@ -103,10 +103,24 @@ failed polls a day** with nothing on screen.
    tie the success path to the observable side effect and return `ActionOutcome`; the `skipped` /
    `failed` string returns stay as-is (`normalize_outcome` accepts both).
 
-   **Still to migrate** (return `ActionOutcome`, verify the side effect): the recon writers whose
-   success should mean rows landed — `ble_scan`, `snmp_enum`, `http_fingerprint` (already guards
-   on rows, low priority), the six connectors/stealers (success = a credential/loot actually
-   recorded), and `nmap_vuln_scanner`.
+   **Stealers migrated (`base_stealer`).** The default `harvest` returned `True` on files
+   *found* (`len(remote_files)`), so a run that located five files and failed every transfer
+   still logged `success` + `stolen 5 file(s)` with nothing on disk. `note_bytes` (called once
+   per file a `steal_file` actually writes) now doubles as a per-run stolen counter, and both
+   the default harvest and SMB's override tie success to that delta — no loot, no success. The
+   SQL and RDP login-is-the-win overrides are untouched (they legitimately return `True` with
+   zero files — the asymmetry §12 warned about). Guarded by a planted-break test.
+
+   **Connectors need no change — a YAGNI call, stated.** `BaseBruteforce`/`BaseConnector` already
+   set `success_flag` *after* `record_cracked_cred` + `save_results()` inside the worker's
+   try/except, so a failed write blocks success. There's no discarded failure signal like
+   WiFiScan's dropped `release()` bool, and SQL's zero-row login-is-the-win means a "row must be
+   on disk" re-read would false-negative a real success. The gap is already closed; adding a
+   re-read would cost IO and risk breaking a working contract.
+
+   **Still to migrate** (return `ActionOutcome`, verify the side effect): the standalone recon
+   writers whose success should mean rows landed — `ble_scan`, `snmp_enum`,
+   `http_fingerprint` (already guards on rows, low priority), and `nmap_vuln_scanner`.
 
 Migration is opt-in per module (return an `ActionOutcome`), so this is incremental, not a rewrite.
 

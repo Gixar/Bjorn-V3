@@ -127,6 +127,10 @@ class BaseStealer:
 
     def note_bytes(self, size):
         self._run_bytes = getattr(self, '_run_bytes', 0) + size
+        # Called exactly once per file a steal_file actually writes, so it doubles as the
+        # "files stolen this run" counter that lets harvest tie success to loot on disk rather
+        # than to files merely found (#5 side-effect verification).
+        self._stolen_count = getattr(self, '_stolen_count', 0) + 1
 
     def matches_wanted(self, path):
         """The steal_file_extensions / steal_file_names filter, applied identically everywhere."""
@@ -159,20 +163,29 @@ class BaseStealer:
         """Default find-then-steal loop. Adapters with non-ROOT topology (SMB shares, SQL
         tables) or that treat a successful auth with zero loot as a win override this.
 
-        Returns True when the run should be recorded as success for this credential.
+        Returns True when the run should be recorded as success for this credential. Success is
+        tied to loot that actually landed (#5): the pre-#5 version returned True on files *found*,
+        so a run that located five files and failed to download every one still reported
+        `success` + `stolen 5 file(s)` with nothing on disk — the WiFiScan: success=4 class.
         """
         remote_files = self.find_files(conn, self.ROOT)
         if not remote_files:
             return False
         local_dir = self.loot_dir(ip, row)
+        before = getattr(self, '_stolen_count', 0)
         for remote_file in remote_files:
             if self.stop_execution or self.shared_data.orchestrator_should_exit:
                 self.LOGGER.info("Steal interrupted.")
                 break
             self.steal_file(conn, remote_file, local_dir)
+        stolen = getattr(self, '_stolen_count', 0) - before
+        if stolen <= 0:
+            self.LOGGER.error(
+                f"Found {len(remote_files)} file(s) on {ip} but downloaded none — "
+                f"not recording a steal with no loot.")
+            return False
         self.LOGGER.success(
-            f"Successfully stolen {len(remote_files)} file(s) from "
-            f"{ip} using credential")
+            f"Stole {stolen} of {len(remote_files)} file(s) from {ip} using credential")
         return True
 
     # ---------------------------------------------------------------- the flow
@@ -188,6 +201,7 @@ class BaseStealer:
             self.stop_execution = False
             setattr(self, self.CONNECTED_FLAG, False)
             self._run_bytes = 0  # the per-run budget is per run, not per lifetime
+            self._stolen_count = 0  # files actually stolen this run — harvest ties success to it (#5)
             settle_for_display(self.shared_data)  # let the panel show this action's name
             self.LOGGER.info(f"Stealing from {ip}:{port}...")
 

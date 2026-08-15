@@ -160,23 +160,24 @@ against a real second radio:
 ~~RTL8811AU driver~~ ✅ 2026-08-05 · ~~`WiFiScan` capture + release~~ ✅ 2026-08-07 ·
 ~~`rustscan_batch_size` tuning~~ ✅ 2026-08-07 (auto passed; re-check against a port-rich host) ·
 ~~#176/#155/#122 re-tests~~ ✅ 2026-08-07 (#176's GUI *save* path still needs one manual comma edit) ·
-~~BLE on-Pi confirmation~~ ✅ 2026-08-07 · **#113 V4 panel — not testable on this device, it runs
-`epd2in13_V3`** · CVE + credential-reuse end-to-end (need a vulnerable/crackable host) · HTTP
-fingerprint / web templates / SNMP (need a host with those services) · wpa-sec inject (needs an API
-key) · Telegram/SMTP delivery (neither channel configured) · usb0 plugged-host test ·
-`Thread-1` exception in `epd_test.py` (only if it recurs).
+~~BLE on-Pi confirmation~~ ✅ 2026-08-07 · CVE + credential-reuse end-to-end (need a
+vulnerable/crackable host) · HTTP fingerprint / web templates / SNMP (need a host with those
+services) · wpa-sec inject (needs an API key) · Telegram/SMTP delivery (neither channel
+configured) · usb0 plugged-host test.
 
 **Tier 4 — large.** **Bettercap (`BETTERCAP_PLAN.md`) → Evil Twin (#8) → ESP32 fleet is now the
 declared next priority** (decided 2026-08-07), once the pocket-carry proactivity work is on the Pi;
 each depends on the one before it. Still deferred behind them: Bluetooth PAN · BadUSB (a reversal of
-a past decision, needs a call before code) · tri-color panel (YAGNI, no panel) · Cortex export
-(YAGNI, no swarm).
+a past decision, needs a call before code) · Cortex export (YAGNI, no swarm).
 *(Wardriving (#7) left this tier in Wave 4 — shipped as `WiFiScan`, and it never needed Bettercap.)*
 
 **Dropped, do not revisit:** GPS tagging and the wardriving map view (PG-6) · `device_type` netkb
 column (two separate-file precedents make it unnecessary) · Cortex `.csv.gz` export · PG-5 plugin
 system (folded into the P3-1 module contract) · **web UI authentication** (decided 2026-08-05 —
-single-user device on an operator-controlled network; see the security-review section above).
+single-user device on an operator-controlled network; see the security-review section above) ·
+**every display/panel item** (decided 2026-08-15 — the panel in use works, and no hardware change
+is planned): **#113** V4 unreadable, **#166** tri-color 2.13" B/C, the `epd_test.py` `Thread-1`
+notice, and the display half of **#122**. Upstream panel reports are not this tool's bugs.
 
 ## Tier-0 verification sweep — 2026-08-07 (12 PASS, 0 FAIL)
 
@@ -488,15 +489,21 @@ Full reinstall of the latest code, checked against the LAN.
 - ~~`'web_increment '` config key still has a trailing space~~ — ✅ **FIXED (Wave 3)** — the key was
   never read anywhere, so it was deleted rather than renamed.
 
-## Bugs still open (need the WebUI/Pi to reproduce + verify)
+## Bug ledger — all closed (history; nothing here is open work)
+
+Every row below is fixed or was disproven on hardware. **#176 / #155 / #122 re-tested clean on
+2026-08-07** and again on the 2026-08-14 fresh-install sweep; **#113 and the display half of #122
+are dropped, not deferred** (2026-08-15 — the panel works, no hardware change planned). Do not
+re-list an upstream panel report as a Bjorn bug.
+
 | Ref | Issue | Likely fix / pointer |
 |---|---|---|
-| #176 | Can't enter comma-separated ports in GUI Settings | **Appears already resolved** in current code — `web/scripts/config.js` renders `portlist` as a text input and `saveConfig` splits on commas into an array. Re-test in the UI; no code change identified. |
+| ~~#176~~ | ~~Can't enter comma-separated ports in GUI Settings~~ | ✅ **Not a defect** — `web/scripts/config.js` renders `portlist` as a text input and `saveConfig` splits on commas into an array. Re-tested on-Pi 2026-08-07. |
 | ~~#190 / #160~~ | ~~Wi-Fi APs not shown / no SSID switch in WebUI~~ | **Appears already resolved** — `config.js::scanWifi` renders `data.networks`, marks `current_ssid`, and click-to-connect POSTs `{ssid, password}`; backend uses `nmcli` (not the old `iwlist`). Only the on-Pi runtime (sudo/nmcli perms on `wlan0`) remains — re-test on the device. |
 | ~~#130 / #81~~ | ~~404 / error executing a manual attack~~ | ✅ **FIXED** — real cause was `index.html` fetching `/recent_logs` (nonexistent) right after the attack; changed to `/get_logs`. The dead `/manual.html` route was removed. The manual-attack UI already lives in `index.html`. |
-| #155 | Web server not showing | Overlaps #16 (port hopping) — re-test after the SO_REUSEADDR fix; if still failing, check the systemd unit + firewall. |
-| #122 | Installed but no Display *or* WebUI (most-commented) | Multi-cause: partly #16 (port), partly EPD init failing on the panel. Re-test after the port fix; if the display is still dead, check `epd_type` + wiring. Pi-only. |
-| #113 | Waveshare **V4 unreadable** display | Affects the **default** `epd_type: "epd2in13_V4"` — reported as unreadable/garbled since May 2025. Likely a refresh-mode / LUT or rotation issue in the vendor driver. Needs the actual V4 panel to diagnose. |
+| ~~#155~~ | ~~Web server not showing~~ | ✅ **FIXED** by #16 (SO_REUSEADDR / port hopping) — web server confirmed listening on the 2026-08-07 and 2026-08-14 sweeps. |
+| ~~#122~~ | ~~Installed but no Display *or* WebUI (most-commented)~~ | ✅ **CLOSED** — the WebUI half was #16, confirmed fixed on-Pi. The display half is **dropped** with #113 (2026-08-15). |
+| ~~#113~~ | ~~Waveshare **V4 unreadable** display~~ | ❌ **DROPPED 2026-08-15** — an upstream report against a panel this project does not use and will not buy. The display works. Not a Bjorn defect and not open work. |
 | ~~**NEW**~~ | ~~The **first `/get_logs` after every boot returns an error**~~ | ✅ **FIXED 2026-08-14** (found the same day, while running the #11 confirmation against the live device). `utils.py::serve_logs` spawned `subprocess.Popen(f"sudo tail -f .../data/logs/* > {log_file_path}", shell=True)` and then **immediately** `open()`d that path in the same call — `Popen` returns before the shell has created the redirect target, so the read raced it and the first request answered `{"status":"error","message":"[Errno 2] No such file or directory: '.../data/logs/temp_log.txt'"}`. Once per boot, because `shared.py:292 delete_webconsolelog()` removes it at startup. Reproduced twice on 192.168.1.35. Knock-on: `get_stats_snapshot`'s `log_version` token reads `0` until something first hits `/get_logs` — *correct* (`_asset_mtime` returns 0 for an absent file) but it makes the #11 token check look broken on a fresh boot. **Fix:** create the file before spawning, so the read finds an empty file instead of nothing and only one `tail` is ever spawned. **The trap in that fix:** `temp_log.txt` lives in the same directory, and creating it first puts it *inside* the `*` glob — `tail -f` would then follow its own output and loop it back forever. Source glob narrowed to `*.log` (module logs are `<module>.py.log`; the target is `.txt`). Same edit dropped the hardcoded `/home/bjorn/Bjorn/` prefix for `shared_data.logsdir`, which had silently broken the console on any install at another path. |
 | ~~#68~~ | ~~`usb0` IP not assigned~~ | ✅ **FIXED + confirmed on-Pi (2026-08-03).** After a reinstall with `ConfigureWithoutCarrier=yes` + `IgnoreCarrierLoss=yes` in `/etc/systemd/network/10-usb0.network`, `ip addr show usb0` shows `inet 172.20.2.1/24` even with `NO-CARRIER` (nothing plugged in). Remaining: plug into a host to confirm the DHCP lease + `http://172.20.2.1:8000/`. |
 | ~~**NEW**~~ | ~~Manual attack with **NetworkScanner** → 500~~ | ✅ **FIXED** — `serve_netkb_data_json` now filters the manual-attack dropdown to actions the handler can run per host (port-based connectors + special-cased `NmapVulnScanner`, via `port not in (0, None)`), so NetworkScanner / IDLE / standalone log actions are no longer offered and can't trigger the "class not found" error. |
@@ -545,13 +552,14 @@ collapsing to 4 distinct issues.
 - ~~**SNMP enumeration**~~: ✅ **DONE (Wave 2)** — standalone `SNMPEnum` action iterates alive netkb hosts and probes UDP/161 via `snmpget` (SNMP isn't TCP-discoverable, so it's not port-gated), recording sysDescr/sysName to `snmp_enum.csv`. `snmp_communities` config; installer provisions `snmp`; graceful no-op if `snmpget` missing. Needs the Pi + an SNMP host to confirm.
 - ~~**HTTP service fingerprinting**~~ (PRD P3-5): ✅ **DONE (Wave 2)** — `HTTPFingerprint` action (`actions/http_fingerprint.py`) GETs each open web port, records status / `Server` / `X-Powered-By` / `<title>` to `data/output/scan_results/http_fingerprints.csv`. Stdlib `urllib`; `b_port=80`, fingerprints all web ports per host. Feeds the nuclei item below. **Confirmed on-Pi (Wave 2):** both :80 and :443 of the ZTE router were captured, self-signed cert and all — the earlier "misses 443-only hosts" note applies only to a host exposing 443 *without* 80, which hasn't been seen in practice; no https sibling module needed.
 
-## Hardware / display
-- **Waveshare 2.13" B/C tri-color** (#166) — **deferred (YAGNI, single panel for now).** Only the
-  default 2.13" V4 panel is in use, so multi-panel support isn't needed yet. Revisit when a
-  tri-color (or other) panel is actually on hand — the change is small: add
-  `resources/waveshare_epd/epd2in13bc.py` from the vendor driver, an `epd2in13bc` case in
-  `shared.py::initialize_epd_display`, and the type to `KNOWN_EPD_TYPES` in `config_validation.py`.
-  Needs the vendor driver + the actual panel to verify.
+## Hardware / display — closed section, no open work
+
+**Dropped 2026-08-15.** The panel in use works and no hardware change is planned, so multi-panel
+support (**#166** tri-color 2.13" B/C) and the upstream **#113** V4 report are both off the list
+for good. If a different panel is ever on hand the change is small and self-evident — add the
+vendor driver to `resources/waveshare_epd/`, a case in `shared.py::initialize_epd_display`, and
+the type to `KNOWN_EPD_TYPES` in `config_validation.py` — but do not carry it as a backlog item
+until that panel physically exists.
 
 ## Quality-of-life
 - ~~**In-WebUI log viewer**~~ (from `BjornCocaine`): ✅ **DONE** — added `web/logs.html` + `web/scripts/logs.js` + a "Logs" nav entry (`common.js`) + `logs` in `_PAGES` (`webapp.py`). The colorize/escape renderer was extracted to `common.js` (`colorizeLogLine`/`renderLogsInto`) and shared with the home console. WebUI-only; re-check rendering on the Pi.

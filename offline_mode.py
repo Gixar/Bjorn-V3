@@ -83,9 +83,17 @@ def uplink_candidate(wireless, scan_iface):
 
 
 def reconnect_best(shared_data):
-    """Pick the uplink radio from config + what is present, then try to join. (ok, detail)."""
-    iface = uplink_candidate(monitor_mode.wireless_ifaces(),
-                             (getattr(shared_data, "wifi_scan_iface", "") or "").strip())
+    """Pick the uplink radio from config + what is present, then try to join. (ok, detail).
+
+    The reserved-for-capture radio is the RESOLVED one, not the configured string. This used to
+    pass `wifi_scan_iface` straight through, so with the key left blank — the shipped default —
+    `uplink_candidate` saw "" as the capture radio, matched nothing, and returned the first radio
+    `iw dev` happened to list. On a Pi that enumerates the dongle first (observed 2026-08-17:
+    wlan1, wlan0) that is the dongle: Bjorn would hand the capture radio to the survey and the
+    hunter, and then try to reconnect on the same one, never touching the onboard chip that holds
+    the saved profiles. Resolving through scan_iface() makes the split come out right unconfigured,
+    which is the state the device is actually carried around in."""
+    iface = uplink_candidate(monitor_mode.wireless_ifaces(), scan_iface(shared_data))
     return reconnect(iface, allow_open=getattr(shared_data, "wifi_autojoin_open", False))
 
 

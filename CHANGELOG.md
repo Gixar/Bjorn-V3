@@ -26,6 +26,16 @@
   that baseline; nothing measures it yet, so a bake-off comes before the feature.
 
 ### Fixed
+- **Offline auto-join aimed at the capture radio when `wifi_scan_iface` was blank.**
+  `reconnect_best()` passed the raw config string to `uplink_candidate()`, so an unset key — the
+  shipped default — matched no interface and the reconnect went to whichever radio `iw dev` listed
+  first. On the reference Pi that list is `["wlan1", "wlan0"]`, dongle first (confirmed by
+  `bjorn_verify` section 1 on 2026-08-17), so the survey and the hunter took wlan1 and the
+  reconnect then tried wlan1 as well — never the onboard chip that holds the saved profiles. It
+  now resolves through `scan_iface()`, which is the same answer the capture side computes, so the
+  two offline jobs land on different radios with no configuration at all. Pinning the key still
+  works and is unchanged; a single-radio device still does both jobs sequentially.
+
 - **`monitor_mode.acquire()` now confirms monitor mode instead of assuming it.** It reported
   success on three exit codes, so `wifi_scan.py`/the hunter were handed a radio that had not
   actually been re-typed yet and airodump died on the spot: *"ARP linktype is set to 1 (Ethernet)

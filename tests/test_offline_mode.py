@@ -62,6 +62,41 @@ def test_uplink_candidate_avoids_the_capture_radio():
     assert offline_mode.uplink_candidate([], "wlan1") == ""
 
 
+def test_reconnect_uses_the_radio_not_reserved_for_capture():
+    """The two offline jobs must land on different radios, and they have to do so with the config
+    left blank — that is how the device actually ships.
+
+    reconnect_best used to pass the raw `wifi_scan_iface` string to uplink_candidate, so a blank
+    key matched no interface and the first one `iw dev` listed was chosen to reconnect. On this Pi
+    that list is ["wlan1", "wlan0"] — the dongle first — so the capture radio and the reconnect
+    radio were the same one, and the onboard chip holding the saved profiles was never tried.
+    """
+    import types
+
+    saved = (offline_mode.monitor_mode.wireless_ifaces,
+             offline_mode.monitor_mode.default_route_iface, offline_mode.reconnect)
+    tried = []
+    # Dongle first, exactly as `iw dev` reports it on the device.
+    offline_mode.monitor_mode.wireless_ifaces = lambda: ["wlan1", "wlan0"]
+    offline_mode.monitor_mode.default_route_iface = lambda: ""       # offline: no uplink
+    offline_mode.reconnect = lambda iface, allow_open=False: (tried.append(iface), (False, ""))[1]
+    try:
+        offline_mode.reconnect_best(types.SimpleNamespace(wifi_scan_iface=""))
+        assert tried == ["wlan0"], f"reconnect must not use the capture radio, got {tried}"
+        # Capture radio named explicitly: the other one still carries the uplink attempt.
+        tried.clear()
+        offline_mode.reconnect_best(types.SimpleNamespace(wifi_scan_iface="wlan1"))
+        assert tried == ["wlan0"]
+        # Single radio: it does both jobs, sequentially — never "no interface".
+        offline_mode.monitor_mode.wireless_ifaces = lambda: ["wlan0"]
+        tried.clear()
+        offline_mode.reconnect_best(types.SimpleNamespace(wifi_scan_iface=""))
+        assert tried == ["wlan0"]
+    finally:
+        (offline_mode.monitor_mode.wireless_ifaces,
+         offline_mode.monitor_mode.default_route_iface, offline_mode.reconnect) = saved
+
+
 NMCLI_WIFI = r"""*:HomeNet:78:WPA2
 :Cafe\:Free:52:
 :Neighbour:41:WPA1 WPA2
@@ -116,6 +151,7 @@ def demo():
     test_offline_still_prefers_the_dongle()
     test_no_radios_at_all()
     test_uplink_candidate_avoids_the_capture_radio()
+    test_reconnect_uses_the_radio_not_reserved_for_capture()
     test_parse_nmcli_wifi()
     test_choose_prefers_saved_over_stronger_open()
     test_open_networks_are_ignored_unless_allowed()

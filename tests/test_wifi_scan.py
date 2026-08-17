@@ -185,6 +185,47 @@ def test_radio_lock_refuses_a_second_capture():
         _restore(saved)
 
 
+def test_monitor_is_live_waits_for_the_netdev_to_be_retyped():
+    """The mode change is asynchronous: `iw set type monitor` returns while the interface is still
+    typed Ethernet, and a capture opened in that window dies with 'ARP linktype is set to 1'."""
+    saved = monitor_mode.arphrd_type
+    try:
+        codes = iter([1, 1, 803])          # Ethernet, Ethernet, then radiotap
+        monitor_mode.arphrd_type = lambda _iface: next(codes)
+        assert monitor_mode.monitor_is_live("wlan1", timeout=2, poll=0) is True
+
+        monitor_mode.arphrd_type = lambda _iface: 1      # never flips
+        assert monitor_mode.monitor_is_live("wlan1", timeout=0.05, poll=0) is False
+
+        monitor_mode.arphrd_type = lambda _iface: 0      # unreadable (not Linux) — don't veto
+        assert monitor_mode.monitor_is_live("wlan1", timeout=0, poll=0) is True
+    finally:
+        monitor_mode.arphrd_type = saved
+
+
+def test_acquire_refuses_an_interface_that_never_leaves_ethernet():
+    """acquire() used to report success on three exit codes, so a radio that had not actually
+    entered monitor mode was handed to airodump/bettercap anyway — an empty capture reported as a
+    working one (2026-08-17). It must now fail, and must not keep the lock when it does."""
+    saved = _guard_with("wlan0", ["wlan0", "wlan1"])
+    saved_run, saved_live = monitor_mode._run, monitor_mode.monitor_is_live
+    monitor_mode._run = lambda *a, **k: (0, "")        # every ip/iw/nmcli call "succeeds"
+    monitor_mode.monitor_is_live = lambda *a, **k: False   # ...but the netdev stays Ethernet
+    try:
+        ok, detail, reason = monitor_mode.acquire("wlan1")
+        assert not ok and reason == monitor_mode.FAILED
+        assert "monitor mode" in detail
+        assert monitor_mode.holder() == "", "a failed acquire must not keep the radio"
+        # and the radio is still acquirable once the driver behaves
+        monitor_mode.monitor_is_live = lambda *a, **k: True
+        ok2, _, _ = monitor_mode.acquire("wlan1")
+        assert ok2
+        monitor_mode.release("wlan1")
+    finally:
+        monitor_mode._run, monitor_mode.monitor_is_live = saved_run, saved_live
+        _restore(saved)
+
+
 def test_holder_names_the_owner_and_clears_on_release():
     """A turned-away consumer needs to know *who* has the radio: the hunter holds it for a whole
     session, so 'busy' has to be distinguishable from 'your config is wrong'."""

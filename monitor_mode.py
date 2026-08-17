@@ -144,6 +144,48 @@ def check_usable(iface):
     return ""
 
 
+# ARPHRD codes as they appear in /sys/class/net/<iface>/type. 1 is Ethernet — the mode change has
+# not reached the netdev — and the 80x family is what a capture needs. This is the exact value
+# airodump-ng reads before it will start ("ARP linktype is set to 1 (Ethernet) ... Make sure RFMON
+# is enabled"), which is why monitor mode is confirmed here rather than inferred from `iw`: `iw`
+# reports the nl80211 interface type, which is already set while the netdev is still typed
+# Ethernet, so it answers a slightly different question than the one that makes captures fail.
+ARPHRD_80211 = (801, 802, 803)
+
+
+def arphrd_type(iface):
+    """The interface's ARPHRD code from sysfs, or 0 when it cannot be read (not Linux, or the
+    interface vanished). Same source scanning.py reads operstate from."""
+    try:
+        with open(f"/sys/class/net/{iface}/type") as f:
+            return int(f.read().strip())
+    except (OSError, ValueError):
+        return 0
+
+
+def monitor_is_live(iface, timeout=3.0, poll=0.25):
+    """Wait until monitor mode has actually reached the netdev. True when it has.
+
+    `iw dev X set type monitor` returns before the driver has re-typed the interface: mac80211
+    switches the netdev to a radiotap ARPHRD as it comes back *up*, so a capture spawned the
+    instant `ip link set up` returns can still open an Ethernet-typed device and exit immediately.
+    That is the intermittent 'ARP linktype is set to 1' failure — observed 2026-08-17 on wlan1,
+    where the retry five seconds later captured 4 APs on the same radio — and intermittent is the
+    worst possible shape for something that has to run unattended for hours.
+
+    An unreadable type counts as usable, the same call release() makes for an unreadable mode: a
+    missing sysfs must not veto a capture on a box where the check simply does not apply.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        code = arphrd_type(iface)
+        if code == 0 or code in ARPHRD_80211:
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(poll)
+
+
 def parse_iface_mode(iw_info_output):
     """802.11 mode ("managed" / "monitor") from `iw dev <if> info`, or "". Pure/testable."""
     for line in iw_info_output.splitlines():
@@ -181,15 +223,25 @@ def acquire(iface, owner="scan"):
     _radio_owner = owner
     if shutil.which("nmcli"):
         _run(["nmcli", "device", "set", iface, "managed", "no"])
-    for args in (["ip", "link", "set", iface, "down"],
-                 ["iw", "dev", iface, "set", "type", "monitor"],
-                 ["ip", "link", "set", iface, "up"]):
-        rc, out = _run(args)
-        if rc != 0:
-            release(iface, owner)  # don't strand the radio half-configured
-            return False, f"{' '.join(args)} failed: {out.strip()[:200]}", FAILED
-    logger.info(f"{iface} is in monitor mode (held by {owner}).")
-    return True, "monitor mode enabled", ""
+    # Verify, then retry once, then refuse — the same discipline release() already applies coming
+    # back the other way. Three commands returning 0 is not the radio being in monitor mode, and
+    # the difference is not academic: the caller spawns a capture the moment this returns True.
+    for attempt in (1, 2):
+        for args in (["ip", "link", "set", iface, "down"],
+                     ["iw", "dev", iface, "set", "type", "monitor"],
+                     ["ip", "link", "set", iface, "up"]):
+            rc, out = _run(args)
+            if rc != 0:
+                release(iface, owner)  # don't strand the radio half-configured
+                return False, f"{' '.join(args)} failed: {out.strip()[:200]}", FAILED
+        if monitor_is_live(iface):
+            logger.info(f"{iface} is in monitor mode (held by {owner}).")
+            return True, "monitor mode enabled", ""
+        if attempt == 1:
+            logger.warning(f"{iface} is up but still typed Ethernet; redoing the mode change.")
+    release(iface, owner)
+    return False, (f"{iface} would not enter monitor mode (still ARPHRD {arphrd_type(iface)}) — a "
+                   f"capture there fails with 'ARP linktype is set to 1'"), FAILED
 
 
 def release(iface, owner="scan"):

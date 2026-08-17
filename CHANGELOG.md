@@ -26,6 +26,19 @@
   that baseline; nothing measures it yet, so a bake-off comes before the feature.
 
 ### Fixed
+- **`monitor_mode.acquire()` now confirms monitor mode instead of assuming it.** It reported
+  success on three exit codes, so `wifi_scan.py`/the hunter were handed a radio that had not
+  actually been re-typed yet and airodump died on the spot: *"ARP linktype is set to 1 (Ethernet)
+  … Make sure RFMON is enabled"*, one second after the log line `wlan1 is in monitor mode`. Seen
+  2026-08-17, and intermittent — the retry five seconds later captured 4 APs on the same radio,
+  which is why the 2026-08-08 "no fresh AP rows" run was never reproducible. The mode change is
+  asynchronous: mac80211 re-types the netdev as the interface comes back *up*, so the capture can
+  open an Ethernet-typed device while `iw` already reports monitor. `acquire()` therefore polls
+  `/sys/class/net/<iface>/type` (the ARPHRD value airodump itself checks; 80x = radiotap) for up to
+  3s, redoes the down/type/up sequence once, and then **fails with the radio released** rather than
+  claiming a mode it does not have — the verify-retry-shout discipline `release()` already had in
+  the other direction. An unreadable sysfs still counts as usable, so nothing changes off-Pi.
+
 - **Offline, Bjorn never started its orchestrator at all — the whole offline path was dead code.**
   `Bjorn.py`'s `check_and_start_orchestrator()` started the thread only when
   `nmcli -t -f active dev wifi` reported an association, so a device carried out with no uplink

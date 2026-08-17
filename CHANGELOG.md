@@ -25,6 +25,22 @@
   deterministically with no key and no network, and the plan required #15's ordering half to beat
   that baseline; nothing measures it yet, so a bake-off comes before the feature.
 
+### Fixed
+- **Offline, Bjorn never started its orchestrator at all — the whole offline path was dead code.**
+  `Bjorn.py`'s `check_and_start_orchestrator()` started the thread only when
+  `nmcli -t -f active dev wifi` reported an association, so a device carried out with no uplink
+  logged `Waiting for Wi-Fi connection to start Orchestrator...` every 10 seconds and ran nothing:
+  no `run_offline_cycle`, and therefore no Wi-Fi survey, no BLE recon, no handshake hunter and no
+  auto-rejoin. Defaulting the hunter on (below) fixed the second gate in the same path; this is
+  the first one, and it is the actual reason a walk with no Wi-Fi collected nothing. The gate is
+  gone rather than moved: the orchestrator owns the offline case itself — `run_offline_cycle()` is
+  the first thing its loop does, and the initial `network_scanner.scan()` is a logged no-op when
+  no interface has a scannable subnet. It was also the wrong question twice over, saying nothing
+  about a wired/USB uplink and treating associated-without-a-route as online. `is_wifi_connected()`
+  went with it (dead; `display.py` keeps its own copy for the status icon), which also un-breaks
+  the web UI's **Start** button while offline. Guarded by a source-parsing test that fails if any
+  connectivity check reappears in either starter (planted-break verified).
+
 ### Changed
 - **The handshake hunter is on by default (`bettercap_pwn_enabled: true`).** Carrying Bjorn
   somewhere with no uplink is exactly what it is for, and it did nothing: the offline cycle's

@@ -179,6 +179,38 @@ def test_reconnect_only_ever_runs_with_the_radio_free():
     assert not hunter.is_running(), "the cycle must not end with the radio held"
 
 
+def test_the_orchestrator_starts_without_an_uplink():
+    """Everything above is unreachable if Bjorn.py never starts the orchestrator.
+
+    It didn't: `check_and_start_orchestrator` ran the thread only when `nmcli dev wifi` reported an
+    active association, so a device carried out with no Wi-Fi logged "Waiting for Wi-Fi connection"
+    every 10s and ran no offline cycle at all — no survey, no BLE, no hunter, no auto-rejoin.
+
+    Source-parsed rather than imported: Bjorn.py pulls in the display stack, uvicorn and a real
+    SharedData at import time, and this property is about what ships in the file. Planted-break
+    verified by restoring the `if self.is_wifi_connected():` gate.
+    """
+    import ast
+
+    source = (Path(__file__).resolve().parent.parent / "Bjorn.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "Bjorn")
+    starters = {n.name: ast.get_source_segment(source, n) for n in cls.body
+                if isinstance(n, ast.FunctionDef)
+                and n.name in ("check_and_start_orchestrator", "start_orchestrator")}
+    assert set(starters) == {"check_and_start_orchestrator", "start_orchestrator"}
+    for name, body in starters.items():
+        # Only the code, not the comment explaining why the gate is gone.
+        code = "\n".join(line for line in body.splitlines()
+                         if not line.lstrip().startswith("#"))
+        _, _, code = code.partition('"""')          # drop the docstring for the same reason
+        _, _, code = code.partition('"""')
+        for banned in ("wifi", "is_online", "default_route"):
+            assert banned not in code.lower(), (
+                f"{name} gates on connectivity ({banned}) — the orchestrator owns the offline "
+                f"case itself, and a gate here makes offline_mode.py dead code")
+
+
 if __name__ == "__main__":
     import inspect
     for name, fn in sorted(globals().items()):

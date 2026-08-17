@@ -2,13 +2,15 @@
 # This script defines the main execution flow for the Bjorn application. It initializes and starts
 # various components such as network scanning, display, and web server functionalities. The Bjorn 
 # class manages the primary operations, including initiating network scans and orchestrating tasks.
-# The script handles startup delays, checks for Wi-Fi connectivity, and coordinates the execution of
-# scanning and orchestrator tasks using semaphores to limit concurrent threads. It also sets up 
+# The script handles startup delays and coordinates the execution of scanning and orchestrator
+# tasks using semaphores to limit concurrent threads. It also sets up
 # signal handlers to ensure a clean exit when the application is terminated.
+#
+# Connectivity is NOT checked here: the orchestrator handles being offline itself (offline_mode.py),
+# and gating its startup on Wi-Fi is what kept the offline recon path from ever running.
 
 # Functions:
 # - handle_exit:  handles the termination of the main and display threads.
-# - is_wifi_connected: Checks for Wi-Fi connectivity using the nmcli command.
 
 # The script starts by loading shared data configurations, then initializes and sta
 # bjorn.py
@@ -54,7 +56,7 @@ class Bjorn:
         self.orchestrator = None
 
     def run(self):
-        """Main loop for Bjorn. Waits for Wi-Fi connection and starts Orchestrator."""
+        """Main loop for Bjorn. Keeps the Orchestrator running, online or not."""
         # Wait for startup delay if configured in shared data
         if hasattr(self.shared_data, 'startup_delay') and self.shared_data.startup_delay > 0:
             logger.info(f"Waiting for startup delay: {self.shared_data.startup_delay} seconds")
@@ -87,31 +89,36 @@ class Bjorn:
 
 
     def check_and_start_orchestrator(self):
-        """Check Wi-Fi and start the orchestrator if connected."""
-        if self.is_wifi_connected():
-            self.wifi_connected = True
-            if self.orchestrator_thread is None or not self.orchestrator_thread.is_alive():
-                self.start_orchestrator()
-        else:
-            self.wifi_connected = False
-            logger.info("Waiting for Wi-Fi connection to start Orchestrator...")
+        """Start the orchestrator if it is not already running.
+
+        NO CONNECTIVITY GATE, deliberately. This used to run only when nmcli reported an active
+        Wi-Fi association, which made every line of offline_mode.py dead code: carried out with no
+        uplink, Bjorn started no orchestrator, so `run_offline_cycle` never ran and the Wi-Fi
+        survey, BLE recon, handshake hunter and auto-rejoin never happened. The device logged
+        "Waiting for Wi-Fi connection to start Orchestrator..." every 10s and collected nothing —
+        the walk that reported "bettercap did nothing" was this, not the hunter's default.
+
+        The orchestrator owns the offline case itself: `run_offline_cycle()` is the first thing its
+        loop does, it pauses IP scanning when there is no default route, and the initial
+        `network_scanner.scan()` is a logged no-op with no scannable network. A Wi-Fi check here
+        was also the wrong question twice over — it says nothing about a wired/USB uplink, and
+        associated-without-a-route is not online for any purpose Bjorn has.
+        """
+        if self.orchestrator_thread is None or not self.orchestrator_thread.is_alive():
+            self.start_orchestrator()
 
     def start_orchestrator(self):
         """Start the orchestrator thread."""
-        self.is_wifi_connected() # reCheck if Wi-Fi is connected before starting the orchestrator
-        if self.wifi_connected:  # Check if Wi-Fi is connected before starting the orchestrator
-            if self.orchestrator_thread is None or not self.orchestrator_thread.is_alive():
-                logger.info("Starting Orchestrator thread...")
-                self.shared_data.orchestrator_should_exit = False
-                self.shared_data.manual_mode = False
-                self.orchestrator = Orchestrator()
-                self.orchestrator_thread = threading.Thread(target=self.orchestrator.run)
-                self.orchestrator_thread.start()
-                logger.info("Orchestrator thread started, automatic mode activated.")
-            else:
-                logger.info("Orchestrator thread is already running.")
+        if self.orchestrator_thread is None or not self.orchestrator_thread.is_alive():
+            logger.info("Starting Orchestrator thread...")
+            self.shared_data.orchestrator_should_exit = False
+            self.shared_data.manual_mode = False
+            self.orchestrator = Orchestrator()
+            self.orchestrator_thread = threading.Thread(target=self.orchestrator.run)
+            self.orchestrator_thread.start()
+            logger.info("Orchestrator thread started, automatic mode activated.")
         else:
-            logger.warning("Cannot start Orchestrator: Wi-Fi is not connected.")
+            logger.info("Orchestrator thread is already running.")
 
     def stop_orchestrator(self):
         """Stop the orchestrator thread."""
@@ -128,13 +135,6 @@ class Bjorn:
         else:
             logger.info("Orchestrator thread is not running.")
 
-    def is_wifi_connected(self):
-        """Checks for Wi-Fi connectivity using the nmcli command."""
-        result = subprocess.Popen(['nmcli', '-t', '-f', 'active', 'dev', 'wifi'], stdout=subprocess.PIPE, text=True).communicate()[0]
-        self.wifi_connected = 'yes' in result
-        return self.wifi_connected
-
-    
     @staticmethod
     def start_display():
         """Start the display thread"""

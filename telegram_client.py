@@ -123,14 +123,33 @@ def send_email(shared_data, subject, body, filename=None, content_bytes=None):
         return (False, str(e))
 
 
-def _cfg_text(shared_data, key):
-    """A config value as text, whatever JSON parsed it into.
+# The environment wins over shared_config.json for the two credentials, so they can live outside
+# the Bjorn tree entirely — in a systemd EnvironmentFile that an uninstall does not touch (it
+# removes /home/bjorn/Bjorn and the units, nothing under /etc/bjorn). Same call ai_audit.py makes
+# for ANTHROPIC_API_KEY, and it buys the same second thing: /load_config serves shared_config.json
+# to anyone who can reach port 8000, and a token that is not in that file cannot be served from it.
+# Adding a third credential here is one line.
+_ENV_KEYS = {
+    "telegram_bot_token": "TELEGRAM_BOT_TOKEN",
+    "telegram_chat_id": "TELEGRAM_CHAT_ID",
+}
 
-    A chat id is digits, so it can reach us as an int — the web form's own save path did exactly
-    that until 2026-08-17, and `.strip()` on an int is an AttributeError that surfaces in the
-    browser as a bare "Internal Server Error" with no clue in it. The save side is fixed, but
-    configs written by the old one are already on disk, and a delivery channel that only works
-    after the operator re-saves the page is not fixed."""
+
+def _cfg_text(shared_data, key):
+    """A credential as text: the environment if it is set there, else the saved config.
+
+    The config fallback is not a legacy path — the web form stays the easy way to set this up, and
+    an install that never touches /etc keeps working exactly as before. The environment simply
+    outranks it, so the durable copy is the one that wins.
+
+    Coerced with str() because a chat id is digits and JSON hands those back as an int: the web
+    form's own save path did that until 2026-08-17, and `.strip()` on an int is an AttributeError
+    that surfaces in the browser as a bare "Internal Server Error" with no clue in it."""
+    env_name = _ENV_KEYS.get(key)
+    if env_name:
+        from_env = (os.environ.get(env_name) or "").strip()
+        if from_env:
+            return from_env
     value = getattr(shared_data, key, "")
     return "" if value is None else str(value).strip()
 

@@ -25,6 +25,19 @@
   deterministically with no key and no network, and the plan required #15's ordering half to beat
   that baseline; nothing measures it yet, so a bake-off comes before the feature.
 
+### Added
+- **Telegram credentials can live outside the Bjorn tree.** `TELEGRAM_BOT_TOKEN` and
+  `TELEGRAM_CHAT_ID` in the environment now outrank `shared_config.json`, read through the same
+  `_cfg_text()` both senders already use. The unit gained `EnvironmentFile=-/etc/bjorn/bjorn.env`
+  (optional, so no file means no failure), and `uninstall_bjorn.sh` removes `/home/bjorn/Bjorn`
+  and the units but nothing under `/etc`, so the credentials survive an uninstall/reinstall with
+  nothing to re-enter. Second benefit, the same one `ai_audit.py` gets from reading
+  `ANTHROPIC_API_KEY` this way: `/load_config` serves `shared_config.json` to anyone who can reach
+  port 8000, and a token that is not in that file cannot be served out of it. The web form is
+  unchanged and still works — the environment simply wins when it is set to a non-empty value.
+  **Existing installs need the unit updated**, same as the heartbeat fix: the installer only writes
+  it at install time.
+
 ### Fixed
 - **Saving the web config turned digits-only text fields into numbers.** `save_configuration`
   decided a posted value's type by looking at the value — `"300"` is a number, so `"7961436291"`

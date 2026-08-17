@@ -332,3 +332,33 @@ def test_a_numeric_chat_id_is_not_a_crash():
     # None and absent stay falsy rather than becoming the string "None"
     assert tc._cfg_text(_sd(telegram_chat_id=None), "telegram_chat_id") == ""
     assert tc._cfg_text(_sd(), "telegram_chat_id") == ""
+
+
+def test_the_environment_outranks_the_saved_config():
+    """The credentials can live in a systemd EnvironmentFile outside the Bjorn tree, so an
+    uninstall (which removes /home/bjorn/Bjorn, never /etc/bjorn) does not take them with it — and
+    so they are absent from the shared_config.json that /load_config serves. Env wins when set;
+    the saved config still works untouched when it is not."""
+    import os
+
+    sd = _sd(telegram_bot_token="from-config", telegram_chat_id="111")
+    saved = {k: os.environ.get(k) for k in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID")}
+    try:
+        os.environ["TELEGRAM_BOT_TOKEN"] = "from-env"
+        os.environ["TELEGRAM_CHAT_ID"] = " 222 "          # whitespace from a hand-edited env file
+        assert tc._cfg_text(sd, "telegram_bot_token") == "from-env"
+        assert tc._cfg_text(sd, "telegram_chat_id") == "222"
+
+        # Set-but-empty is not "configured" — an env file with TELEGRAM_CHAT_ID= must not blank
+        # out a working config value.
+        os.environ["TELEGRAM_CHAT_ID"] = ""
+        assert tc._cfg_text(sd, "telegram_chat_id") == "111"
+
+        del os.environ["TELEGRAM_BOT_TOKEN"], os.environ["TELEGRAM_CHAT_ID"]
+        assert tc._cfg_text(sd, "telegram_bot_token") == "from-config"
+    finally:
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value

@@ -724,6 +724,12 @@ ExecStartPre=/home/bjorn/Bjorn/kill_port_8000.sh
 # watchdog was the only thing still killing it. /run is tmpfs, so only a reboot cleared it.
 # Absent file = no check (the watchdog's own -f guard), which is correct during startup.
 ExecStartPre=/bin/rm -f /run/bjorn_heartbeat
+# Secrets that should outlive the install: TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, ANTHROPIC_API_KEY.
+# Outside \$BJORN_PATH on purpose — uninstall_bjorn.sh removes /home/bjorn/Bjorn and the unit files
+# and never touches /etc/bjorn, so a reinstall picks the credentials back up with no re-entry. They
+# are also then absent from shared_config.json, which /load_config serves to anyone who reaches
+# port 8000. The leading '-' means "optional": no file, no failure, and the web config still works.
+EnvironmentFile=-/etc/bjorn/bjorn.env
 ExecStart=/usr/bin/python3 /home/bjorn/Bjorn/Bjorn.py
 WorkingDirectory=/home/bjorn/Bjorn
 StandardOutput=inherit

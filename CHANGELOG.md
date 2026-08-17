@@ -26,6 +26,19 @@
   that baseline; nothing measures it yet, so a bake-off comes before the feature.
 
 ### Fixed
+- **Saving the web config turned digits-only text fields into numbers.** `save_configuration`
+  decided a posted value's type by looking at the value — `"300"` is a number, so `"7961436291"`
+  must be one too. It is not: a Telegram chat id is an identifier, and once stored as an int every
+  `(value or "").strip()` in `telegram_client` raised `AttributeError`, which reached the browser
+  as a bare **"Internal Server Error"** with nothing in it to act on (found 2026-08-17 setting up
+  a bot; the earlier, honest `chat not found` came back as JSON because it was a *clean* failure).
+  An all-digit password would have been worse — `int()` drops leading zeros, so the saved secret
+  would silently stop being the one that was typed. The rule is now "the type comes from what the
+  key already holds", in a testable `config_validation.coerce_saved_value()`: string keys keep
+  their text, numeric keys still convert, unknown keys fall back to the old guess. `telegram_client`
+  reads both credentials through `_cfg_text()` as well, so a config already written by the old path
+  works without re-saving it.
+
 - **Offline auto-join aimed at the capture radio when `wifi_scan_iface` was blank.**
   `reconnect_best()` passed the raw config string to `uplink_candidate()`, so an unset key — the
   shipped default — matched no interface and the reconnect went to whichever radio `iw dev` listed

@@ -310,3 +310,25 @@ def test_an_oversized_bundle_is_refused_before_the_upload():
             f.write(b"0" * (tc.TELEGRAM_MAX_BYTES + 1))
         ok, detail = tc.send_bundle(sd)
         assert not ok and "download it instead" in detail
+
+
+def test_a_numeric_chat_id_is_not_a_crash():
+    """JSON gives back whatever was written: a chat id of 7961436291 parses as an int, and the old
+    `(value or "").strip()` raised AttributeError -> bare HTTP 500 in the browser. Configs written
+    by the pre-fix save path are already on disk, so the reader has to cope with them."""
+    sd = _sd(telegram_bot_token="123:abc", telegram_chat_id=7961436291)
+    assert tc._cfg_text(sd, "telegram_chat_id") == "7961436291"
+
+    sent = {}
+    saved = tc.send_message
+    tc.send_message = lambda token, chat, text: (sent.update(token=token, chat=chat), (True, "sent"))[1]
+    try:
+        ok, detail = tc.send_test(sd)          # must not raise
+    finally:
+        tc.send_message = saved
+    assert ok and detail == "sent via telegram"
+    assert sent["chat"] == "7961436291", "the id must reach Telegram as text"
+
+    # None and absent stay falsy rather than becoming the string "None"
+    assert tc._cfg_text(_sd(telegram_chat_id=None), "telegram_chat_id") == ""
+    assert tc._cfg_text(_sd(), "telegram_chat_id") == ""

@@ -30,6 +30,7 @@ from logger import Logger
 import monitor_mode
 import offline_mode
 from path_safety import safe_under, zip_escapes
+from config_validation import coerce_saved_value
 from starlette.responses import JSONResponse, HTMLResponse, PlainTextResponse, Response, FileResponse
 from actions.nmap_vuln_scanner import NmapVulnScanner
 import telegram_client
@@ -1062,23 +1063,9 @@ method=auto
             current_config = dict(self.shared_data.config)
 
             for key, value in params.items():
-                if isinstance(value, bool):
-                    current_config[key] = value
-                elif isinstance(value, str) and value.lower() in ['true', 'false']:
-                    current_config[key] = value.lower() == 'true'
-                elif isinstance(value, (int, float)):
-                    current_config[key] = value
-                elif isinstance(value, list):
-                    # Drop empty-string entries the form sometimes posts.
-                    value = [v for v in value if v != ""]
-                    current_config[key] = value
-                elif isinstance(value, str):
-                    if value.replace('.', '', 1).isdigit():
-                        current_config[key] = float(value) if '.' in value else int(value)
-                    else:
-                        current_config[key] = value
-                else:
-                    current_config[key] = value
+                # The type is decided by what the key already holds, not by what the posted string
+                # looks like — see config_validation.coerce_saved_value.
+                current_config[key] = coerce_saved_value(value, current_config.get(key))
 
             # Push into shared_data and persist via the atomic path.
             self.shared_data.config = current_config

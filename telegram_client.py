@@ -123,11 +123,23 @@ def send_email(shared_data, subject, body, filename=None, content_bytes=None):
         return (False, str(e))
 
 
+def _cfg_text(shared_data, key):
+    """A config value as text, whatever JSON parsed it into.
+
+    A chat id is digits, so it can reach us as an int — the web form's own save path did exactly
+    that until 2026-08-17, and `.strip()` on an int is an AttributeError that surfaces in the
+    browser as a bare "Internal Server Error" with no clue in it. The save side is fixed, but
+    configs written by the old one are already on disk, and a delivery channel that only works
+    after the operator re-saves the page is not fixed."""
+    value = getattr(shared_data, key, "")
+    return "" if value is None else str(value).strip()
+
+
 def _deliver(shared_data, subject, filename, payload):
     """Send via Telegram, falling back to SMTP when Telegram is unconfigured or fails. Returns
     (ok, detail) where detail names the channel used (or why every channel was skipped)."""
-    token = (getattr(shared_data, "telegram_bot_token", "") or "").strip()
-    chat = (getattr(shared_data, "telegram_chat_id", "") or "").strip()
+    token = _cfg_text(shared_data, "telegram_bot_token")
+    chat = _cfg_text(shared_data, "telegram_chat_id")
     if token and chat:
         ok, detail = (send_document(token, chat, filename, payload, subject) if payload
                       else send_message(token, chat, subject))
@@ -359,8 +371,8 @@ def send_targets(shared_data, force=False):
     """Compile the raw target dataset and send it as a JSON document (Telegram, else SMTP) — but
     only when it changed since the last send (unless force). Returns (ok, detail, sent). Network
     errors leave the stored signature untouched so the next cycle retries when back online."""
-    have_telegram = ((getattr(shared_data, "telegram_bot_token", "") or "").strip()
-                     and (getattr(shared_data, "telegram_chat_id", "") or "").strip())
+    have_telegram = (_cfg_text(shared_data, "telegram_bot_token")
+                     and _cfg_text(shared_data, "telegram_chat_id"))
     if not have_telegram and not getattr(shared_data, "smtp_enabled", False):
         return (False, "no delivery channel configured", False)
 

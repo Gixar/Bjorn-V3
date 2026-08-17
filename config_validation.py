@@ -10,6 +10,37 @@ KNOWN_EPD_TYPES = {
     "epd2in13", "epd2in13_V2", "epd2in13_V3", "epd2in13_V4", "epd2in7", "mock", "auto",
 }
 
+def coerce_saved_value(value, existing):
+    """The type a value posted by the web config form should take. Pure/testable.
+
+    Forms post everything as text, so something has to decide that "300" is a number. The rule
+    used to be "it looks like digits, so it is a number", and that is wrong for every field whose
+    contents are an *identifier* rather than a quantity: a Telegram chat id (`7961436291`) became
+    an int, and every consumer doing `.strip()` on it raised AttributeError — which reached the
+    browser as a bare "Internal Server Error" (2026-08-17). An all-digit password would have been
+    worse: `int()` drops leading zeros, so the saved secret would no longer be the one typed.
+
+    The type therefore comes from what the key already holds, not from what the string looks like.
+    `existing` is the current (default-merged) value: string stays string, number still converts,
+    and an unknown key falls back to the old guess so a new field keeps working before it has a
+    default.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str) and value.lower() in ("true", "false"):
+        return value.lower() == "true"
+    if isinstance(value, (int, float)):
+        return value
+    if isinstance(value, list):
+        return [v for v in value if v != ""]          # drop the empty entries forms post
+    if isinstance(value, str):
+        if isinstance(existing, str):
+            return value                              # identifier/secret/text field: hands off
+        if value.replace(".", "", 1).isdigit():
+            return float(value) if "." in value else int(value)
+    return value
+
+
 _BOOL_KEYS = ("manual_mode", "websrv", "debug_mode", "scan_vuln_running",
               "battery_monitor_enabled", "vuln_scan_sv", "vuln_scan_vulners",
               "vuln_offline_cve", "use_rustscan", "rustscan_full_port",

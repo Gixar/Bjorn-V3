@@ -254,3 +254,27 @@ if __name__ == "__main__":
         if name.startswith("test_") and callable(fn):
             fn()
     print("ok")
+
+
+def test_a_digits_only_string_field_stays_a_string():
+    """The web form posts everything as text, so something has to decide "300" is a number. Doing
+    that by *looking at the value* corrupted every field whose contents are an identifier rather
+    than a quantity: a Telegram chat id became an int and every `.strip()` on it became a 500
+    (2026-08-17), and an all-digit password would have lost its leading zeros on the way to disk.
+    """
+    from config_validation import coerce_saved_value
+
+    # existing value is a string -> keep the text, however numeric it looks
+    assert coerce_saved_value("7961436291", "") == "7961436291"
+    assert coerce_saved_value("007", "abc") == "007"
+    # existing value is a number -> still coerce, or the numeric knobs would all become strings
+    assert coerce_saved_value("300", 60) == 300
+    assert coerce_saved_value("1.5", 2.0) == 1.5
+    # unknown key (no existing value): fall back to the old guess so new fields keep working
+    assert coerce_saved_value("300", None) == 300
+    assert coerce_saved_value("wlan1", None) == "wlan1"
+    # the other shapes are unchanged
+    assert coerce_saved_value(True, False) is True
+    assert coerce_saved_value("true", False) is True
+    assert coerce_saved_value("FALSE", True) is False
+    assert coerce_saved_value([1, "", 2], []) == [1, 2]

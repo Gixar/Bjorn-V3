@@ -197,7 +197,7 @@ class SharedData:
             "wifi_scan_channel": 0,           # 0 = hop channels; a channel number locks to it (overrides band)
             "wifi_scan_interval_offline": 120,  # min seconds between Wi-Fi scans while there is NO uplink (survey is the only work left)
             "offline_mode_enabled": True,     # with no default route: pause IP scanning, run wireless recon, try to rejoin
-            "offline_cycle_interval": 60,     # seconds between offline recon/reconnect cycles
+            "offline_cycle_interval": 60,     # seconds between offline recon/reconnect cycles — ALSO the cap on every offline cadence above: standalones run once per cycle, so at 300 the BLE/Wi-Fi *_interval_offline keys can never fire faster than 5 min. Raise it for a stationary long hunt, leave it at 60 when the device is moving
             "wifi_autojoin": True,            # while offline, rejoin a saved network that comes back in range
             "wifi_autojoin_open": False,      # ALSO join open networks Bjorn has no profile for — off by default: joining someone's open AP is a posture decision, not a connectivity fix
             "telegram_enabled": False,        # auto-send raw target data to Telegram when it changes

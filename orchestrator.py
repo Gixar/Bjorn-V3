@@ -475,6 +475,12 @@ class Orchestrator:
         self.shared_data.bjornorch_status = "IDLE"
         self.shared_data.bjornstatustext2 = "offline · surveying"
 
+        # ONE pass of the standalones per cycle, then the idle window. That makes
+        # offline_cycle_interval the ceiling on every offline cadence, not just the reconnect one:
+        # ble_scan_interval_offline=60 cannot fire more often than the cycle it lives in, so a
+        # 300s cycle silently turns a 60s BLE cadence into a 5-minute one and hunts a channel
+        # picked from a survey of wherever the device was five minutes ago. Long cycles suit a
+        # device sitting still; a device being carried wants the default.
         current_data = self.shared_data.read_data()
         self.run_standalone_actions(current_data, offline=True)  # WiFiScan/BLEScan self-throttle
         self.merge_bettercap_hosts(current_data)

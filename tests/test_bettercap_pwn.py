@@ -14,10 +14,12 @@ No radio, no daemon and no Pi: the guard is pure logic over injected state, and 
 against a fake process and a faked `iw`.
 """
 import os
+import csv
 import sys
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -276,6 +278,21 @@ def test_a_hex_looking_essid_does_not_swallow_the_mac():
         assert parsed == essid
 
 
+def test_bettercap_writes_a_separatorless_mac_and_that_still_parses():
+    """The filename the 2026-08-17 walk actually produced. The separated-only pattern matched
+    nothing in it, so every capture was indexed with bssid="" — unique_bssids stayed 0 (the trophy
+    counter never moved) and plan_session's `owned` set held one empty string, which excludes
+    nothing. Normalised to the same colon form as the separated shapes."""
+    assert pwn.parse_capture_name("Espanola_e81da862c75c.pcap") == ("E8:1D:A8:62:C7:5C", "Espanola")
+    assert pwn.parse_capture_name("e81da862c75c.pcap") == ("E8:1D:A8:62:C7:5C", "")
+
+
+def test_a_longer_hex_run_is_not_mistaken_for_a_bare_mac():
+    """Same lookaround job as the separated form: 12 hex characters are only a MAC when they are a
+    whole token, or "deadbeefcafe01" donates its first twelve to a BSSID."""
+    assert pwn.parse_capture_name("deadbeefcafe01.pcap") == ("", "deadbeefcafe01")
+
+
 def _capture(tmp_path, relname, content=b"pcap"):
     """Filenames here use DASHED MACs: Windows rejects ':' in a path, while Linux allows it. The
     colon form is covered by parse_capture_name's pure test, which never touches the disk."""
@@ -477,6 +494,101 @@ def test_no_targets_means_keep_hopping():
     """Being blind everywhere beats being parked on a channel with nothing on it."""
     channel, why = pwn.pick_channel([])
     assert channel == 0 and "hopping" in why
+
+
+# --- E1a: the survey is read back through the spreadsheet guard ------------
+
+def _survey(tmp_path, rows):
+    """Write wifi_aps.csv exactly the way wifi_scan does — through sanitize_row — so the read side
+    is tested against the bytes that are really on disk, not against a hand-built ideal."""
+    from csv_safe import sanitize_row
+    cols = ["BSSID", "ESSID", "Channel", "Privacy", "Cipher", "Auth", "Power", "Beacons",
+            "FirstSeen", "LastSeen"]
+    path = tmp_path / "wifi_aps.csv"
+    with open(path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(cols)
+        for row in rows:
+            w.writerow(sanitize_row([row.get(c, "") for c in cols]))
+    return str(path)
+
+
+def test_signal_survives_the_round_trip_through_the_csv_guard(tmp_path):
+    """The 2026-08-17 outage end to end, and the test that was missing: dBm is always negative, so
+    sanitize_row always guards it, and reading it back without unsanitize gives "'-52" — which
+    int() rejects. Both places that parse Power then hit their except branch, so min_rssi excluded
+    nothing and every AP scored 0 for proximity. Asserted through _read_csv_rows rather than on
+    the helper, because the helper was never the part that was wrong."""
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    path = _survey(tmp_path, [
+        dict(_ap("AA:BB:CC:00:00:02", "Nearby", "6", power="-52"), LastSeen=now),
+        dict(_ap("AA:BB:CC:00:00:03", "Faint", "6", power="-88"), LastSeen=now),
+    ])
+    assert open(path).read().splitlines()[1].split(",")[6] == "'-52"   # guard still on disk
+
+    ranked = pwn.score_targets(pwn._read_csv_rows(path), [])
+    assert [t["essid"] for t in ranked] == ["Nearby"], "min_rssi excluded nothing"
+    assert "-52dBm" in ranked[0]["reason"], "proximity contributed nothing to the score"
+    assert ranked[0]["score"] > pwn.WPA_BONUS, "score is WPA alone, with no signal component"
+
+
+# --- E1b: the survey is a permanent record, the radio is not ---------------
+
+def _aged(bssid, minutes_ago, essid="Net", channel="6", power="-45"):
+    """An AP row carrying a LastSeen, in airodump's own format: local wall-clock, space separator
+    and no timezone. That naive-local shape is the one _age_seconds has to get right."""
+    seen = datetime.now() - timedelta(minutes=minutes_ago)
+    row = _ap(bssid, essid, channel, power=power)
+    row["LastSeen"] = seen.strftime("%Y-%m-%d %H:%M:%S")
+    return row
+
+
+def test_an_ap_not_heard_recently_is_not_a_target():
+    """The 2026-08-17 walk in one assertion. wifi_aps.csv never forgets, so after ten hours it held
+    370 APs from streets already left behind; pick_channel summed all of them and pinned the radio
+    to one 5 GHz channel for 9h53m. A radio can only hear what is in front of it now."""
+    aps = [_aged("AA:BB:CC:00:00:01", minutes_ago=180, essid="Ghost"),
+           _aged("AA:BB:CC:00:00:02", minutes_ago=1, essid="Here")]
+    assert [t["essid"] for t in pwn.score_targets(aps, [])] == ["Here"]
+
+
+def test_a_stale_client_does_not_grant_the_clients_bonus():
+    """'has clients' is worth 45 of a 55-point target, so a stale client table alone is enough to
+    aim the radio wrong. An association seen three hours ago will not re-associate now."""
+    aps = [_aged("AA:BB:CC:00:00:01", minutes_ago=1)]
+    old = {"BSSID": "AA:BB:CC:00:00:01", "Station": "11:22:33:44:55:66",
+           "LastSeen": (datetime.now() - timedelta(hours=3)).strftime("%Y-%m-%d %H:%M:%S")}
+    assert "has clients" not in pwn.score_targets(aps, [old])[0]["reason"]
+    fresh = dict(old, LastSeen=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    assert "has clients" in pwn.score_targets(aps, [fresh])[0]["reason"]
+
+
+def test_a_naive_timestamp_is_read_as_local_not_utc():
+    """airodump writes local time with no offset. Treating that as UTC would age every fresh row by
+    the local offset — two hours here in summer — and silently empty the target list."""
+    stamp = (datetime.now() - timedelta(seconds=30)).strftime("%Y-%m-%d %H:%M:%S")
+    assert 0 <= pwn._age_seconds(stamp) < 120
+
+
+def test_an_aware_utc_timestamp_is_read_correctly_too():
+    """The other format in the file: wifi_scan._merge falls back to an aware UTC isoformat when
+    airodump left LastSeen blank, so both shapes coexist in one column."""
+    stamp = (datetime.now(timezone.utc) - timedelta(seconds=30)).isoformat()
+    assert 0 <= pwn._age_seconds(stamp) < 120
+
+
+def test_an_unreadable_timestamp_keeps_the_target():
+    """Same tolerance Power and Channel already get: airodump writes blanks and odd spacing, and a
+    target should be judged on what parsed rather than dropped for one bad column."""
+    assert pwn._age_seconds("") is None
+    aps = [_ap("AA:BB:CC:00:00:01", "NoStamp")]          # no LastSeen key at all
+    assert len(pwn.score_targets(aps, [])) == 1
+
+
+def test_max_age_zero_disables_the_cut():
+    """The escape hatch: a stationary Bjorn watching one street wants the whole table."""
+    aps = [_aged("AA:BB:CC:00:00:01", minutes_ago=600)]
+    assert len(pwn.score_targets(aps, [], max_age=0)) == 1
 
 
 def test_build_cmd_only_locks_a_channel_when_one_was_chosen():

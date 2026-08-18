@@ -131,6 +131,9 @@
                 <label class="tg-field">Ignore access points weaker than (dBm, negative)
                     <input type="number" id="bc-pwn-rssi" min="-100" max="0" value="-80">
                 </label>
+                <label class="tg-field">Ignore access points not heard in (seconds, 0 = never forget)
+                    <input type="number" id="bc-pwn-max-age" min="0" step="60" value="600">
+                </label>
             </div>
             <p class="card-subtitle" id="bc-loot">No captures yet.</p>
 

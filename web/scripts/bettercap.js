@@ -5,6 +5,11 @@ function bcToggleReveal(id) {
     if (el) el.type = el.type === "password" ? "text" : "password";
 }
 
+function bcInt(id, fallback) {
+    const n = parseInt(document.getElementById(id).value, 10);
+    return Number.isNaN(n) ? fallback : n;
+}
+
 function bcFillConfig(cfg) {
     document.getElementById("bc-enabled").checked = !!cfg.bettercap_enabled;
     document.getElementById("bc-url").value = cfg.bettercap_api_url || "http://127.0.0.1:8081";
@@ -16,6 +21,8 @@ function bcFillConfig(cfg) {
     document.getElementById("bc-pwn-iface").value = cfg.bettercap_pwn_iface || "";
     document.getElementById("bc-pwn-rssi").value =
         cfg.bettercap_pwn_min_rssi !== undefined ? cfg.bettercap_pwn_min_rssi : -80;
+    document.getElementById("bc-pwn-max-age").value =
+        cfg.bettercap_pwn_max_target_age !== undefined ? cfg.bettercap_pwn_max_target_age : 600;
 }
 
 async function bcSave() {
@@ -29,6 +36,9 @@ async function bcSave() {
         bettercap_pwn_enabled: document.getElementById("bc-pwn-enabled").checked,
         bettercap_pwn_iface: document.getElementById("bc-pwn-iface").value.trim(),
         bettercap_pwn_min_rssi: parseInt(document.getElementById("bc-pwn-rssi").value, 10) || -80,
+        // Not `|| 600`: 0 is the documented "never forget" setting, and || would silently discard
+        // it and write the default back over the user's choice.
+        bettercap_pwn_max_target_age: bcInt("bc-pwn-max-age", 600),
     };
     try {
         await postJson("/save_config", body);

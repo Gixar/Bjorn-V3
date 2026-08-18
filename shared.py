@@ -234,6 +234,10 @@ class SharedData:
             "bettercap_pwn_enabled": True,    # hunt for handshakes while there is no uplink
             "bettercap_pwn_iface": "",        # radio to hunt on; blank = any non-uplink radio
             "bettercap_pwn_min_rssi": -80,    # dBm (NEGATIVE): ignore APs weaker than this
+            # seconds: ignore APs not heard this recently. wifi_aps.csv is a permanent survey, so
+            # without this the hunter aims at every AP it has ever passed. Lower it if handshakes
+            # stay thin while moving; raise it if the target list keeps emptying while stationary.
+            "bettercap_pwn_max_target_age": 600,
             "steal_file_names": ["ssh.csv","hack.txt"],
             "steal_file_extensions": [".bjorn",".hack",".flag"],
             

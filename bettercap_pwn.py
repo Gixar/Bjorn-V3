@@ -23,11 +23,12 @@ import shutil
 import logging
 import tempfile
 import subprocess
-from datetime import datetime
+from datetime import datetime, timezone
 
 import monitor_mode
 import offline_mode
 from logger import Logger
+from csv_safe import unsanitize_dict
 
 logger = Logger(name="bettercap_pwn.py", level=logging.INFO)
 
@@ -152,7 +153,17 @@ CAPTURE_SUFFIXES = (".pcap", ".pcapng", ".cap")
 # starting inside the ESSID — "fe-aa-bb-cc-dd-ee" is a perfectly good MAC shape — and yields the
 # BSSID FE:AA:BB:CC:DD:EE with an ESSID of "Ca-02". Any hex-looking ESSID (cafe, beef, dead, ace)
 # hits this. Requiring a non-hex character on both sides forces the match onto a whole token.
-_MAC_IN_NAME = re.compile(r"(?<![0-9a-f])([0-9a-f]{2}(?:[:-][0-9a-f]{2}){5})(?![0-9a-f])", re.I)
+#
+# The separator-less alternative is what bettercap actually writes, and the "when a real filename
+# is in hand" note above is now cashed in: the 2026-08-17 walk produced
+# "Espanola_e81da862c75c.pcap", which the separated-only pattern did not match at all. Every
+# capture indexed with bssid="" — so unique_bssids stayed 0 (the trophy counter never moved) and
+# `owned` in plan_session was a set containing one empty string, leaving the already-captured
+# exclusion dead. The separated form stays first in the alternation: it is the less ambiguous
+# shape, and a bare 12-hex run can also be a hex-ish ESSID ("deadbeefcafe"), which this will read
+# as a BSSID. Wrong-but-tolerant beats right-in-theory here, same as the rest of this parser.
+_MAC_IN_NAME = re.compile(
+    r"(?<![0-9a-f])((?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}|[0-9a-f]{12})(?![0-9a-f])", re.I)
 
 
 def parse_capture_name(filename):
@@ -166,7 +177,8 @@ def parse_capture_name(filename):
     match = _MAC_IN_NAME.search(stem)
     if not match:
         return "", stem.strip(" _-")
-    bssid = match.group(1).replace("-", ":").upper()
+    raw = re.sub(r"[:-]", "", match.group(1)).upper()
+    bssid = ":".join(raw[i:i + 2] for i in range(0, 12, 2))
     essid = (stem[:match.start()] + stem[match.end():]).strip(" _-")
     return bssid, essid
 
@@ -296,12 +308,51 @@ CLIENTS_BONUS = 45     # dominant signal: a WPA handshake happens when a client 
 WPA_BONUS = 10         # WPA/WPA2 PSK is the crackable case
 WEP_BONUS = 4
 DEFAULT_MIN_RSSI = -80
+# wifi_aps.csv is a permanent record — _merge keeps every AP ever heard, which is right for a
+# survey and wrong for aiming a radio. Walking, that table is mostly places you have already left:
+# on 2026-08-17 it reached 370 APs and pinned the hunter to one channel for 9h53m. Ten minutes is
+# the calibration knob (`bettercap_pwn_max_target_age`), not a law — it wants to be long enough to
+# survive a few skipped scans and short enough that a target is still within earshot. Walking pace
+# covers ~800 m in ten minutes, so if handshakes stay thin outdoors, shorten this first.
+DEFAULT_MAX_AGE = 600  # seconds
+
+
+def _age_seconds(stamp, now=None):
+    """Seconds since `stamp`, or None when it cannot be read. Pure/testable.
+
+    Two formats reach this field. airodump-ng writes local wall-clock with a space separator, and
+    wifi_scan._merge falls back to an aware UTC isoformat when airodump left it blank.
+    fromisoformat reads both. A naive value is local *by construction* — hence astimezone() rather
+    than assuming UTC, which in summer here would age every fresh row by two hours and throw the
+    whole survey away.
+
+    None (not inf) for an unreadable stamp, so the caller keeps the target: same tolerance the
+    Power and Channel columns already get, because airodump writes blanks and odd spacing.
+    """
+    try:
+        seen = datetime.fromisoformat(str(stamp).strip())
+    except (TypeError, ValueError):
+        return None
+    if seen.tzinfo is None:
+        seen = seen.astimezone()
+    return ((now or datetime.now(timezone.utc)) - seen).total_seconds()
+
+
+def _is_stale(row, max_age, now=None):
+    """True when a survey row is too old to aim at. Unreadable or absent LastSeen keeps it."""
+    if not max_age:
+        return False
+    age = _age_seconds(row.get("LastSeen"), now)
+    return age is not None and age > max_age
 
 
 def _read_csv_rows(path):
+    """Rows of one of Bjorn's own CSVs, with the spreadsheet guard taken back off — this is the
+    read that has to parse Power as a number, and "'-67" is not one (see csv_safe.unsanitize_cell).
+    """
     try:
         with open(path, newline="", errors="replace") as f:
-            return list(csv.DictReader(f))
+            return [unsanitize_dict(row) for row in csv.DictReader(f)]
     except OSError:
         return []
 
@@ -316,21 +367,30 @@ def signal_bonus(power):
     return max(0, min(30, (dbm + 90) // 2))
 
 
-def score_targets(aps, clients, owned_bssids=(), min_rssi=DEFAULT_MIN_RSSI):
+def score_targets(aps, clients, owned_bssids=(), min_rssi=DEFAULT_MIN_RSSI,
+                  max_age=DEFAULT_MAX_AGE, now=None):
     """Rank APs worth hunting. Pure/testable. Returns [{bssid, essid, channel, score, reason}].
 
-    Three exclusions, each because the target cannot pay:
+    Four exclusions, each because the target cannot pay:
+      - **Stale.** Not heard in max_age seconds. wifi_aps.csv never forgets, so most of it is
+        somewhere you have already walked away from; a radio parked on those hears nothing.
       - **Already captured.** A second handshake for a network we hold adds nothing.
       - **Open networks.** No PSK, so there is no four-way handshake to catch. Nothing to crack.
       - **Too weak.** Below min_rssi the client half of the exchange is usually unhearable.
+
+    The client table gets the same age cut. It has to: "has clients" is the dominant 45-point
+    bonus, and an association seen hours ago is not a client that is going to re-associate now.
     """
     owned = {b.upper() for b in owned_bssids if b}
-    with_clients = {(row.get("BSSID") or "").upper() for row in clients}
+    with_clients = {(row.get("BSSID") or "").upper() for row in clients
+                    if not _is_stale(row, max_age, now)}
     ranked = []
     for ap in aps:
         bssid = (ap.get("BSSID") or "").strip().upper()
         if not bssid or bssid in owned:
             continue
+        if _is_stale(ap, max_age, now):
+            continue                                   # last heard too long ago to still be here
         privacy = (ap.get("Privacy") or "").upper()
         if "WPA" not in privacy and "WEP" not in privacy:
             continue                                   # OPN / blank: no PSK, no handshake
@@ -401,7 +461,8 @@ def plan_session(shared_data):
     base = getattr(shared_data, "handshakes_dir", None) or ""
     owned = {e.get("bssid", "") for e in load_index(base).values()}
     min_rssi = getattr(shared_data, "bettercap_pwn_min_rssi", DEFAULT_MIN_RSSI)
-    ranked = score_targets(aps, clients, owned, min_rssi)
+    max_age = getattr(shared_data, "bettercap_pwn_max_target_age", DEFAULT_MAX_AGE)
+    ranked = score_targets(aps, clients, owned, min_rssi, max_age)
     channel, why = pick_channel(ranked)
     return channel, why, ranked
 

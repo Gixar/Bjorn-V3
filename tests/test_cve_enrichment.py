@@ -111,6 +111,22 @@ def test_scan_reports_failure_when_nmap_exits_nonzero():
         mod.subprocess.run = run_rc(0, "80/tcp open http\nnothing vulnerable here\n")  # clean, no vulns
         assert obj.scan_vulnerabilities("10.0.0.9", "h", "AA:BB", ["80"]) is not None, \
             "a clean scan that found no vulns still succeeds"
+
+        # A host with no known open ports: netkb stores "" and row["Ports"].split(";") yields [""],
+        # which built `-p ""` and made nmap refuse the run (Error #485). Nothing to scan means nmap
+        # is never spawned at all. Recorded, not raised — scan_vulnerabilities catches Exception,
+        # and an AssertionError from inside the fake would be swallowed into the None this asserts.
+        spawned = []
+
+        def record(*a, **k):
+            spawned.append(a[0])
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        mod.subprocess.run = record
+        for portless in ([""], [], ["", " "]):
+            assert obj.scan_vulnerabilities("10.0.0.9", "h", "AA:BB", portless) is None, \
+                f"{portless!r} is no ports at all, not a port specification"
+        assert not spawned, f"nmap was spawned without a port list: {spawned}"
     finally:
         mod.subprocess.run = real_run
 

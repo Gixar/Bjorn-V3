@@ -102,6 +102,16 @@ class NmapVulnScanner:
         try:
             self.shared_data.bjornstatustext2 = ip
 
+            # An empty netkb Ports cell splits to [""], not [] — so this used to build `-p ""` and
+            # nmap refused the whole run with "Error #485: Your port specifications are illegal".
+            # Five of seven hosts on a live net had no ports, so most of the sweep was that error.
+            # No known open ports means there is nothing to scan, which execute() reports as
+            # 'skipped': no netkb mark, so the host is scanned once the port scanner finds a way in.
+            ports = [p.strip() for p in ports if p.strip()]
+            if not ports:
+                logger.info(f"No known open ports for {ip}; nothing to vulnerability-scan.")
+                return None
+
             # Proceed with scanning if ports are not already scanned
             logger.info(f"Scanning {ip} on ports {','.join(ports)} for vulnerabilities with aggressivity {self.shared_data.nmap_scan_aggressivity}")
             nmap_args = ["nmap", self.shared_data.nmap_scan_aggressivity]

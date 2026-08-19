@@ -68,6 +68,25 @@ def test_every_action_that_paused_still_pauses():
         assert "time.sleep(5)" not in src, f"{name} still has the hardcoded sleep"
 
 
+def test_a_status_without_artwork_is_not_logged_as_a_warning():
+    """Most actions have no e-paper artwork and never will, so falling back to the IDLE image is
+    the designed behaviour, not a fault. Ten of these fired at WARNING on the live device, and
+    before the once-per-key throttle the display's frame rate turned one of them into 10k+
+    identical lines — the throttle has to stay, the level had to go.
+
+    Read from source rather than imported: _stubs replaces the whole `shared` module with a fake,
+    because the real one pulls in PIL and the e-Paper stack."""
+    src = (Path(__file__).resolve().parent.parent / "shared.py").read_text(encoding="utf-8")
+    start = src.index("    def _note_missing_image_once")
+    body = src[start:]
+    body = body[:body.index("\n    def ", 1)]
+
+    assert "logger.info(" in body, "the note must still be logged, just not as a problem"
+    assert "logger.warning(" not in body, \
+        "a status with no artwork is normal; warning about it is noise nobody can action"
+    assert "_status_image_warned" in body, "the once-per-key throttle must stay"
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

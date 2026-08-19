@@ -131,6 +131,46 @@ def test_scan_reports_failure_when_nmap_exits_nonzero():
         mod.subprocess.run = real_run
 
 
+def test_a_portless_host_is_not_reported_as_a_failed_scan():
+    """Nothing to scan is not a scan that broke. Five of seven hosts on the live net have no open
+    ports, so execute() warning on every one of them was 49 WARNING lines in three hours — noise at
+    a level reserved for problems. A scan that actually ran and failed must still warn."""
+    import tempfile
+    from types import SimpleNamespace
+    import actions.nmap_vuln_scanner as mod
+
+    obj = mod.NmapVulnScanner.__new__(mod.NmapVulnScanner)
+    obj.shared_data = SimpleNamespace(bjornstatustext2="", bjornorch_status="",
+                                      nmap_scan_aggressivity="-T4", vuln_scan_sv=False,
+                                      vuln_scan_vulners=False, vuln_offline_cve=False)
+    obj.summary_file = tempfile.NamedTemporaryFile(delete=False, suffix=".csv").name
+    obj.scan_results = []
+    obj._cve_signatures = []
+
+    warned, spawned = [], []
+    real_run, real_warn = mod.subprocess.run, mod.logger.warning
+    mod.logger.warning = lambda msg, *a, **k: warned.append(msg)
+
+    def record(*a, **k):
+        spawned.append(a[0])
+        return SimpleNamespace(returncode=1, stdout="", stderr="boom")
+
+    try:
+        mod.subprocess.run = record
+        row = {"Ports": "", "Hostnames": "h", "MAC Address": "AA:BB"}
+        assert obj.execute("10.0.0.9", row, "NmapVulnScanner") == "skipped"
+        assert not spawned, "no ports, so nmap must not run"
+        assert not warned, f"a host with nothing to scan is not a failure: {warned}"
+
+        # ...but a host with ports whose scan really did fail still has to say so.
+        row = {"Ports": "80;443", "Hostnames": "h", "MAC Address": "AA:BB"}
+        assert obj.execute("10.0.0.9", row, "NmapVulnScanner") == "skipped"
+        assert spawned, "a host with ports must actually be scanned"
+        assert warned, "a scan that ran and failed must still warn"
+    finally:
+        mod.subprocess.run, mod.logger.warning = real_run, real_warn
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

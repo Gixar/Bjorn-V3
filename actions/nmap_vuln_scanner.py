@@ -165,14 +165,21 @@ class NmapVulnScanner:
             self.save_results(row["MAC Address"], ip, scan_result)
             return 'success'
         else:
-            # 'skipped', not 'success'. scan_vulnerabilities() returns None only when it raised, so
-            # this branch is "the scan did not happen". Reporting it as success wrote
+            # 'skipped', not 'success'. None means the scan did not happen. Reporting it as success
+            # wrote
             # success_<ts> into netkb, counted a success in the run report, and — with
             # retry_success_actions off — meant the host was never scanned again. The original
             # intent ("only scan once") is preserved by 'skipped': it leaves no netkb mark and no
             # run-report entry, so the host is retried, but nothing claims work that did not happen.
             # This is the defect class the codebase keeps rediscovering: a status that cannot fail.
-            logger.warning(f"Vulnerability scan did not complete for {ip}; reporting skipped.")
+            #
+            # Only one of the two ways to land here deserves a WARNING. A host the port scanner
+            # found nothing open on has nothing to scan, which is expected: on a seven-host net
+            # where five are portless that was 49 WARNING lines in three hours. A level that fires
+            # for a healthy steady state trains everyone to ignore it, which is how the
+            # monitor-mode failure sat unnoticed. A scan that ran and broke still says so.
+            if any(p.strip() for p in ports):
+                logger.warning(f"Vulnerability scan did not complete for {ip}; reporting skipped.")
             return 'skipped'
 
     def parse_vulnerabilities(self, scan_result):

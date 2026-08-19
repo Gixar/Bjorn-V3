@@ -584,21 +584,25 @@ class Orchestrator:
                 continue
             scan_status = row.get("NmapVulnScanner", "")
 
+            # The three skips below are the throttle working as designed — every host in backoff
+            # hits one on every sweep, 30 lines in three hours on a seven-host net. DEBUG, not
+            # WARNING: the sweep being selective is not a problem anyone needs told about.
+
             # Skip a host whose vuln scan succeeded recently.
             if 'success' in scan_status:
                 if not self.shared_data.retry_success_actions:
-                    logger.warning(f"Skipping vulnerability scan for {ip} because retry on success is disabled.")
+                    logger.debug(f"Skipping vulnerability scan for {ip} because retry on success is disabled.")
                     continue
                 remaining = retry_wait_remaining(scan_status, self.shared_data.success_retry_delay)
                 if remaining > 0:
-                    logger.warning(f"Skipping vulnerability scan for {ip} due to success retry delay, retry possible in: {timedelta(seconds=remaining)}")
+                    logger.debug(f"Skipping vulnerability scan for {ip} due to success retry delay, retry possible in: {timedelta(seconds=remaining)}")
                     continue
 
             # Skip a host whose vuln scan failed recently.
             if 'failed' in scan_status:
                 remaining = retry_wait_remaining(scan_status, self.shared_data.failed_retry_delay)
                 if remaining > 0:
-                    logger.warning(f"Skipping vulnerability scan for {ip} due to failed retry delay, retry possible in: {timedelta(seconds=remaining)}")
+                    logger.debug(f"Skipping vulnerability scan for {ip} due to failed retry delay, retry possible in: {timedelta(seconds=remaining)}")
                     continue
 
             eligible.append(row)

@@ -263,7 +263,7 @@ def test_acquire_waits_for_the_release_before_changing_the_mode():
         ok, _, _ = monitor_mode.acquire("wlan1")
         assert ok
         monitor_mode.release("wlan1")
-        assert "waited for wpa_supplicant" in events, \n            f"acquire() changed the mode without waiting for the release: {events}"
+        assert "waited for wpa_supplicant" in events, f"acquire() changed the mode without waiting for the release: {events}"
         nmcli = next(i for i, e in enumerate(events) if e.startswith("nmcli device set"))
         wait = events.index("waited for wpa_supplicant")
         mode = next(i for i, e in enumerate(events) if e.startswith("iw dev wlan1 set"))

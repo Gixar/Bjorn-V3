@@ -163,24 +163,41 @@ def arphrd_type(iface):
         return 0
 
 
-def monitor_is_live(iface, timeout=3.0, poll=0.25):
-    """Wait until monitor mode has actually reached the netdev. True when it has.
+def monitor_is_live(iface, timeout=3.0, poll=0.05, settle=0.4):
+    """Wait until monitor mode has actually reached the netdev *and stayed there*. True when it has.
 
-    `iw dev X set type monitor` returns before the driver has re-typed the interface: mac80211
-    switches the netdev to a radiotap ARPHRD as it comes back *up*, so a capture spawned the
-    instant `ip link set up` returns can still open an Ethernet-typed device and exit immediately.
-    That is the intermittent 'ARP linktype is set to 1' failure — observed 2026-08-17 on wlan1,
-    where the retry five seconds later captured 4 APs on the same radio — and intermittent is the
-    worst possible shape for something that has to run unattended for hours.
+    `iw dev X set type monitor` returns before the driver has re-typed the interface, and the retype
+    is not one clean transition: sampling /sys/class/net/wlan1/type every 10ms across six
+    acquisitions on the Pi (2026-08-18) caught it oscillating 803 -> 1 -> 803 over roughly 100ms
+    after `ip link set up`, with the Ethernet trough 30-50ms wide, on two of the six.
+
+    Reading the right value once is therefore not enough — the first read can land on the opening
+    803 blip, and a capture spawned on the strength of it opens the device during the trough and
+    dies with 'ARP linktype is set to 1'. That is the intermittent failure 60001bc narrowed but did
+    not close: observed 2026-08-17 on wlan1, and again 2026-08-18 07:51:45 *with* that fix
+    deployed, where the retry five seconds later captured 4 APs on the same radio.
+
+    So monitor mode has to *hold* for `settle` before the radio is handed over, and any read of
+    Ethernet starts that clock again. `timeout` still bounds the whole wait, so a radio that never
+    settles fails exactly as it did before.
 
     An unreadable type counts as usable, the same call release() makes for an unreadable mode: a
     missing sysfs must not veto a capture on a box where the check simply does not apply.
     """
     deadline = time.monotonic() + timeout
+    held_since = None
     while True:
         code = arphrd_type(iface)
-        if code == 0 or code in ARPHRD_80211:
+        if code == 0:
             return True
+        if code in ARPHRD_80211:
+            now = time.monotonic()
+            if held_since is None:
+                held_since = now
+            elif now - held_since >= settle:
+                return True
+        else:
+            held_since = None  # flipped back to Ethernet — the settle window starts over
         if time.monotonic() >= deadline:
             return False
         time.sleep(poll)

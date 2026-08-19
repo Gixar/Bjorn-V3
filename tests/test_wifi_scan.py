@@ -2,6 +2,7 @@
 guard. No radio, no subprocesses — the parsers are pure and the guard is driven with injected
 fakes. Heavy imports stubbed via _stubs.
 """
+import itertools
 import sys
 import tempfile
 from pathlib import Path
@@ -186,18 +187,34 @@ def test_radio_lock_refuses_a_second_capture():
 
 
 def test_monitor_is_live_waits_for_the_netdev_to_be_retyped():
-    """The mode change is asynchronous: `iw set type monitor` returns while the interface is still
-    typed Ethernet, and a capture opened in that window dies with 'ARP linktype is set to 1'."""
+    """The mode change is asynchronous, and it is not one clean transition: sampled every 10ms on
+    the Pi, the netdev oscillates 803 -> 1 -> 803 over ~100ms after `ip link set up`. A capture
+    opened during that Ethernet trough dies with 'ARP linktype is set to 1', so monitor mode must
+    *hold* for a settle window before the radio is handed over — one matching read is not enough."""
     saved = monitor_mode.arphrd_type
-    try:
-        codes = iter([1, 1, 803])          # Ethernet, Ethernet, then radiotap
-        monitor_mode.arphrd_type = lambda _iface: next(codes)
-        assert monitor_mode.monitor_is_live("wlan1", timeout=2, poll=0) is True
 
-        monitor_mode.arphrd_type = lambda _iface: 1      # never flips
+    def feed(*codes):
+        """Yield each code in turn, then repeat the last one forever. A settle window polls more
+        times than a fixed list has entries, and a fake that runs dry raises StopIteration."""
+        seq = itertools.chain(codes, itertools.repeat(codes[-1]))
+        return lambda _iface: next(seq)
+
+    try:
+        monitor_mode.arphrd_type = feed(1, 1, 803)   # Ethernet, Ethernet, then radiotap
+        assert monitor_mode.monitor_is_live("wlan1", timeout=2, poll=0, settle=0.01) is True
+
+        # The flap itself: the opening 803 must not be taken for success, because the type drops
+        # back to Ethernet right after it — exactly when airodump would be opening the device.
+        monitor_mode.arphrd_type = feed(803, 1)      # blips monitor, then stays Ethernet
+        assert monitor_mode.monitor_is_live("wlan1", timeout=0.2, poll=0.01, settle=0.05) is False
+
+        monitor_mode.arphrd_type = feed(803, 1, 803)  # ...and settles on the far side of the flap
+        assert monitor_mode.monitor_is_live("wlan1", timeout=2, poll=0.01, settle=0.05) is True
+
+        monitor_mode.arphrd_type = feed(1)           # never flips
         assert monitor_mode.monitor_is_live("wlan1", timeout=0.05, poll=0) is False
 
-        monitor_mode.arphrd_type = lambda _iface: 0      # unreadable (not Linux) — don't veto
+        monitor_mode.arphrd_type = feed(0)           # unreadable (not Linux) — don't veto
         assert monitor_mode.monitor_is_live("wlan1", timeout=0, poll=0) is True
     finally:
         monitor_mode.arphrd_type = saved

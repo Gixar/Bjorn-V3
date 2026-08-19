@@ -1,4 +1,5 @@
 """Hardware-free integration checks for typed outcomes at the execution boundary."""
+import ast
 import sys
 import types
 from pathlib import Path
@@ -85,3 +86,21 @@ def test_telemetry_write_failure_does_not_stop_the_orchestrator():
     fake = types.SimpleNamespace(action_telemetry=BrokenStore())
     # Optional planner memory must degrade cleanly when the SD card cannot be written.
     assert Orchestrator._flush_action_telemetry(fake) is None
+
+
+def test_main_block_blocks_so_the_orchestrator_pools_stay_usable():
+    """`_vuln_pool` and the per-host pool are ThreadPoolExecutors built hours into a run, and both
+    raise "cannot schedule new futures after interpreter shutdown" the moment Bjorn.py's __main__
+    returns: threading._shutdown() runs concurrent.futures' atexit hook *before* joining the
+    non-daemon threads that keep the process alive. So the last thing __main__ does must block on
+    them. Source-parsed rather than imported — Bjorn.py pulls in the display stack and uvicorn.
+    """
+    source = (Path(__file__).resolve().parent.parent / "Bjorn.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    main = next(n for n in tree.body if isinstance(n, ast.If)
+                and ast.get_source_segment(source, n.test) == '__name__ == "__main__"')
+    last = ast.get_source_segment(source, main.body[-1])
+
+    assert ".join()" in last, f"__main__ ends without joining anything:\n{last}"
+    for name in ("bjorn_thread", "display_thread", "web_thread"):
+        assert name in last, f"__main__ ends without waiting on {name}:\n{last}"

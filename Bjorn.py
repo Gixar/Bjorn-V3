@@ -211,3 +211,15 @@ if __name__ == "__main__":
         # real startup failure with a confusing one.
         handle_exit_display(signal.SIGINT, None, locals().get('display_thread'))
         exit(1)
+
+    # The main thread must NOT fall off the end here. Python starts interpreter shutdown as soon
+    # as it returns, and threading._shutdown() runs concurrent.futures' atexit hook *before* it
+    # joins non-daemon threads: the hook flags the futures module shut down for good, while these
+    # threads keep the process alive for days. Every ThreadPoolExecutor.submit() after that raises
+    # "cannot schedule new futures after interpreter shutdown" — observed on-device as the vuln
+    # sweep failing every cycle from a Pi that had been up since 04:23 (orchestrator._vuln_pool),
+    # with the per-host pool sitting on the same landmine. Blocking here keeps the interpreter out
+    # of shutdown; handle_exit() runs on this thread and sys.exit(0)s straight out of the join.
+    for thread in (bjorn_thread, display_thread, web_thread):
+        if thread.is_alive():
+            thread.join()

@@ -70,21 +70,34 @@ def test_every_action_that_paused_still_pauses():
 
 def test_a_status_without_artwork_is_not_logged_as_a_warning():
     """Most actions have no e-paper artwork and never will, so falling back to the IDLE image is
-    the designed behaviour, not a fault. Ten of these fired at WARNING on the live device, and
-    before the once-per-key throttle the display's frame rate turned one of them into 10k+
-    identical lines — the throttle has to stay, the level had to go.
+    the designed behaviour, not a fault. It was logged as a problem twice over: once per frame at
+    lookup time (throttled to once per key, but still WARNING), and once per missing .bmp at load
+    time — eight lines every boot. Neither is actionable.
+
+    load_image() is shared with the static chrome (bjorn1.bmp, wifi.bmp, ...), where a missing file
+    really does break the UI, so the level is the caller's decision rather than a blanket lowering.
 
     Read from source rather than imported: _stubs replaces the whole `shared` module with a fake,
     because the real one pulls in PIL and the e-Paper stack."""
     src = (Path(__file__).resolve().parent.parent / "shared.py").read_text(encoding="utf-8")
-    start = src.index("    def _note_missing_image_once")
-    body = src[start:]
-    body = body[:body.index("\n    def ", 1)]
 
-    assert "logger.info(" in body, "the note must still be logged, just not as a problem"
-    assert "logger.warning(" not in body, \
+    def method_body(name):
+        body = src[src.index("    def " + name):]
+        return body[:body.index("    def ", 5)]
+
+    note = method_body("_note_missing_image_once(self")
+    assert "logger.info(" in note, "the note must still be logged, just not as a problem"
+    assert "logger.warning(" not in note, \
         "a status with no artwork is normal; warning about it is noise nobody can action"
-    assert "_status_image_warned" in body, "the once-per-key throttle must stay"
+    assert "_status_image_warned" in note, "the once-per-key throttle must stay"
+
+    loader = method_body("load_image(self, image_path")   # not load_images(), the plural one
+    # Asserted on the code, not the prose: an earlier version of this test was satisfied by the
+    # word "optional" appearing in the docstring, and passed with the switch itself deleted.
+    assert "def load_image(self, image_path, optional=False)" in src,         "the caller needs a way to say this artwork is optional"
+    assert "logger.info if optional else logger.warning" in loader,         "the level is the caller's decision: optional artwork notes, missing chrome warns"
+    assert "self.load_image(image_path, optional=True)" in src, \
+        "the per-action status artwork is the optional caller"
 
 
 if __name__ == "__main__":

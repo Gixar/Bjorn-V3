@@ -707,12 +707,12 @@ class SharedData:
                         if b_class:
                             indiv_status_path = os.path.join(self.statuspicdir, b_class)
                             image_path = os.path.join(indiv_status_path, f'{b_class}.bmp')
-                            image = self.load_image(image_path)
+                            image = self.load_image(image_path, optional=True)
                             setattr(self, b_class, image)
-                            # Only claim a load that happened. load_image() returns None (after
-                            # its own "does not exist" warning) for the seven actions that ship
-                            # without artwork, and this line used to announce success straight
-                            # after that warning — a contradictory pair in every boot log.
+                            # Only claim a load that happened. load_image() returns None (after its
+                            # own note) for the actions that ship without artwork, and this line
+                            # used to announce success straight after — a contradictory pair in
+                            # every boot log.
                             if image is not None:
                                 logger.info(f"Loaded image for {b_class} from {image_path}")
             except Exception as e:
@@ -777,12 +777,17 @@ class SharedData:
         self.bjornstatustext = self.bjornorch_status  # Mettre à jour le texte du statut
 
 
-    def load_image(self, image_path):
+    def load_image(self, image_path, optional=False):
 
-        """Load an image."""
+        """Load an image.
+
+        `optional` marks artwork whose absence is normal: the per-action status images, where most
+        actions ship none and the display falls back to IDLE by design. Eight of those were a
+        WARNING on every boot, for a condition nobody intends to change. The static chrome
+        (bjorn1.bmp, wifi.bmp, ...) keeps the WARNING — a missing one of those really is broken."""
         try:
             if not os.path.exists(image_path):
-                logger.warning(f"Warning: {image_path} does not exist.")
+                (logger.info if optional else logger.warning)(f"{image_path} does not exist.")
                 return None
             return Image.open(image_path)
         except Exception as e:

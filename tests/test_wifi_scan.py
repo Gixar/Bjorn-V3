@@ -3,7 +3,9 @@ guard. No radio, no subprocesses — the parsers are pure and the guard is drive
 fakes. Heavy imports stubbed via _stubs.
 """
 import itertools
+import os
 import sys
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -218,6 +220,58 @@ def test_monitor_is_live_waits_for_the_netdev_to_be_retyped():
         assert monitor_mode.monitor_is_live("wlan1", timeout=0, poll=0) is True
     finally:
         monitor_mode.arphrd_type = saved
+
+
+def test_wait_for_wpa_release_polls_the_control_socket():
+    """The signal is wpa_supplicant's per-interface control socket: present while it holds the
+    interface, removed by its nl80211 deinit. A box that does not run it has no socket and waits
+    for nothing."""
+    saved_dir, saved_holds = monitor_mode.WPA_CTRL_DIR, monitor_mode.wpa_holds
+    tmp = tempfile.mkdtemp()
+    try:
+        monitor_mode.WPA_CTRL_DIR = tmp
+        assert monitor_mode.wpa_holds("wlan1") is False, "no socket, nobody holding it"
+        open(os.path.join(tmp, "wlan1"), "w").close()
+        assert monitor_mode.wpa_holds("wlan1") is True
+
+        monitor_mode.wpa_holds = lambda _iface: True            # never lets go
+        assert monitor_mode.wait_for_wpa_release("wlan1", timeout=0.05, poll=0.01) is False
+
+        holds = iter([True, True, False])                       # lets go on the third look
+        monitor_mode.wpa_holds = lambda _iface: next(holds)
+        assert monitor_mode.wait_for_wpa_release("wlan1", timeout=2, poll=0) is True, \
+            "it has to keep polling, not look once and give up"
+    finally:
+        monitor_mode.WPA_CTRL_DIR, monitor_mode.wpa_holds = saved_dir, saved_holds
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_acquire_waits_for_the_release_before_changing_the_mode():
+    """Ordering is the whole fix. `nmcli ... managed no` returns when NetworkManager has let go,
+    not when wpa_supplicant has — its deinit lands ~340ms later (measured on the Pi, 2026-08-18)
+    and puts the interface back into station mode. A mode change issued in that window is undone,
+    which left acquire()s first attempt typed Ethernet for its whole timeout on every cold
+    acquisition, making the second attempt look like a retry that fixed something."""
+    events = []
+    saved = _guard_with("wlan0", ["wlan0", "wlan1"])
+    saved_run, saved_live = monitor_mode._run, monitor_mode.monitor_is_live
+    saved_holds = monitor_mode.wpa_holds
+    monitor_mode._run = lambda args, **k: (events.append(" ".join(args[:4])), (0, ""))[1]
+    monitor_mode.monitor_is_live = lambda *a, **k: True
+    monitor_mode.wpa_holds = lambda _iface: (events.append("waited for wpa_supplicant"), False)[1]
+    try:
+        ok, _, _ = monitor_mode.acquire("wlan1")
+        assert ok
+        monitor_mode.release("wlan1")
+        assert "waited for wpa_supplicant" in events, \n            f"acquire() changed the mode without waiting for the release: {events}"
+        nmcli = next(i for i, e in enumerate(events) if e.startswith("nmcli device set"))
+        wait = events.index("waited for wpa_supplicant")
+        mode = next(i for i, e in enumerate(events) if e.startswith("iw dev wlan1 set"))
+        assert nmcli < wait < mode, f"the wait belongs between the release and the mode change: {events}"
+    finally:
+        monitor_mode._run, monitor_mode.monitor_is_live = saved_run, saved_live
+        monitor_mode.wpa_holds = saved_holds
+        _restore(saved)
 
 
 def test_acquire_refuses_an_interface_that_never_leaves_ethernet():

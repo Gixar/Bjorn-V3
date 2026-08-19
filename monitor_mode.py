@@ -15,6 +15,7 @@
 #
 # Kept dependency-free and separate from shared.py so the parsing/guard logic is unit-testable
 # without constructing SharedData (which pulls in PIL / the e-Paper stack).
+import os
 import time
 import shutil
 import logging
@@ -203,6 +204,37 @@ def monitor_is_live(iface, timeout=3.0, poll=0.05, settle=0.4):
         time.sleep(poll)
 
 
+# wpa_supplicant keeps a control socket per interface it manages and removes it when its nl80211
+# deinit runs, which makes "has it actually let go?" a question with a readable answer instead of a
+# sleep long enough to hope.
+WPA_CTRL_DIR = "/run/wpa_supplicant"
+
+
+def wpa_holds(iface):
+    """True while wpa_supplicant still has `iface`. False on a box that does not run it at all."""
+    return os.path.exists(os.path.join(WPA_CTRL_DIR, iface))
+
+
+def wait_for_wpa_release(iface, timeout=2.0, poll=0.05):
+    """Wait until wpa_supplicant has let go of `iface`. True when it has, or never held it.
+
+    `nmcli device set <if> managed no` returns as soon as NetworkManager has released the device,
+    but wpa_supplicant's teardown follows asynchronously — measured 336ms behind the nmcli call on
+    the Pi (2026-08-18) — and its nl80211 deinit puts the interface back into station mode. An
+    `iw set type monitor` issued in that window is simply undone: on every cold acquisition the
+    netdev came up typed Ethernet at 06.913, dropped back at 06.967 and stayed there for the whole
+    of acquire()'s first attempt, which then burned its timeout and retried. The second attempt
+    only ever worked because wpa_supplicant was gone by then. Waiting here is what makes the first
+    attempt the one that succeeds.
+    """
+    deadline = time.monotonic() + timeout
+    while wpa_holds(iface):
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(poll)
+    return True
+
+
 def parse_iface_mode(iw_info_output):
     """802.11 mode ("managed" / "monitor") from `iw dev <if> info`, or "". Pure/testable."""
     for line in iw_info_output.splitlines():
@@ -240,6 +272,13 @@ def acquire(iface, owner="scan"):
     _radio_owner = owner
     if shutil.which("nmcli"):
         _run(["nmcli", "device", "set", iface, "managed", "no"])
+        # Asking NM to let go is not the same as it having let go: wpa_supplicant tears
+        # down afterwards and its deinit resets the interface to station mode, undoing
+        # the mode change below when it lands first. That is what made attempt 1 dead on
+        # arrival rather than merely slow.
+        if not wait_for_wpa_release(iface):
+            logger.warning(f"wpa_supplicant still holds {iface}; setting the mode anyway. "
+                           f"monitor_is_live() and the retry below are the backstop.")
     # Verify, then retry once, then refuse — the same discipline release() already applies coming
     # back the other way. Three commands returning 0 is not the radio being in monitor mode, and
     # the difference is not academic: the caller spawns a capture the moment this returns True.

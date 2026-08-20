@@ -14,9 +14,11 @@
 > was real (WiFiScan, the six stealers, BLE, SNMP, the vuln scanner). `CHANGELOG.md` and git
 > history hold them.
 >
-> Suite: **382 passing**. The RDP-steal FAIL from the last on-Pi sweep `0fc93ea`
-> (37 PASS / 1 FAIL) is fixed in code — RDP now carries the #6 caps via `BaseStealer` — pending
-> the next on-device sweep to confirm Section 9 reads 6/6.
+> Suite: **411 passing**. On-device sweep 2026-08-19 (`bf18e2c`): **39 PASS, 0 FAIL**, 4 WARN,
+> 3 SKIP. The RDP-steal FAIL from `0fc93ea` (37 PASS / 1 FAIL) is confirmed closed — Section 9
+> reads 6/6, "all six enforce per-file/per-run budgets and a free-space precheck". Every remaining
+> WARN is *needs a target*, not a defect: SNMP, web templates and credential reuse have no rows
+> because nothing on this network answers. That is §4's lab, not a bug.
 
 ## Index — what needs a diff
 
@@ -312,6 +314,66 @@ fake client. Needs `pip install anthropic` and a key on the device.
 
 ---
 
+# § 4 — 2026-08-19: what a day of running it on hardware actually found
+
+Nothing in this section was on the list. Every item was found by running the thing on the Pi and
+reading its logs, and every one had been shipping for a while. Recorded because the *pattern*
+matters more than the individual fixes: each defect was silent, and the ones that were not silent
+were buried under warnings nobody reads.
+
+**The chain, in the order it unravelled:**
+
+1. **`5aecb8b` — every `ThreadPoolExecutor` was dead.** `Bjorn.py`'s `__main__` registered its
+   signal handlers and returned. The main thread finishing *is* the start of interpreter shutdown,
+   and `threading._shutdown()` runs `concurrent.futures`' atexit hook **before** joining
+   non-daemon threads — so the futures module was flagged shut down for good while the display,
+   web and orchestrator threads kept the process alive for days. Every later `submit()` raised
+   `cannot schedule new futures after interpreter shutdown`. The vuln sweep (#9) had therefore
+   **never run** in the life of any process; `process_alive_ips`' per-host pool sat on the same
+   landmine, unexposed only because the worker budget had been 1. Fix: `__main__` joins the
+   threads it started.
+
+2. **`4bf85a4` — `-p ""`.** With the sweep alive, nmap immediately failed on five of seven hosts:
+   `Error #485: Your port specifications are illegal`. netkb stores `""` for a host with nothing
+   open, and `"".split(";")` is `[""]`, not `[]`. Fixing one bug is what surfaced the other.
+
+3. **`23ab2bf` + `4eeae4d` — the monitor-mode window `60001bc` did not close.** Captures were
+   still dying with `ARP linktype is set to 1 (Ethernet)` *with* that fix deployed. Sampling
+   `/sys/class/net/wlan1/type` every 10ms showed the netdev oscillating `803 → 1 → 803` over
+   ~100ms after `ip link set up`, so a single matching read could land on the opening blip.
+   Requiring the type to *hold* fixed the failure but revealed the real cause: `nmcli ... managed
+   no` returns when NetworkManager has released the device, and **wpa_supplicant's teardown
+   follows 336ms later and resets the interface to station mode**, undoing a mode change issued in
+   between. `acquire()`'s first attempt had therefore never once succeeded — 67 `redoing the mode
+   change` warnings in the log, and the retry that "fixed" it only worked because wpa_supplicant
+   was gone by then. Now it waits for `/run/wpa_supplicant/<iface>` to disappear first. Cold
+   acquire went 4.33s → 1.16s, and the flap stopped happening at all.
+
+4. **`e5d9b9e`, `b84ce0d`, `0bfee98` — the noise that hid all of the above.** Three hours of
+   journal held 49 + 30 WARNING lines for the healthy steady state (portless hosts, retry-delay
+   gates), and every boot added 8 more for actions that have no e-paper artwork. A level that
+   fires for a condition nobody intends to change is a level nobody reads — which is precisely how
+   `wlan1 is up but still typed Ethernet` sat unnoticed 67 times. A full boot + sweep now logs
+   **zero** WARNING lines.
+
+5. **`bf18e2c` — the third and last `[""]`.** `/netkb_data_json` handed the manual-attack dropdown
+   one blank port per portless host. `scanning.py` had guarded this idiom, `nmap_vuln_scanner`
+   needed it, this was the one left.
+
+**Also fixed on the device, not in the repo:** `systemd-timesyncd` was enabled, active, reporting
+"Daemon is running" — and holding no UDP socket, having never attempted a query on any boot. It
+waits on `systemd-networkd` link state, and every link here is `unmanaged` because NetworkManager
+owns them. The clock was **14h35m** behind, so every log timestamp and every netkb retry gate
+(`success_retry_delay`, `failed_retry_delay`) was comparing against fiction. Replaced with chrony,
+which does not consult networkd: synced in seconds, `fake-hwclock` now saves a correct time for
+offline boots.
+
+**What this says about the plan.** Items closed on green tests were not wrong, they were untested
+in the only environment that counts. The one item that would have caught all of it earlier is the
+one still open: §4 of Sequencing, a target that answers.
+
+---
+
 ## Sequencing
 
 1. ~~**Finish #12's adapters:** SMB, FTP, SQL, then RDP — RDP closes #6 and #2.~~ ✅ `9b6906d`.
@@ -320,5 +382,12 @@ fake client. Needs `pip install anthropic` and a key on the device.
 4. **Stand up the weak-target lab** — [`WEAK_TARGET.md`](WEAK_TARGET.md). The connectors, the
    credential pool and all six stealers have never run against a host that answers; every sweep to
    date verified plumbing only. One afternoon, and it is worth more than any remaining item here.
+   **Now the only open item, and §4 is the argument for it:** a day on hardware found five silent
+   defects that green tests and a passing verifier both missed, and the three WARNs still in the
+   sweep (SNMP, web templates, credential reuse) all read *needs a target*.
 5. ~~**#9's non-blocking sweep.**~~ ✅ 2026-08-15. Out of band: re-pin #11 on the Pi.
 6. ~~**#15 last.**~~ ✅ audit half shipped 2026-08-15; re-ranking half needs a bake-off first (§3).
+7. **Field soak.** The radio path is the freshest code in the tree — `4eeae4d` has ~13 clean
+   capture cycles behind it, which is consistent with fixed but is not a soak. An offline run away
+   from a known network exercises exactly the paths that were broken: `acquire()` from cold,
+   offline cycling with no uplink, and the handshake hunter holding `wlan1` for hours.

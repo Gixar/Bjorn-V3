@@ -15,6 +15,8 @@ CONFIG_JS = (WEB / "scripts" / "config.js").read_text(encoding="utf-8")
 COMMON_JS = (WEB / "scripts" / "common.js").read_text(encoding="utf-8")
 WEBAPP_PY = (ROOT / "webapp.py").read_text(encoding="utf-8")
 SHARED_PY = (ROOT / "shared.py").read_text(encoding="utf-8")
+UTILS_PY = (ROOT / "utils.py").read_text(encoding="utf-8")
+DASHBOARD_JS = (WEB / "scripts" / "dashboard.js").read_text(encoding="utf-8")
 
 # Keys come from get_default_config(), not config/shared_config.json — the shipped JSON is a
 # saved runtime config that lags the defaults until something writes it (load_config() merges
@@ -121,6 +123,25 @@ def test_files_endpoint_takes_a_key_not_a_path():
     assert "os.path.join" not in block, \
         "serve_module_file builds a path from its arguments — it must only look one up by key"
     assert "_file_groups()" in block, "serve_module_file bypasses the whitelist"
+
+
+def test_netkb_json_offers_no_blank_port():
+    """A host with nothing open stores "" in netkb, and "".split(';') is [''] — one phantom port,
+    which the manual-attack dropdown rendered as a selectable blank option. Five of seven hosts on
+    the live net were portless. dashboard.js already draws an em dash for an empty list, so the
+    fix belongs in the payload.
+
+    Text check, in this file's style: serve_netkb_data_json needs WebUtils, SharedData, the netkb
+    CSV and load_actions() to call, none of which exist without the hardware stubs."""
+    body = UTILS_PY.split("def serve_netkb_data_json(")[1].split("def execute_manual_attack(")[0]
+    ports_line = [l for l in body.splitlines() if "'ports':" in l]
+    assert ports_line, "the endpoint no longer builds a ports map — update this test"
+    assert "if p" in ports_line[0], \
+        f"the blank from an empty Ports cell must be filtered out: {ports_line[0].strip()}"
+
+    # And the page must still cope with a host that ends up with no ports at all.
+    assert "ports.length" in DASHBOARD_JS, \
+        "dashboard.js has to keep its empty-list branch, or a portless host renders nothing"
 
 
 if __name__ == "__main__":

@@ -521,7 +521,11 @@ class WebUtils:
             actions = [a for a in reader.fieldnames[5:] if a in attackable]  # fields after 'Ports'
             response_data = {
                 'ips': [row['IPs'] for row in data],
-                'ports': {row['IPs']: row['Ports'].split(';') for row in data},
+                # Filtered, because "".split(';') is [''] — a host the port scanner found
+                # nothing open on was handing the page one blank port, which the dropdown
+                # then offered as a selectable option. Empty means empty; dashboard.js
+                # already renders an em dash for a host with no ports.
+                'ports': {row['IPs']: [p for p in row['Ports'].split(';') if p] for row in data},
                 'actions': actions
             }
             return JSONResponse(response_data)

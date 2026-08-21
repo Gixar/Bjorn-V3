@@ -821,10 +821,17 @@ class WebUtils:
                 raise Exception(stderr)
             networks = list(dict.fromkeys(line.strip() for line in stdout.splitlines() if line.strip()))
             self.logger.info(f"Found {len(networks)} networks")
-            current_ssid = subprocess.Popen(['iwgetid', '-r'], stdout=subprocess.PIPE, text=True)
+            current_ssid = subprocess.Popen(['iwgetid', '-r'], stdout=subprocess.PIPE,
+                                            stderr=subprocess.PIPE, text=True)
             ssid_out, ssid_err = current_ssid.communicate()
             if current_ssid.returncode != 0:
-                raise Exception(ssid_err)
+                # Not associated is not a failure. iwgetid exits non-zero when there is no SSID, so
+                # raising here threw away a perfectly good network list and returned 500 to the
+                # Wi-Fi panel -- precisely when the operator needs it: off-network, picking one to
+                # join. stderr was not even captured, so that 500 read "None".
+                if (ssid_err or "").strip():
+                    raise Exception(ssid_err)
+                ssid_out = ""
             current_ssid = ssid_out.strip()
             self.logger.info(f"Current SSID: {current_ssid}")
             return JSONResponse({"networks": networks, "current_ssid": current_ssid})

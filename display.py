@@ -283,7 +283,14 @@ class Display:
             result = subprocess.Popen(['iwgetid', '-r'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             ssid, error = result.communicate()
             if result.returncode != 0:
-                logger.error(f"Error executing 'iwgetid -r': {error}")
+                # Not associated: `iwgetid -r` exits non-zero with an empty stderr, and that is the
+                # normal state of a Bjorn being carried around. One 9h field run logged 1541 of
+                # these -- 95% of the day's ERROR volume. Same rule as is_usb_connected() below:
+                # the absence of a connection is not a fault, only unexpected stderr is.
+                if (error or "").strip():
+                    logger.error(f"Error executing 'iwgetid -r': {error}")
+                else:
+                    logger.debug("iwgetid reports no association; Wi-Fi is disconnected.")
                 return False
             return bool(ssid.strip())
         except Exception as e:

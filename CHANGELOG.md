@@ -1,6 +1,63 @@
 # Changelog
 
-## [Unreleased]
+## [3.1.0-beta] — 2026-08-21
+
+**The field-soak release.** 3.0.1-beta was the last version whose radio path had only ever run
+under test. This one has nine hours of being carried around behind it — two power cycles, no
+crash, 20 handshakes — and most of what follows is what that surfaced. **Anyone on 3.0.x should
+upgrade:** several items below are silent failures that green tests *and* a passing on-device
+verifier both missed, which is the point worth taking from this release.
+
+### Fixed
+- **A pcap with no packets in it is not a capture.** bettercap opens the per-AP file when it
+  starts *targeting* an AP, not when it catches something, so a session that hears no EAPOL leaves
+  24 bytes of global header behind. `build_index` counted those, and it cost twice: the trophy
+  counter read 27 APs owned against 21 actually caught, and — worse — their BSSIDs went into
+  `plan_session`'s `owned` set, the one `score_targets` uses to skip networks "already captured".
+  Six APs were struck off the hunter's own target list for handshakes it had never caught.
+  `has_packets()` is now the single definition, used by the summary, by the owned set, and by
+  `wpasec_import`'s index rewrite — index.json has two writers, and a second definition there
+  would have restored the inflated count after the first upload pass.
+- **An offline cycle is still a cycle, and has to report it.** `write_run_report()`'s only call
+  site was the online idle branch, which every offline cycle `continue`s straight past. One
+  missing line, three symptoms: a nine-hour run left a report frozen at the minute it lost its
+  uplink, still claiming `"failed": 0` while four Wi-Fi scans failed after it, and the run either
+  side of a power cut left no report at all. Offline is when the report matters most — it is the
+  only cycle that ran.
+- **Never fall back to a radio whose phy has no monitor mode.** `pick_scan_iface` fell back to any
+  non-uplink radio; offline nothing is the uplink, so on a Pi Zero 2 W that means the onboard
+  chip, whose brcmfmac phy advertises managed/AP/IBSS and no monitor at all. Every such pick died
+  at `iw ... set type monitor` with "Operation not supported (-95)", was marked `failed`, and
+  started a ten-minute backoff — four times in one run, on a radio that can never work. The
+  capability gate covers the fallback only, so a radio the operator *named* still reaches
+  `check_usable()` and gets an accurate reason. The hunter picks through the same door.
+  `supports_monitor()` (have we proof it can — the web test button) and `monitor_capable()` (have
+  we proof it cannot — the filter) are now separate questions: an `iw` that could not be asked is
+  not evidence about the hardware, and dropping a working dongle on a hiccup would fail silently.
+- **Being off Wi-Fi is not an error, and must not 500 the panel.** `iwgetid -r` exits non-zero
+  with an empty stderr when the radio is not associated — the normal state of a Bjorn being
+  carried around. `is_wifi_connected()` logged an ERROR for every poll of it: 1541 lines in one
+  field run, 95% of the day's entire error volume. `scan_wifi()` had the same call doing worse —
+  it raised on the non-zero exit, discarded a network list it had already fetched, and returned
+  500 to the Wi-Fi panel, precisely when the operator needs it: off-network, choosing a network
+  to join.
+
+### Changed
+- **One action loader, not two.** `orchestrator.py` and `utils.py` each carried their own copy of
+  `load_actions` / `load_scanner` / `load_nmap_vuln_scanner` / `load_action`, and the copies had
+  drifted three fixes apart — the `None`-port rule, the no-`execute()` stub guard and
+  `b_needs_internet` all landed in the orchestrator's and never in the web UI's. The `None`-port
+  half reached users as a 500 from the manual-attack dropdown, and was absorbed by a *second* port
+  check downstream in `serve_netkb_data_json` instead of being fixed at the source. Both now route
+  through `action_loader.load_actions()`; the downstream workaround is deleted, and a guard in
+  `test_standalone_actions.py` fails if either module starts building actions itself again.
+- **`.gitignore` covers the two loot directories V3 added.** `data/output/handshakes/` and
+  `data/output/reports/` were untracked but not ignored, while every older output directory was
+  carefully excluded — so a `git add -A` in a device checkout staged other people's EAPOL frames
+  and a full host inventory. Both now keep a `.gitkeep` skeleton and ignore their contents, same
+  as the rest.
+
+### Added
 
 ### Added
 - **#15's defensive audit — findings become a remediation report.** New standalone action

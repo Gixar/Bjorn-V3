@@ -159,6 +159,13 @@ data/output/vulnerabilities/*
 !data/output/vulnerabilities/.gitkeep
 data/output/scan_results/*
 !data/output/scan_results/.gitkeep
+# Captured handshakes and the AI audit's reports — the two loot directories V3 added, and the two
+# this list forgot. Both were untracked-but-not-ignored, so a `git add -A` in a device checkout
+# staged other people's EAPOL frames and a full host inventory.
+data/output/handshakes/*
+!data/output/handshakes/.gitkeep
+data/output/reports/*
+!data/output/reports/.gitkeep
 # bjorn_verify.py artifacts — a report and a pip snapshot per run; device state, not source.
 data/output/verify_*.txt
 data/output/pip_freeze_*.txt

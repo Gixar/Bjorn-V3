@@ -23,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _stubs  # noqa: E402
 _stubs.install()
 
+import action_loader  # noqa: E402
 from orchestrator import Orchestrator  # noqa: E402
 
 
@@ -113,45 +114,59 @@ class _Stub:
 
 
 def _load(cls, b_port, needs_internet=None):
-    """Drive the real load_action() against a fake actions module.
+    """Drive the real loader against a fake actions module.
 
     Registered in sys.modules rather than monkeypatched, so this file still runs as
-    `python tests/test_standalone_actions.py` (no pytest fixtures).
+    `python tests/test_standalone_actions.py` (no pytest fixtures). `entries` stands in for
+    actions.json, which keeps the classification under test and the file I/O out of it.
     """
     module = _FakeModule(cls, needs_internet)
     module.Thing.__name__ = "Thing"
     sys.modules["actions.thing"] = module
-    fake = types.SimpleNamespace(actions=[], standalone_actions=[], shared_data=object())
-    Orchestrator.load_action(fake, "thing", {"b_class": "Thing", "b_port": b_port})
-    return fake
+    quiet = types.SimpleNamespace(info=lambda *a, **k: None, error=lambda *a, **k: None)
+    return action_loader.load_actions(
+        object(), quiet,
+        entries=[{"b_module": "thing", "b_class": "Thing", "b_port": b_port}])
 
 
 def test_an_action_without_execute_is_never_registered():
     """The IDLE bug: a stub was queued as a host action, chosen by the planner on every host, and
     raised AttributeError every cycle — 7 errors and 7 failed netkb marks per 10 minutes."""
-    fake = _load(_Stub, None)
-    assert fake.actions == [] and fake.standalone_actions == []
+    loaded = _load(_Stub, None)
+    assert loaded.actions == [] and loaded.standalone == []
 
 
 def test_a_none_port_is_portless_not_a_host_action():
     """`None == 0` is False, so b_port=None used to file a portless action under host actions and
     call it with an ip and a port it never had."""
-    fake = _load(_Runnable, None)
-    assert len(fake.standalone_actions) == 1
-    assert fake.actions == []
+    loaded = _load(_Runnable, None)
+    assert len(loaded.standalone) == 1
+    assert loaded.actions == []
 
 
 def test_a_real_port_still_makes_a_host_action():
-    fake = _load(_Runnable, 22)
-    assert len(fake.actions) == 1
-    assert fake.standalone_actions == []
+    loaded = _load(_Runnable, 22)
+    assert len(loaded.actions) == 1
+    assert loaded.standalone == []
+
+
+def test_there_is_exactly_one_action_loader():
+    """What the duplication cost, locked shut. orchestrator.py and utils.py each carried their own
+    copy of load_actions/load_action, and the copies drifted three fixes apart: the None-port rule,
+    the no-execute() stub guard and b_needs_internet all landed in the orchestrator's and never in
+    the web UI's. The None-port half reached users as a 500 from the manual-attack dropdown, and
+    was absorbed by a second port check downstream instead of being fixed at the source. Neither
+    module may build an action itself again."""
+    root = Path(__file__).resolve().parent.parent
+    for name in ("orchestrator.py", "utils.py"):
+        src = (root / name).read_text(encoding="utf-8")
+        assert "import_module(f'actions." not in src, f"{name} builds actions itself again"
+        assert "action_loader.load_actions(" in src, f"{name} must route through action_loader"
 
 
 def test_needs_internet_defaults_off():
-    fake = _load(_Runnable, 0)
-    assert fake.standalone_actions[0].needs_internet is False
-    fake = _load(_Runnable, 0, needs_internet=True)
-    assert fake.standalone_actions[0].needs_internet is True
+    assert _load(_Runnable, 0).standalone[0].needs_internet is False
+    assert _load(_Runnable, 0, needs_internet=True).standalone[0].needs_internet is True
 
 
 def test_disabled_action_no_longer_starves_the_rest():

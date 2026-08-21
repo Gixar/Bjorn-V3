@@ -1,11 +1,11 @@
 # <img src="https://github.com/user-attachments/assets/c5eb4cc1-0c3d-497d-9422-1614651a84ab" alt="Bjorn" width="33"> Bjorn V3
 
 ![Python](https://img.shields.io/badge/Python-3776AB?logo=python&logoColor=fff)
-![Version](https://img.shields.io/badge/version-3.0.1--beta-blue.svg)
+![Version](https://img.shields.io/badge/version-3.1.0--beta-blue.svg)
 ![Status](https://img.shields.io/badge/status-beta-orange.svg)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 ![CI](https://github.com/Gixar/Bjorn-V3/actions/workflows/ci.yml/badge.svg)
-![Tests](https://img.shields.io/badge/tests-356%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-419%20passing-brightgreen)
 
 [![Reddit](https://img.shields.io/badge/Reddit-Bjorn__CyberViking-orange?style=for-the-badge&logo=reddit)](https://www.reddit.com/r/Bjorn_CyberViking)
 [![Discord](https://img.shields.io/badge/Discord-Join%20Us-7289DA?style=for-the-badge&logo=discord)](https://discord.com/invite/B3ZH9taVfT)
@@ -61,9 +61,9 @@ This fork is **modernization and reach**, not reinvention. If you are new here, 
 | **Score** | Recomputed live, could drop to zero | **Monotonic high-water mark, persisted across restarts** |
 | **Web UI** | 7 pages on `http.server` | **14 pages on FastAPI** + an *event-driven* live WebSocket dashboard, log viewer, built-in `/help`, and path-traversal/zip-slip-hardened file endpoints |
 | **Reliability** | — | Wall-clock timeout on every network op, bounded steal (recursion/size/free-space caps), typed action outcomes, atomic netkb + config writes, systemd watchdog, fail-fast config validation, battery-aware shutdown |
-| **Tests** | — | **356 tests + CI**, none requiring hardware |
+| **Tests** | — | **419 tests + CI**, none requiring hardware |
 
-In numbers: **17 → 22 action modules, 10 → 22 core modules, 7 → 14 web pages, 0 → 356 tests.**
+In numbers: **17 → 23 action modules, 10 → 29 core modules, 7 → 14 web pages, 0 → 419 tests.**
 
 ---
 
@@ -213,17 +213,27 @@ turn it on.
 
 ## ✅ What's verified, and what isn't
 
-**`v3.0.1-beta`** — this project distinguishes "the code is done" from "the hardware agrees", because they are
+**`v3.1.0-beta`** — this project distinguishes "the code is done" from "the hardware agrees", because they are
 different claims.
 
 **Confirmed on a Pi Zero 2 W:** RustScan at 29×, BLE recon, monitor-mode capture *and* release with
-the uplink guard refusing the wrong radio, the scan→attack→idle planner, offline mode, the web UI,
-the USB gadget, and the e-Paper pipeline.
+the uplink guard refusing the wrong radio, the scan→attack→idle planner, the web UI, the USB
+gadget, and the e-Paper pipeline. **Offline mode and the Handshake Hunter now have a field soak
+behind them** — nine hours of being carried on 2026-08-20, across two power cycles, no crash:
+20 handshakes, 231 Wi-Fi surveys, 497 BLE sweeps. It also surfaced four silent defects that green
+tests and a passing verifier had both missed; all four are fixed in this release.
 
-**Implemented and unit-tested but never run on a radio:** the Bettercap integration and the
-Handshake Hunter. All of it is off by default. Two version-specific unknowns (bettercap's event
-schema and its handshake filenames) are each isolated to one place and **warn in the log** rather
-than failing silently.
+**Implemented and unit-tested but not exercised for real:** the managed-mode Bettercap poller
+(off by default, and nothing in the tree turns bettercap's own recon on, so it has never read a
+populated session) and the wpa-sec upload (needs `hcxtools` and an API key on the device). Two
+version-specific unknowns — bettercap's event schema and its handshake filenames — are each
+isolated to one place and **warn in the log** rather than failing silently.
+
+**Never run against a host that answers:** the six credential connectors, the shared credential
+pool, and all six steal modules. They are unit-tested, timeout-bounded and budget-capped, but
+every on-device sweep so far has verified plumbing rather than a crack. This is the widest gap
+between "tested" and "works" in the project, and the next thing on the list — the runbook for
+closing it is [`docs/WEAK_TARGET.md`](docs/WEAK_TARGET.md).
 
 `scripts/bjorn_verify.py` runs the whole hardware checklist on the device and prints a
 PASS/FAIL/SKIP report:
@@ -256,7 +266,7 @@ Attack modules follow a small contract — drop a file in `actions/`, declare `b
 it. See [`DEVELOPMENT.md`](DEVELOPMENT.md).
 
 ```bash
-pytest tests/          # 356 tests, no hardware required
+pytest tests/          # 419 tests, no hardware required
 ```
 
 ---

@@ -23,16 +23,15 @@ import threading
 import time
 import zipfile
 import uuid
-import importlib
 import logging
 from datetime import datetime, timezone
 from logger import Logger
+import action_loader
 import monitor_mode
 import offline_mode
 from path_safety import safe_under, zip_escapes
 from config_validation import coerce_saved_value
 from starlette.responses import JSONResponse, HTMLResponse, PlainTextResponse, Response, FileResponse
-from actions.nmap_vuln_scanner import NmapVulnScanner
 import telegram_client
 import bettercap_client
 import bettercap_pwn
@@ -64,47 +63,15 @@ class WebUtils:
         self.standalone_actions = None  # List that contains all standalone actions
 
     def load_actions(self):
-        """Load all actions from the actions file"""
-        if self.actions is None or self.standalone_actions is None:
-            self.actions = []  # reset the actions list
-            self.standalone_actions = []  # reset the standalone actions list
-            self.actions_dir = self.shared_data.actions_dir
-            with open(self.shared_data.actions_file, 'r') as file:
-                actions_config = json.load(file)
-            for action in actions_config:
-                module_name = action["b_module"]
-                if module_name == 'scanning':
-                    self.load_scanner(module_name)
-                elif module_name == 'nmap_vuln_scanner':
-                    self.load_nmap_vuln_scanner(module_name)
-                else:
-                    self.load_action(module_name, action)
-
-    def load_scanner(self, module_name):
-        """Load the network scanner"""
-        module = importlib.import_module(f'actions.{module_name}')
-        b_class = getattr(module, 'b_class')
-        self.network_scanner = getattr(module, b_class)(self.shared_data)
-
-    def load_nmap_vuln_scanner(self, module_name):
-        """Load the nmap vulnerability scanner"""
-        self.nmap_vuln_scanner = NmapVulnScanner(self.shared_data)
-
-    def load_action(self, module_name, action):
-        """Load an action from the actions file"""
-        module = importlib.import_module(f'actions.{module_name}')
-        try:
-            b_class = action["b_class"]
-            action_instance = getattr(module, b_class)(self.shared_data)
-            action_instance.action_name = b_class
-            action_instance.port = action.get("b_port")
-            action_instance.b_parent_action = action.get("b_parent")
-            if action_instance.port == 0:
-                self.standalone_actions.append(action_instance)
-            else:
-                self.actions.append(action_instance)
-        except AttributeError as e:
-            self.logger.error(f"Module {module_name} is missing required attributes: {e}")
+        """Build the action set on first use. Same loader the orchestrator uses, deliberately:
+        the two copies this replaced had drifted three fixes apart (see action_loader)."""
+        if self.actions is not None and self.standalone_actions is not None:
+            return
+        loaded = action_loader.load_actions(self.shared_data, self.logger)
+        self.actions = loaded.actions
+        self.standalone_actions = loaded.standalone
+        self.network_scanner = loaded.network_scanner
+        self.nmap_vuln_scanner = loaded.nmap_vuln_scanner
 
     # ------------------------------------------------------------------
     # Stats snapshot (new) — feeds GET /api/stats and the WS /ws/stats push
@@ -511,12 +478,13 @@ class WebUtils:
                 reader = csv.DictReader(file)
                 data = [row for row in reader if row['Alive'] == '1']
 
-            # Only offer actions the manual-attack handler can actually run per host: the
-            # port-based connectors plus the special-cased NmapVulnScanner. Excludes NetworkScanner,
-            # IDLE, and the standalone log actions, which otherwise 500'd with
-            # "Action class <name> not found" when picked from the dropdown.
+            # Only offer actions the manual-attack handler can actually run per host. That is
+            # exactly self.actions now: action_loader keeps the portless ones (NetworkScanner,
+            # IDLE, the standalone recon and log actions) out of the host list, so the second
+            # port check that used to stand here — absorbing the 500s the old duplicated loader
+            # caused — has nothing left to catch.
             self.load_actions()
-            attackable = {a.action_name for a in self.actions if getattr(a, "port", None) not in (0, None)}
+            attackable = {a.action_name for a in self.actions}
             attackable.add("NmapVulnScanner")
             actions = [a for a in reader.fieldnames[5:] if a in attackable]  # fields after 'Ports'
             response_data = {

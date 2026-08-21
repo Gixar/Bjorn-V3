@@ -19,7 +19,6 @@
 # each cycle and the top picks run. See docs/SMART_ORCHESTRATOR.md.
 
 import json
-import importlib
 import os
 import time
 import logging
@@ -27,11 +26,11 @@ import threading
 import queue
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
-from actions.nmap_vuln_scanner import NmapVulnScanner
 from init_shared import shared_data
 from logger import Logger
 from retry_policy import retry_wait_remaining
 from action_planner import Planner, load_service_hints, load_vuln_ips, plan_idle_seconds
+import action_loader
 import offline_mode
 import bettercap_client
 import bettercap_pwn
@@ -79,62 +78,12 @@ class Orchestrator:
         self._vuln_inflight = set()       # IPs submitted and not yet drained; main-thread only
 
     def load_actions(self):
-        """Load all actions from the actions file"""
-        self.actions_dir = self.shared_data.actions_dir
-        with open(self.shared_data.actions_file, 'r') as file:
-            actions_config = json.load(file)
-        for action in actions_config:
-            module_name = action["b_module"]
-            if module_name == 'scanning':
-                self.load_scanner(module_name)
-            elif module_name == 'nmap_vuln_scanner':
-                self.load_nmap_vuln_scanner(module_name)
-            else:
-                self.load_action(module_name, action)
-
-    def load_scanner(self, module_name):
-        """Load the network scanner"""
-        module = importlib.import_module(f'actions.{module_name}')
-        b_class = getattr(module, 'b_class')
-        self.network_scanner = getattr(module, b_class)(self.shared_data)
-
-    def load_nmap_vuln_scanner(self, module_name):
-        """Load the nmap vulnerability scanner"""
-        self.nmap_vuln_scanner = NmapVulnScanner(self.shared_data)
-
-    def load_action(self, module_name, action):
-        """Load an action from the actions file"""
-        module = importlib.import_module(f'actions.{module_name}')
-        try:
-            b_class = action["b_class"]
-            action_instance = getattr(module, b_class)(self.shared_data)
-
-            # An action the orchestrator cannot call has no business in the work queue.
-            # actions/IDLE.py is a stub with no execute(): it was registered anyway, scored by the
-            # planner as "never tried" on every host, and then raised AttributeError every cycle —
-            # 7 errors and 7 failed netkb marks in a 10-minute run, for something that is not a
-            # real action. Checked at load, so any future stub is simply never registered rather
-            # than failing once per host per cycle.
-            if not callable(getattr(action_instance, "execute", None)):
-                logger.info(f"Skipping {b_class}: no execute() — not a runnable action.")
-                return
-
-            action_instance.action_name = b_class
-            action_instance.port = action.get("b_port")
-            action_instance.b_parent_action = action.get("b_parent")
-            # Module-level opt-in flag (part of the b_* contract): actions that call out to the
-            # internet are skipped while offline instead of failing once per cycle.
-            action_instance.needs_internet = getattr(module, "b_needs_internet", False)
-            # None means portless, not "some port". `None == 0` is False, so a b_port of None filed
-            # a portless action under the *host* actions, to be called with an ip and a port it
-            # never had. The manual-attack dropdown already works around this downstream
-            # (`port not in (0, None)`, utils.py); this is the same rule applied at the source.
-            if action_instance.port in (0, None):
-                self.standalone_actions.append(action_instance)
-            else:
-                self.actions.append(action_instance)
-        except AttributeError as e:
-            logger.error(f"Module {module_name} is missing required attributes: {e}")
+        """Build the action set. Shared with the web UI — see action_loader for why."""
+        loaded = action_loader.load_actions(self.shared_data, logger)
+        self.actions = loaded.actions
+        self.standalone_actions = loaded.standalone
+        self.network_scanner = loaded.network_scanner
+        self.nmap_vuln_scanner = loaded.nmap_vuln_scanner
 
     def _record_result(self, action_name, success, error=None):
         """Track per-action outcome counts for the run report. Counts and exception

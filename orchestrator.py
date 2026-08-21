@@ -485,6 +485,12 @@ class Orchestrator:
         self.run_standalone_actions(current_data, offline=True)  # WiFiScan/BLEScan self-throttle
         self.merge_bettercap_hosts(current_data)
         self.shared_data.write_data(current_data)
+        # The only other call site is the online idle branch, which an offline cycle `continue`s
+        # past — so a device carried around recorded nothing. A 9h field run left a report frozen
+        # at the minute it lost its uplink (failed: 0, while four WiFiScans failed after it), and
+        # the run either side of a power-yank left no report at all. Offline is when the report
+        # matters most: it is the only cycle that ran.
+        self.write_run_report()
 
         if getattr(self.shared_data, "wifi_autojoin", True):
             self.shared_data.bjornstatustext2 = "offline · reconnecting"

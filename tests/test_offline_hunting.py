@@ -160,6 +160,7 @@ def test_reconnect_only_ever_runs_with_the_radio_free():
         last_hunt_detail=None, _hunter=lambda: hunter,
         run_standalone_actions=lambda data, offline=False: events.append("recon"),
         merge_bettercap_hosts=lambda data: None,
+        write_run_report=lambda: events.append("report"),
     )
     # unbound, like every other method here, so the real ordering is what runs
     me._offline_idle = lambda seconds: orch.Orchestrator._offline_idle(me, seconds)
@@ -174,8 +175,13 @@ def test_reconnect_only_ever_runs_with_the_radio_free():
     finally:
         offline_mode.is_online, offline_mode.reconnect_best = saved_online, saved_reconnect
 
-    assert events == ["recon", "reconnect", "hunt-start", "hunt-stop"], events
+    assert events == ["recon", "report", "reconnect", "hunt-start", "hunt-stop"], events
     assert holder_at_reconnect == [""], "the radio must be free when nmcli tries to associate"
+    # ...and "report" is in there for a second reason: write_run_report()'s only other call site is
+    # the online idle branch, which this cycle `continue`s past. Without this call a device carried
+    # around all day writes no run report at all — a 9h field run left one frozen at the minute it
+    # lost its uplink, still claiming `"failed": 0` while four WiFiScans failed after it.
+    assert "report" in events, "an offline cycle is still a cycle; it has to report what it did"
     assert not hunter.is_running(), "the cycle must not end with the radio held"
 
 

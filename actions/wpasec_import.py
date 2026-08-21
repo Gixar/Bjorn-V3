@@ -24,6 +24,7 @@ import subprocess
 import urllib.request
 import urllib.error
 from shared import SharedData
+from bettercap_pwn import has_packets
 from logger import Logger
 from csv_safe import sanitize_row
 
@@ -123,9 +124,13 @@ class WpaSecImport:
         base = self._handshakes_base()
         os.makedirs(base, exist_ok=True)
         path = os.path.join(base, "index.json")
+        # Same rule as bettercap_pwn.update_index — this rewrites index.json after an upload
+        # pass, so a second definition of "a capture" here would put the inflated count straight
+        # back the moment anything was uploaded.
+        caught = [e for e in entries.values() if has_packets(e)]
         summary = {
-            "captures": len(entries),
-            "unique_bssids": len({e.get("bssid") for e in entries.values() if e.get("bssid")}),
+            "captures": len(caught),
+            "unique_bssids": len({e.get("bssid") for e in caught if e.get("bssid")}),
             "bytes": sum(int(e.get("bytes") or 0) for e in entries.values()),
         }
         payload = {

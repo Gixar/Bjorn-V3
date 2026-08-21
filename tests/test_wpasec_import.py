@@ -80,6 +80,24 @@ def _write_index(tmp_path, entries):
     (tmp_path / "index.json").write_text(json.dumps({"captures": entries}))
 
 
+def test_the_upload_pass_does_not_put_the_empty_captures_back_in_the_count(tmp_path):
+    """index.json has two writers. This one rewrites it after every upload pass, so a second
+    definition of "a capture" here would restore the inflated count the moment anything uploaded —
+    the header-only pcaps bettercap leaves behind when a session hears no EAPOL are 24 bytes and
+    are not loot, however many of them are on disk."""
+    real = str(tmp_path / "real.pcap")
+    empty = str(tmp_path / "empty.pcap")
+    entries = {
+        real: {"path": real, "bssid": "AA:AA:AA:AA:AA:AA", "bytes": 4096},
+        empty: {"path": empty, "bssid": "BB:BB:BB:BB:BB:BB", "bytes": 24},
+    }
+    _uploader(tmp_path, [])._save_index(entries)
+
+    saved = json.loads((tmp_path / "index.json").read_text())
+    assert saved["unique_bssids"] == 1, "an empty capture is not an AP owned"
+    assert len(saved["captures"]) == 2, "but it stays listed, or nobody will ever clean it up"
+
+
 def test_upload_is_one_per_bssid_and_skips_incomplete(tmp_path):
     a1 = str(tmp_path / "apA-1.pcap")
     a2 = str(tmp_path / "apA-2.pcap")          # same BSSID as a1 -> must not upload twice

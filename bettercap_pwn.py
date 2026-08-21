@@ -199,6 +199,27 @@ def find_captures(base_dir):
     return sorted(found, key=lambda item: item[1])
 
 
+# A pcap is 24 bytes of global header before the first packet lands in it, and bettercap opens
+# the file when it starts *targeting* an AP, not when it catches something. A session that hears no
+# EAPOL therefore leaves a header and nothing else behind — 7 of them across two field runs. They
+# stay in the index (a file on disk the index does not mention is a file nobody will ever clean
+# up), but they are not loot, and counting them cost twice: the trophy counter read 27 APs owned
+# when 21 had been caught, and their BSSIDs went into plan_session's `owned` set, which
+# score_targets uses to skip networks "already captured" — so the hunter struck six APs off its
+# target list for handshakes it had never caught.
+PCAP_HEADER_BYTES = 24
+
+
+def has_packets(entry):
+    """Whether an index entry is a capture with anything in it. Pure/testable.
+
+    Size, not parsing: the only thing that must be true is "bigger than an empty file". A .pcapng
+    header is larger than 24 bytes, so an empty one would slip through — bettercap writes .pcap
+    here, and sniffing file formats to catch a case that does not arise is the more expensive
+    mistake. If that ever changes, this is the one place that has to learn about it."""
+    return int(entry.get("bytes") or 0) > PCAP_HEADER_BYTES
+
+
 def build_index(base_dir, previous=None, now=None):
     """Merge what is on disk into the previous index. Pure apart from reading the directory.
 
@@ -262,9 +283,12 @@ def update_index(shared_data, now=None):
     base = getattr(shared_data, "handshakes_dir", None) or os.path.join("data", "output", "handshakes")
     previous = load_index(base)
     entries = build_index(base, previous, now)
+    caught = [e for e in entries.values() if has_packets(e)]
     summary = {
-        "captures": len(entries),
-        "unique_bssids": len({e["bssid"] for e in entries.values() if e["bssid"]}),
+        "captures": len(caught),
+        "unique_bssids": len({e["bssid"] for e in caught if e["bssid"]}),
+        # `bytes` stays the whole tree: it answers "how much is on the SD card", not "how much of
+        # it is loot", and the empty ones are 24 bytes each anyway.
         "bytes": sum(e["bytes"] for e in entries.values()),
     }
     # Coins count UNIQUE APs, not capture files: two captures of one network is one network owned.
@@ -460,7 +484,7 @@ def plan_session(shared_data):
     aps = _read_csv_rows(os.path.join(scan_dir, "wifi_aps.csv"))
     clients = _read_csv_rows(os.path.join(scan_dir, "wifi_clients.csv"))
     base = getattr(shared_data, "handshakes_dir", None) or ""
-    owned = {e.get("bssid", "") for e in load_index(base).values()}
+    owned = {e.get("bssid", "") for e in load_index(base).values() if has_packets(e)}
     min_rssi = getattr(shared_data, "bettercap_pwn_min_rssi", DEFAULT_MIN_RSSI)
     max_age = getattr(shared_data, "bettercap_pwn_max_target_age", DEFAULT_MAX_AGE)
     ranked = score_targets(aps, clients, owned, min_rssi, max_age)

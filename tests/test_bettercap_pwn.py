@@ -293,7 +293,14 @@ def test_a_longer_hex_run_is_not_mistaken_for_a_bare_mac():
     assert pwn.parse_capture_name("deadbeefcafe01.pcap") == ("", "deadbeefcafe01")
 
 
-def _capture(tmp_path, relname, content=b"pcap"):
+# What bettercap leaves behind when a session hears no EAPOL: the pcap global header, 24 bytes,
+# no packets. _PACKETS is anything past it — has_packets() measures size, so a 4-byte stand-in
+# would now read as "opened but caught nothing" and quietly zero out every count below.
+_HEADER_ONLY = bytes([0xd4, 0xc3, 0xb2, 0xa1]) + bytes(20)
+_PACKETS = _HEADER_ONLY + bytes(200)
+
+
+def _capture(tmp_path, relname, content=_PACKETS):
     """Filenames here use DASHED MACs: Windows rejects ':' in a path, while Linux allows it. The
     colon form is covered by parse_capture_name's pure test, which never touches the disk."""
     path = tmp_path / "raw" / "2026-08-08" / relname
@@ -345,6 +352,52 @@ def test_index_ignores_non_captures_and_survives_an_empty_tree(tmp_path):
     _capture(tmp_path, "notes.txt")
     _capture(tmp_path, "real-aa-bb-cc-dd-ee-09.pcap")
     assert pwn.update_index(shared, now=dt(2026, 8, 8))["captures"] == 1
+
+
+def test_a_header_only_pcap_is_indexed_but_never_counted(tmp_path):
+    """bettercap opens the file when it starts targeting an AP, not when it catches something, so
+    an empty 24-byte pcap is the normal residue of a session that heard no EAPOL. It stays in the
+    index — a file on disk the index does not mention is a file nobody will ever clean up — but it
+    is not a capture. One field run left 6 of them, and the horn claimed 27 APs owned against 21
+    actually caught."""
+    from datetime import datetime as dt
+    shared = cfg()
+    shared.handshakes_dir = str(tmp_path)
+    _capture(tmp_path, "Caught-aa-bb-cc-dd-ee-01.pcap")
+    _capture(tmp_path, "Missed-aa-bb-cc-dd-ee-02.pcap", content=_HEADER_ONLY)
+
+    summary = pwn.update_index(shared, now=dt(2026, 8, 8))
+    assert summary["captures"] == 1 and summary["unique_bssids"] == 1
+    assert len(pwn.load_index(str(tmp_path))) == 2, "the empty file must still be listed"
+    assert pwn.has_packets({"bytes": 24}) is False and pwn.has_packets({"bytes": 25}) is True
+    assert pwn.has_packets({}) is False
+
+
+def test_a_capture_that_caught_nothing_does_not_make_an_ap_owned(tmp_path):
+    """The expensive half of the same bug. score_targets skips APs we already hold, and those
+    BSSIDs come from the index — so six networks were struck off the hunter's target list for
+    handshakes that were never caught. An empty file must leave its AP on the list."""
+    from datetime import datetime as dt
+    shared = cfg()
+    shared.handshakes_dir = str(tmp_path)
+    scan = tmp_path / "scan_results"
+    scan.mkdir()
+    shared.scan_results_dir = str(scan)
+    (scan / "wifi_aps.csv").write_text("""BSSID,ESSID,Channel,Power,Privacy
+AA:BB:CC:DD:EE:01,Caught,6,-50,WPA2
+AA:BB:CC:DD:EE:02,Nothing,6,-50,WPA2
+""")
+    _capture(tmp_path, "Caught-aa-bb-cc-dd-ee-01.pcap")
+    # NOT "Missed-...": this file's dashed-MAC convention lets an ESSID ending in hex donate a
+    # pair, and "Miss|ed-aa-bb-cc-dd-ee" parses as ED:AA:BB:CC:DD:EE — a fixture that matches
+    # nothing and passes for the wrong reason. Real bettercap names are ESSID_<12 hex>.
+    _capture(tmp_path, "Nothing-aa-bb-cc-dd-ee-02.pcap", content=_HEADER_ONLY)
+    pwn.update_index(shared, now=dt(2026, 8, 8))
+
+    _channel, _why, ranked = pwn.plan_session(shared)
+    aimed_at = {t["bssid"] for t in ranked}
+    assert "AA:BB:CC:DD:EE:01" not in aimed_at, "an AP we really caught is not worth re-hunting"
+    assert "AA:BB:CC:DD:EE:02" in aimed_at, "an empty file is not a capture — keep hunting it"
 
 
 def test_a_corrupt_index_does_not_stop_reindexing(tmp_path):

@@ -120,6 +120,57 @@ def _restore(saved):
      monitor_mode.shutil.which) = saved
 
 
+def _fake_iw(dev_out, phy_out, rc=0):
+    """Fake both `iw` calls _monitor_support() makes: `iw dev X info`, then `iw phy phyN info`.
+
+    Indentation in the fixtures below is spaces, not the tabs `iw` really emits: parse_supports_
+    monitor() strips it, and what is under test is the modes list, not the whitespace."""
+    return lambda args, timeout=15: (rc, phy_out if args[1] == "phy" else dev_out)
+
+
+_DEV_INFO = """Interface wlan0
+        wiphy 0
+"""
+# The onboard Pi radio, verbatim in shape: managed and AP, no monitor anywhere.
+_PHY_NO_MONITOR = """Supported interface modes:
+         * managed
+         * AP
+Band 1:
+"""
+
+
+def test_a_radio_whose_phy_has_no_monitor_mode_is_refused_by_the_guard():
+    """Observed on a Pi Zero 2W field run, 2026-08-20: with the dongle busy hunting, WiFiScan fell
+    back to wlan0, `iw dev wlan0 set type monitor` returned "Operation not supported (-95)", the
+    action was marked 'failed' and backed off for 10 minutes — four times, on a radio that can
+    never work. The guard now refuses it by capability, before anything touches the interface."""
+    saved_guard = _guard_with("", ["wlan0"])
+    saved_run = monitor_mode._run
+    monitor_mode._run = _fake_iw(_DEV_INFO, _PHY_NO_MONITOR)
+    try:
+        assert monitor_mode.supports_monitor("wlan0") is False
+        assert monitor_mode.monitor_capable("wlan0") is False
+        problem = monitor_mode.check_usable("wlan0")
+    finally:
+        monitor_mode._run = saved_run
+        _restore(saved_guard)
+    assert problem and "monitor mode" in problem
+
+
+def test_a_probe_that_could_not_run_is_unknown_not_a_no():
+    """The two questions diverge here, which is why both exist. `iw` missing or erroring is not
+    evidence about the hardware: a filter that drops a radio on a hiccup silently stops scanning
+    on a device that works — worse than the -95 the filter was added to prevent. The web 'test'
+    button still answers no, because it asked for proof."""
+    saved = monitor_mode._run
+    monitor_mode._run = _fake_iw("", "", rc=1)
+    try:
+        assert monitor_mode.supports_monitor("wlan1") is False
+        assert monitor_mode.monitor_capable("wlan1") is True
+    finally:
+        monitor_mode._run = saved
+
+
 def test_guard_reports_missing_iw_clearly():
     saved = _guard_with("wlan0", ["wlan1"])
     monitor_mode.shutil.which = lambda name: None

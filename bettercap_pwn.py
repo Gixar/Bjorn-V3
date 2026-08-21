@@ -90,7 +90,8 @@ def can_start(shared_data, wireless=None, uplink=None, holder=None, binary=None)
                            f"the web UI and reporting. Pick the other radio."), ""
         iface = configured
     else:
-        iface = offline_mode.pick_scan_iface("", wireless, uplink)
+        iface = offline_mode.pick_scan_iface("", wireless, uplink,
+                                             capable=monitor_mode.monitor_capable)
         if not iface:
             return False, "no non-uplink radio is available", ""
 

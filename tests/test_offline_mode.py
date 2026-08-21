@@ -51,6 +51,26 @@ def test_offline_still_prefers_the_dongle():
     assert pick("wlan1", ["wlan0", "wlan1"], "") == "wlan1"
 
 
+def test_fallback_skips_a_radio_that_cannot_do_monitor_mode():
+    """Offline, the onboard radio becomes *eligible* (nothing is the uplink) — but on a Pi Zero
+    2W its phy has no monitor mode at all, so picking it produced `iw ... set type monitor failed:
+    Operation not supported (-95)`, a 'failed' stamp and a 10-minute backoff on a scan that could
+    have run on the next cycle. Observed four times in one field run, every time the dongle was
+    busy hunting."""
+    only_the_dongle = lambda name: name == "wlan1"
+    assert pick("", ["wlan0", "wlan1"], "", capable=only_the_dongle) == "wlan1"
+    # Dongle unplugged and the onboard radio cannot capture: nothing to scan with. "" routes the
+    # caller to its quiet skip, not to an error it will retry forever.
+    assert pick("", ["wlan0"], "", capable=only_the_dongle) == ""
+
+
+def test_a_named_radio_is_still_returned_even_if_it_cannot_capture():
+    """Capability gates the *fallback*, not the operator's explicit choice: check_usable() is what
+    explains why a named radio is wrong. Filtering it out here would make WiFiScan report a dongle
+    that is plugged in as "not present (moved USB port?)" — a wrong answer to a real mistake."""
+    assert pick("wlan0", ["wlan0", "wlan1"], "", capable=lambda name: False) == "wlan0"
+
+
 def test_no_radios_at_all():
     assert pick("wlan1", [], "") == ""
 

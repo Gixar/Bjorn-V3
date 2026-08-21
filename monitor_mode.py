@@ -110,20 +110,39 @@ def parse_supports_monitor(iw_info_output):
     return False
 
 
-def supports_monitor(iface):
-    """Whether this interface's phy can do monitor mode (drives the web 'test' button)."""
+def _monitor_support(iface):
+    """True/False from the phy's own mode list, or None when `iw` could not be asked at all.
+
+    The three-valued answer is the point. "The phy says it has no monitor mode" and "the probe
+    did not run" look identical as False, and they must not be treated alike: the first is a
+    permanent property of the hardware, the second is a hiccup — and a filter that deletes a
+    working radio from the candidate list on a hiccup fails silently, which is worse than the
+    -95 it was added to prevent."""
     rc, out = _run(["iw", "dev", iface, "info"])
     if rc != 0:
-        return False
+        return None
     phy = ""
     for line in out.splitlines():
         if "wiphy" in line:
             phy = "phy" + line.split()[-1]
             break
     if not phy:
-        return False
+        return None
     rc, info = _run(["iw", "phy", phy, "info"], timeout=20)
-    return parse_supports_monitor(info) if rc == 0 else False
+    return parse_supports_monitor(info) if rc == 0 else None
+
+
+def supports_monitor(iface):
+    """Whether this interface's phy can do monitor mode (drives the web 'test' button). A probe
+    that could not run is a no: the button is asking for proof, not for the benefit of the doubt."""
+    return _monitor_support(iface) is True
+
+
+def monitor_capable(iface):
+    """False only when the phy positively reports that it has no monitor mode; unknown counts as
+    capable. This is the question a *guard* or a *filter* asks — 'have we proof it cannot' — and
+    it is deliberately not supports_monitor()'s question."""
+    return _monitor_support(iface) is not False
 
 
 def check_usable(iface):
@@ -142,6 +161,13 @@ def check_usable(iface):
                 f"drop the web UI, reporting and IP scanning. Use a second radio (USB dongle).")
     if iface not in wireless_ifaces():
         return f"{iface} is not a wireless interface on this device"
+    if not monitor_capable(iface):
+        # The onboard Pi radio is what lands here: brcmfmac's phy lists managed/AP/IBSS and no
+        # monitor, so `iw dev wlan0 set type monitor` fails with "Operation not supported (-95)".
+        # Refusing by capability turns that into one accurate line instead of a failure the caller
+        # marks 'failed' and retries forever against a radio that can never work.
+        return (f"{iface} cannot do monitor mode (its phy does not advertise it) — "
+                f"use a USB dongle that can")
     return ""
 
 

@@ -43,11 +43,17 @@ def is_online():
     return bool(monitor_mode.default_route_iface())
 
 
-def pick_scan_iface(configured, wireless, uplink):
+def pick_scan_iface(configured, wireless, uplink, capable=None):
     """Which radio may be used for a monitor-mode capture, or "" when none may. Pure/testable.
 
     Order: the configured radio if it is present and is not the uplink, else any other radio that
-    is not the uplink, else nothing.
+    is not the uplink *and can actually do monitor mode*, else nothing.
+
+    `capable` is the monitor-capability predicate — callers pass monitor_mode.monitor_capable; it
+    is injected rather than called directly so this stays testable without a radio. It gates only
+    the fallback: a radio the operator NAMED is still returned, so check_usable() gets to say what
+    is actually wrong with it, instead of this returning "" and the caller reporting a dongle that
+    is plugged in as missing.
 
     The safety property is carried entirely by `name != uplink`, and that is the whole trick: the
     onboard radio becomes eligible when offline not through a special case, but because with no
@@ -57,7 +63,11 @@ def pick_scan_iface(configured, wireless, uplink):
     if configured and configured in wireless and configured != uplink:
         return configured
     for name in wireless:
-        if name != uplink:
+        # A fallback onto a radio whose phy has no monitor mode is a guaranteed failure, and the
+        # caller marks it 'failed' and backs off for 10 minutes. Observed on a Pi Zero 2W field
+        # run: every time the dongle was busy, wlan0 got picked, -95'd, and took the next scan
+        # window down with it. Capability is not a preference here, it is the whole point.
+        if name != uplink and (capable is None or capable(name)):
             return name
     return ""
 
@@ -68,7 +78,8 @@ def scan_iface(shared_data):
     that drifted would be the one that borrows the uplink."""
     configured = (getattr(shared_data, "wifi_scan_iface", "") or "").strip()
     return pick_scan_iface(configured, monitor_mode.wireless_ifaces(),
-                           monitor_mode.default_route_iface())
+                           monitor_mode.default_route_iface(),
+                           capable=monitor_mode.monitor_capable)
 
 
 def uplink_candidate(wireless, scan_iface):
